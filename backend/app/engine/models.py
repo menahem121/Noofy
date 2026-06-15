@@ -257,6 +257,9 @@ class WorkflowValidationResult(BaseModel):
     errors: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     user_errors: list[RunUserFixableError] = Field(default_factory=list)
+    error_category: str | None = None
+    error_code: str | None = None
+    developer_details: dict[str, Any] = Field(default_factory=dict)
 
 
 class EngineJob(BaseModel):

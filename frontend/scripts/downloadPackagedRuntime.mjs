@@ -24,10 +24,12 @@ import {
   relative,
   repoRoot,
   runChecked,
+  supportedUvVersion,
+  verifyUvExcludesCapability,
 } from "./packagedRuntime.mjs";
 
 const pythonReleaseApi = "https://api.github.com/repos/astral-sh/python-build-standalone/releases/latest";
-const uvReleaseApi = "https://api.github.com/repos/astral-sh/uv/releases/latest";
+const uvReleaseApi = `https://api.github.com/repos/astral-sh/uv/releases/tags/${supportedUvVersion}`;
 
 const targetSpecs = {
   "macos-arm64": {
@@ -107,12 +109,18 @@ try {
   const sourceUv = path.join(source, "python", ...uvDestination(spec));
   const pythonVersionValue = pythonVersionFromAsset(pythonAsset.name);
   const uvVersionValue = uvRelease.tag_name.replace(/^v/, "");
+  if (uvVersionValue !== supportedUvVersion) {
+    throw new Error(
+      `Expected uv ${supportedUvVersion}, release metadata returned ${uvVersionValue}.`,
+    );
+  }
   const canExecuteTargetPython = canExecute(sourcePython);
   if (canExecuteTargetPython) {
     runChecked(sourcePython, ["-m", "ensurepip", "--upgrade"]);
     runChecked(sourcePython, ["-m", "pip", "install", "--upgrade", "pip"]);
     runChecked(sourcePython, ["-m", "pip", "install", path.join(repoRoot, "backend")]);
     runChecked(sourceUv, ["--version"]);
+    verifyUvExcludesCapability(sourceUv);
   } else {
     installBackendDependenciesForTarget({
       target,

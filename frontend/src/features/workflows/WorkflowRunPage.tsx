@@ -37,6 +37,7 @@ import {
   fetchWorkflowModelVerificationStatus,
   fetchWorkflowModelSummary,
   fetchWorkflowPackage,
+  fetchWorkflowInstallDeveloperDetails,
   fetchWorkflowStatus,
   isEngineJob,
   saveJobOutputToGallery,
@@ -220,6 +221,8 @@ interface RunPreparationDialogState {
   message: string;
   detail: string | null;
   phases: PreparationPhase[];
+  failed: boolean;
+  developerDetailsAvailable: boolean;
 }
 
 interface LoraBrowserDialogState {
@@ -788,7 +791,7 @@ export function WorkflowRunPage({
     };
   }
 
-  async function refreshWorkflowStatusAfterRun() {
+  async function refreshWorkflowStatusAfterRun(): Promise<WorkflowStatusResponse | null> {
     // Preparation polling stops the moment the run request resolves, so the
     // last poll can miss the final "ready" install state. Without this final
     // refresh the page would keep a stale intermediate status (preparing,
@@ -796,8 +799,10 @@ export function WorkflowRunPage({
     try {
       const statusResponse = await fetchWorkflowStatus(workflowId);
       setState((current) => ({ ...current, workflowStatus: statusResponse }));
+      return statusResponse;
     } catch {
       // Non-fatal: the next run's status polling will self-correct.
+      return null;
     }
   }
 
@@ -832,7 +837,6 @@ export function WorkflowRunPage({
       if (!stopPreparationPolling) return;
       stopPreparationPolling();
       stopPreparationPolling = null;
-      void refreshWorkflowStatusAfterRun();
     };
     const runCount = clampBatchCount(batchCount);
     const submittedValuesSnapshot = { ...submittedInputValues };
@@ -903,20 +907,33 @@ export function WorkflowRunPage({
         if (!isEngineJob(response)) {
           stopPreparationTracking();
           finishRunSubmission();
-          setRunPreparationDialog(null);
           setRunComparisonInputAssetId(null);
           const userError = firstRunUserFixableError(response);
           const message = workflowValidationErrorMessage(response);
+          const preparationFailure = response.error_category === "workflow_preparation";
           setState((current) => ({
             ...current,
-            validation: userError ? current.validation : response,
+            validation: userError || preparationFailure ? current.validation : response,
             progress: null,
-            error: response.valid || userError ? null : message,
+            error: response.valid || userError || preparationFailure ? null : message,
           }));
           if (!response.valid && userError) {
+            setRunPreparationDialog(null);
+            void refreshWorkflowStatusAfterRun();
             openInputErrorDialog(userError);
+          } else if (!response.valid && preparationFailure) {
+            const refreshedStatus = await refreshWorkflowStatusAfterRun();
+            setRunPreparationDialog(
+              runPreparationDialogFromStatus(refreshedStatus)
+                ?? runPreparationDialogFromValidation(response),
+            );
           } else if (!response.valid) {
+            setRunPreparationDialog(null);
+            void refreshWorkflowStatusAfterRun();
             void openFailureDialog(message, null);
+          } else {
+            setRunPreparationDialog(null);
+            void refreshWorkflowStatusAfterRun();
           }
           return;
         }
@@ -928,12 +945,14 @@ export function WorkflowRunPage({
           stopPreparationTracking();
           finishRunSubmission();
           setRunPreparationDialog(null);
+          void refreshWorkflowStatusAfterRun();
           return;
         }
       }
       stopPreparationTracking();
       finishRunSubmission();
       setRunPreparationDialog(null);
+      void refreshWorkflowStatusAfterRun();
       void pollTrackedRunsDue(true);
     } catch (error) {
       stopPreparationTracking();
@@ -942,6 +961,7 @@ export function WorkflowRunPage({
       void runtimeStatus.refreshRuntime({ force: true, silent: false });
       finishRunSubmission();
       setRunPreparationDialog(null);
+      void refreshWorkflowStatusAfterRun();
       setRunComparisonInputAssetId(null);
       setState((current) => ({
         ...current,
@@ -2046,7 +2066,11 @@ export function WorkflowRunPage({
     />
   ) : null;
   const preparationDialogElement = runPreparationDialog ? (
-    <RunPreparationDialog dialog={runPreparationDialog} />
+    <RunPreparationDialog
+      dialog={runPreparationDialog}
+      workflowId={workflowId}
+      onClose={() => setRunPreparationDialog(null)}
+    />
   ) : null;
   const loraBrowserElement = loraBrowserDialog ? (
     <CivitaiLoraBrowserModal
@@ -2561,17 +2585,58 @@ function packageNeedsDashboardSetup(
   );
 }
 
-function RunPreparationDialog({ dialog }: { dialog: RunPreparationDialogState }) {
+function RunPreparationDialog({
+  dialog,
+  workflowId,
+  onClose,
+}: {
+  dialog: RunPreparationDialogState;
+  workflowId: string;
+  onClose: () => void;
+}) {
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [details, setDetails] = useState<Record<string, unknown> | null>(null);
+  const [detailsLoading, setDetailsLoading] = useState(false);
+  const [detailsError, setDetailsError] = useState<string | null>(null);
+
+  async function toggleDeveloperDetails() {
+    if (detailsOpen) {
+      setDetailsOpen(false);
+      return;
+    }
+    setDetailsOpen(true);
+    if (details || detailsLoading) return;
+    setDetailsLoading(true);
+    setDetailsError(null);
+    try {
+      const response = await fetchWorkflowInstallDeveloperDetails(workflowId);
+      setDetails(response.developer_details);
+    } catch (error) {
+      setDetailsError(error instanceof Error ? error.message : "Developer details could not be loaded.");
+    } finally {
+      setDetailsLoading(false);
+    }
+  }
+
   return (
     <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="workflow-preparation-title">
       <section className="workflow-preparation-modal">
         <header className="workflow-preparation-modal__header">
           <div>
             <p className="eyebrow">Workflow run</p>
-            <h2 id="workflow-preparation-title">Preparing workflow</h2>
+            <h2 id="workflow-preparation-title">
+              {dialog.failed ? "Workflow could not be prepared" : "Preparing workflow"}
+            </h2>
             <p>{dialog.message}</p>
           </div>
-          <Loader2 className="spin" size={22} aria-hidden="true" />
+          <div className="workflow-preparation-modal__header-actions">
+            {dialog.failed ? <AlertCircle size={22} aria-hidden="true" /> : <Loader2 className="spin" size={22} aria-hidden="true" />}
+            {dialog.failed ? (
+              <button className="icon-button" type="button" aria-label="Close" onClick={onClose}>
+                <X size={18} aria-hidden="true" />
+              </button>
+            ) : null}
+          </div>
         </header>
 
         <ol className="workflow-preparation-steps" aria-label="Preparation progress">
@@ -2595,6 +2660,20 @@ function RunPreparationDialog({ dialog }: { dialog: RunPreparationDialogState })
         </ol>
 
         {dialog.detail ? <p className="workflow-preparation-modal__detail">{dialog.detail}</p> : null}
+        {dialog.failed && dialog.developerDetailsAvailable ? (
+          <div className="workflow-preparation-modal__developer-details">
+            <button className="secondary-button secondary-button--small" type="button" onClick={() => void toggleDeveloperDetails()}>
+              {detailsOpen ? "Hide developer details" : "Developer details"}
+            </button>
+            {detailsOpen ? (
+              <section aria-label="Developer details">
+                {detailsLoading ? <p>Loading details...</p> : null}
+                {detailsError ? <p>{detailsError}</p> : null}
+                {details ? <pre>{JSON.stringify(details, null, 2)}</pre> : null}
+              </section>
+            ) : null}
+          </div>
+        ) : null}
       </section>
     </div>
   );
@@ -3351,6 +3430,38 @@ function runPreparationDialogFromStatus(workflowStatus: WorkflowStatusResponse |
       : userMessage ?? "Preparing the isolated runner for this workflow.",
     detail: failed ? userMessage && userMessage !== lastError ? userMessage : null : preparationStatusDetail(installStatus),
     phases: preparationPhases(workflowStatus),
+    failed,
+    developerDetailsAvailable: install["developer_details_available"] === true,
+  };
+}
+
+function runPreparationDialogFromValidation(
+  validation: WorkflowValidationResult,
+): RunPreparationDialogState {
+  const message = workflowValidationErrorMessage(validation);
+  const failedPhase = validation.error_code?.startsWith("dependency_") === true
+    ? "dependencies"
+    : "runner";
+  const phaseOrder = [
+    ["models", "Check required models"],
+    ["dependencies", "Prepare dependency environment"],
+    ["stage_custom_nodes", "Stage custom-node files"],
+    ["runner", "Start isolated runner"],
+    ["custom_registration", "Check custom-node registration"],
+    ["resume", "Continue run"],
+  ] as const;
+  const failedIndex = phaseOrder.findIndex(([id]) => id === failedPhase);
+  return {
+    message,
+    detail: null,
+    phases: phaseOrder.map(([id, label], index) => ({
+      id,
+      label,
+      status: index < failedIndex ? "passed" : index === failedIndex ? "failed" : "pending",
+    })),
+    failed: true,
+    developerDetailsAvailable:
+      validation.developer_details?.developer_details_available === true,
   };
 }
 
@@ -3418,7 +3529,10 @@ function preparationStatusDetail(status: string | null) {
 function preparationPhases(workflowStatus: WorkflowStatusResponse | null): PreparationPhase[] {
   const install = workflowStatus?.install ?? {};
   const installStatus = workflowInstallStatus(workflowStatus);
-  const activePhase = activePreparationPhase(installStatus);
+  const activePhase = activePreparationPhase(
+    installStatus,
+    installString(install, "last_error_code"),
+  );
   const failed = Boolean(installStatus && preparationFailureStatuses.has(installStatus));
   const blocked = Boolean(installStatus && preparationBlockedStatuses.has(installStatus));
   const ready = installStatus === "ready";
@@ -3443,7 +3557,10 @@ function preparationPhases(workflowStatus: WorkflowStatusResponse | null): Prepa
   });
 }
 
-function activePreparationPhase(status: string | null) {
+function activePreparationPhase(status: string | null, errorCode: string | null) {
+  if (status === "failed" && errorCode?.startsWith("dependency_")) {
+    return "dependencies";
+  }
   switch (status) {
     case "resolving_models":
     case "downloading":

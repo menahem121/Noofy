@@ -12,6 +12,7 @@ import {
   runtimeTargetFor,
   runtimeManifestName,
   sha256File,
+  verifyUvExcludesCapability,
   verifyPackagedRuntime,
 } from "./packagedRuntime.mjs";
 
@@ -41,7 +42,7 @@ test("verifyPackagedRuntime accepts a manifest with matching executable checksum
     versionCommand: "Python 3.13.7",
   });
   const uv = fakeExecutable(path.join(runtimeRoot, "python", "bin", "uv"), {
-    versionCommand: "uv 0.9.13",
+    versionCommand: "uv 0.11.10",
   });
   writeManifest(runtimeRoot, python, uv);
 
@@ -61,7 +62,7 @@ test("verifyPackagedRuntime rejects checksum drift", { skip: process.platform ==
     versionCommand: "Python 3.13.7",
   });
   const uv = fakeExecutable(path.join(runtimeRoot, "python", "bin", "uv"), {
-    versionCommand: "uv 0.9.13",
+    versionCommand: "uv 0.11.10",
   });
   writeManifest(runtimeRoot, python, uv);
   writeFileSync(python, `${fakeExecutableSource("Python 3.13.7")}\n// changed\n`);
@@ -79,7 +80,7 @@ test("preparePackagedRuntime copies an explicit source artifact and writes a man
     versionCommand: "Python 3.13.7",
   });
   fakeExecutable(path.join(sourceRoot, "python", "bin", "uv"), {
-    versionCommand: "uv 0.9.13",
+    versionCommand: "uv 0.11.10",
   });
 
   const result = spawnSync(
@@ -110,6 +111,28 @@ test("preparePackagedRuntime copies an explicit source artifact and writes a man
     }),
   );
   assert.match(manifestPath, /runtime-manifest\.json$/);
+});
+
+test("verifyUvExcludesCapability rejects uv that retains an excluded dependency", { skip: process.platform === "win32" }, () => {
+  const uv = path.join(tempDir("uv-excludes"), "uv");
+  writeFileSync(
+    uv,
+    `#!/usr/bin/env node
+const args = process.argv.slice(2);
+const output = args[args.indexOf("--output-file") + 1];
+require("node:fs").writeFileSync(
+  output,
+  "requests-cache==1.2.1\\n    --hash=sha256:${"a".repeat(64)}\\n" +
+    "requests==2.32.5\\n    --hash=sha256:${"b".repeat(64)}\\n",
+);
+`,
+    { mode: 0o755 },
+  );
+
+  assert.throws(
+    () => verifyUvExcludesCapability(uv),
+    /required transitive --excludes behavior/,
+  );
 });
 
 function tempDir(name) {
@@ -151,7 +174,7 @@ function writeManifest(runtimeRoot, python, uv) {
           sha256: sha256File(python),
         },
         uv: {
-          version: "0.9.13",
+          version: "0.11.10",
           executable: "python/bin/uv",
           sha256: sha256File(uv),
         },

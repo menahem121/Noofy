@@ -54,6 +54,19 @@ CORE_RUNTIME_PACKAGES = frozenset(
     }
 )
 
+RUNTIME_EXCLUDED_PACKAGES = frozenset(
+    CORE_RUNTIME_PACKAGES | UNSUPPORTED_ACCELERATOR_PACKAGES
+)
+
+BUILD_BLOCKED_PACKAGES = frozenset(
+    {
+        "torch",
+        "torchvision",
+        "torchaudio",
+    }
+    | UNSUPPORTED_ACCELERATOR_PACKAGES
+)
+
 IGNORED_REASON_UNSUPPORTED_ACCELERATOR = "unsupported_accelerator"
 IGNORED_REASON_PROVIDED_BY_CORE_RUNTIME = "provided_by_core_runtime"
 
@@ -74,6 +87,21 @@ def ignored_dependency_reason(
     ):
         return IGNORED_REASON_UNSUPPORTED_ACCELERATOR
     return None
+
+
+def runtime_excluded_packages(
+    *,
+    allowed_accelerator_packages: frozenset[str] = frozenset(),
+) -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            CORE_RUNTIME_PACKAGES
+            | (
+                UNSUPPORTED_ACCELERATOR_PACKAGES
+                - allowed_accelerator_packages
+            )
+        )
+    )
 
 
 def unsupported_accelerator_module(output: str) -> str | None:

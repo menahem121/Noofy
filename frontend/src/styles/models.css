@@ -94,7 +94,8 @@
 
 .workflow-preparation-modal {
   width: min(560px, 100%);
-  overflow: hidden;
+  max-height: min(760px, calc(100vh - 32px));
+  overflow-y: auto;
   border-radius: 12px;
   border: 1px solid var(--border-soft);
   background: var(--surface-1);
@@ -318,6 +319,13 @@
   line-height: 1.45;
 }
 
+.workflow-preparation-modal__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
 .workflow-preparation-steps {
   display: grid;
   gap: 0;
@@ -371,6 +379,36 @@
   color: var(--text-secondary);
   font-size: 13px;
   line-height: 1.45;
+}
+
+.workflow-preparation-modal__developer-details {
+  display: grid;
+  justify-items: start;
+  gap: 12px;
+  padding: 0 22px 22px;
+}
+
+.workflow-preparation-modal__developer-details section {
+  width: 100%;
+  min-width: 0;
+}
+
+.workflow-preparation-modal__developer-details p,
+.workflow-preparation-modal__developer-details pre {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.workflow-preparation-modal__developer-details pre {
+  max-height: 240px;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  background: var(--surface-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .civitai-lora-modal {

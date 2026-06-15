@@ -57,7 +57,7 @@ All runtime isolation code lives in [backend/app/runtime/](../backend/app/runtim
 | Layered fingerprints (dependency-env, runner, capsule) | [backend/app/runtime/fingerprints.py](../backend/app/runtime/fingerprints.py) |
 | Runtime profile catalog | [backend/app/runtime/profiles/profiles.py](../backend/app/runtime/profiles/profiles.py), [backend/app/runtime/profiles/profile_catalog.json](../backend/app/runtime/profiles/profile_catalog.json) |
 | Pinned core-node manifest | [backend/app/runtime/core_node_manifest.json](../backend/app/runtime/core_node_manifest.json) |
-| Dependency lock + `uv` resolver, wheel cache | [backend/app/runtime/dependencies/dependency_lock.py](../backend/app/runtime/dependencies/dependency_lock.py), [dependency_resolver.py](../backend/app/runtime/dependencies/dependency_resolver.py), [dependency_env.py](../backend/app/runtime/dependencies/dependency_env.py) |
+| Dependency lock + pinned `uv` resolver, staged index builds, legacy wheel cache | [backend/app/runtime/dependencies/dependency_lock.py](../backend/app/runtime/dependencies/dependency_lock.py), [dependency_resolver.py](../backend/app/runtime/dependencies/dependency_resolver.py), [dependency_env.py](../backend/app/runtime/dependencies/dependency_env.py) |
 | Accelerator / core-package policy for custom-node dependencies | [backend/app/runtime/dependencies/accelerator_policy.py](../backend/app/runtime/dependencies/accelerator_policy.py) |
 | Runner launch-default → launch-arg mapping | [backend/app/runtime/comfyui/launch_settings.py](../backend/app/runtime/comfyui/launch_settings.py) |
 | Custom-node node-registry / non-bundled source resolution | [backend/app/runtime/node_registry.py](../backend/app/runtime/node_registry.py), [backend/app/runtime/dependencies/custom_nodes.py](../backend/app/runtime/dependencies/custom_nodes.py) |
@@ -219,18 +219,52 @@ Community custom nodes may request packages that would change or break the valid
 
 Stripping is silent for users: preparation continues, each ignored requirement is recorded only as a developer-diagnostics event ("Skipped custom-node dependencies that are not installable in the stable runtime", with package, requirement, source file, and reason), and the dependency-import / custom-node-registration / workflow smoke stages decide whether the workflow still works. If the custom node works without the package, the user sees nothing. If it truly requires it, smoke fails with a beginner-friendly unsupported-runtime message rather than a raw dependency error.
 
+## Community Dependency Builds
+
+Imported custom-node requirements use the `isolated-community-index-build-v2`
+policy. Noofy pins `uv` to `0.11.10`, compiles a hash-locked runtime
+requirements file from PyPI, and excludes managed runtime packages and
+unsupported accelerator packages before installation. The compiled lock is
+validated independently so an excluded package cannot enter the overlay even
+if resolver behavior changes.
+
+When no compatible wheel exists, registry sdists may run their PEP 517 or
+legacy setuptools build backend only inside the current install transaction.
+The transaction owns the uv cache, temporary directories, source archives,
+build environments, logs, and staged dependency overlay. Repository-owned
+custom-node installers such as `install.py` and `setup.py`, direct URLs, VCS
+requirements, local paths, alternate indexes, and config-file source overrides
+remain unsupported.
+
+Build requirements are resolved separately and pinned in
+`build-constraints.txt`. Build-only NumPy is allowed in uv's ephemeral isolated
+build environment but cannot appear in the final overlay. Torch,
+TorchVision, TorchAudio, xformers, Triton, Flash Attention, Sage Attention, and
+recognized aliases are blocked as declared build requirements because they
+would require a separately validated native build profile. Dynamic
+requirements requested by build-backend hooks may resolve from the same
+approved index and cutoff; diagnostics record that their complete inventory
+could not be established statically.
+
+The dependency lock records the exact uv version, Python/platform/runtime
+identity, resolution cutoff, approved index, runtime excludes, build
+constraints, expected wheel/sdist origins, ignored requirements, and whether
+dynamic build requirements remain possible. Failed resolution, build, install,
+or overlay validation quarantines the complete transaction and preserves the
+previous ready environment.
+
 ## Smoke Stages (gating `ready`)
 
 Install state records a split `smoke_test_report`. A workflow becomes `ready` only when every applicable stage passes:
 
-1. **dependency-env** — wheels import inside the staged dependency env. Uses dependency-lock `import_names` when available.
+1. **dependency-env** — installed runtime distributions import inside the staged dependency env. Uses installed inventory and dependency-lock `import_names` when available.
 2. **custom-node import** — staged runner registers required custom node types via `/object_info`.
 3. **runner health** — staged runner process starts on a localhost port and reports healthy.
 4. **workflow execution** — when a fixture is declared, a real graph runs end-to-end and custom-node packages must exercise at least one declared custom-node type.
 
 For imported community workflows, absence of an execution smoke fixture is allowed only after all runtime inputs are fully resolved and the dependency-env, custom-node import, and runner-health stages pass inside the isolated runner. Workflows with unresolved runtime inputs (e.g. creator-local `LoadImage`) cannot reach `ready`; they stop at `prepared_needs_input_setup`.
 
-Failure messages from these stages are user-facing. When the dependency-env stage fails because an installed wheel imports a stripped accelerator package, the message names the accelerator and explains it is not supported by the stable runtime. When custom-node registration fails (missing node types in `/object_info`), the message stays beginner-friendly and generic — that stage sees only node metadata, so the precise cause (for example a custom node hard-importing a stripped accelerator) lives in developer diagnostics: the resolver's skipped-dependencies event plus ComfyUI startup logs.
+Failure messages from these stages are user-facing. Resolution, source-build, and install output stays hidden by default and remains available through Developer details. When the dependency-env stage fails because an installed distribution imports a stripped accelerator package, the message names the accelerator and explains it is not supported by the stable runtime. When custom-node registration fails (missing node types in `/object_info`), the message stays beginner-friendly and generic — that stage sees only node metadata, so the precise cause (for example a custom node hard-importing a stripped accelerator) lives in developer diagnostics: the resolver's skipped-dependencies event plus ComfyUI startup logs.
 
 **Validation limit**: smoke proves the prepared runner boots, registers nodes, and executes a fixture. It does not prove numerical health on this machine's backend (no NaN / black-image guarantee), because that requires real models and real sampling, which cannot be assumed present at install time. Output-sanity checks are opportunistic, not gating.
 
@@ -286,7 +320,7 @@ Multiple runners may stay warm only when the Memory Governor judges co-residence
 
 The GC reference index is **derived** from `install-state.json`, package/capsule records, and live runner descriptors — there are no separate refcount files. GC roots include `ready` and `prepared_needs_input_setup` installs, active/queued/idle-warm runners, open workflow leases, pinned runtime profile artifacts, and protected user-local model sources.
 
-Default retention windows: failed transactions / quarantine 7 days; unreferenced dependency envs and runner workspaces 14 days; orphan model views 7 days. Configurable LRU caps cover wheel cache, custom-node source cache, and imported package archive cache. `user_local` model sources are never deleted; deleting Noofy-owned model blobs over 1 GB requires explicit confirmation.
+Default retention windows: failed transactions / quarantine 7 days; unreferenced dependency envs and runner workspaces 14 days; orphan model views 7 days. Configurable LRU caps cover the legacy v1 wheel cache, custom-node source cache, and imported package archive cache. v2 source archives, build caches, and build environments remain transaction-owned and expire with the transaction. `user_local` model sources are never deleted; deleting Noofy-owned model blobs over 1 GB requires explicit confirmation.
 
 ## Security Boundaries
 
@@ -299,7 +333,7 @@ Dependency isolation prevents:
 
 It does **not** prevent malicious Python code from reading runner-accessible files, making network requests, consuming CPU/GPU, or exfiltrating local data if network access is available.
 
-Noofy's first security layer is supply-chain control: signed/verified package metadata, pinned commits and hashes, hash-locked wheels and models, wheels-only-with-hashes for community installs, no arbitrary install scripts, and no community code imports in the trusted backend process. Any future OS-level sandboxing must be evaluated per platform per [OS_SANDBOXING_FEASIBILITY.md](OS_SANDBOXING_FEASIBILITY.md), and Noofy product copy must not imply a sandbox that does not exist.
+Noofy's first security layer is supply-chain control: signed/verified package metadata, pinned commits and hashes, hash-locked registry distributions and models, approved-index-only staged builds for community installs, no custom-node repository installer scripts, and no community code imports in the trusted backend process. Registry source builds still execute package build code, but only inside isolated install transactions with rollback and quarantine. Any future OS-level sandboxing must be evaluated per platform per [OS_SANDBOXING_FEASIBILITY.md](OS_SANDBOXING_FEASIBILITY.md), and Noofy product copy must not imply a sandbox that does not exist.
 
 ## Hardware Compatibility Metadata
 

@@ -22,7 +22,7 @@ from app.runtime.dependencies.isolation import (
     SmokeTestReport,
 )
 
-INSTALL_STATE_SCHEMA_VERSION = "0.1.0"
+INSTALL_STATE_SCHEMA_VERSION = "0.2.0"
 
 _UNSET: object = object()
 
@@ -101,6 +101,9 @@ class InstallStateStore:
         *,
         status: InstallStatus | None = None,
         last_error: str | None | object = _UNSET,
+        last_error_code: str | None | object = _UNSET,
+        last_install_transaction_id: str | None | object = _UNSET,
+        diagnostic_log_names: list[str] | object = _UNSET,
         runtime_profile_variant_id: str | None | object = _UNSET,
         runtime_profile_manifest_hash: str | None | object = _UNSET,
         runtime_profile_catalog_version: str | None | object = _UNSET,
@@ -130,6 +133,12 @@ class InstallStateStore:
             updates["smoke_test_report"] = smoke_test_report
         if last_error is not _UNSET:
             updates["last_error"] = last_error
+        if last_error_code is not _UNSET:
+            updates["last_error_code"] = last_error_code
+        if last_install_transaction_id is not _UNSET:
+            updates["last_install_transaction_id"] = last_install_transaction_id
+        if diagnostic_log_names is not _UNSET:
+            updates["diagnostic_log_names"] = diagnostic_log_names
         if runtime_profile_variant_id is not _UNSET:
             updates["runtime_profile_variant_id"] = runtime_profile_variant_id
         if runtime_profile_manifest_hash is not _UNSET:

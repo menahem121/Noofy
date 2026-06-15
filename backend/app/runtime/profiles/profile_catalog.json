@@ -1,10 +1,10 @@
 {
   "schema_version": "0.1.0",
-  "fingerprint_schema_version": "0.1.0",
+  "fingerprint_schema_version": "0.2.0",
   "profiles": [
     {
       "runtime_profile_id": "noofy-comfyui-v1-default",
-      "runtime_profile_manifest_hash": "sha256:e87b7e451e2466853d554717df5434509621671220082f01f50deb140c7e2a28",
+      "runtime_profile_manifest_hash": "sha256:4c2f8761a0d63dfc936fe5584bd868a8980a40e11606bd96417d31f18cc36a1b",
       "profile_family_id": "noofy-comfyui-v1",
       "comfyui_core_version": "v0.24.0-post.184009c2",
       "comfyui_core_source_hash": "sha256:cb1b555e57c269ecb9f152dc3a32c44b0de96181dbfb6bc31fb62fa1482eff0e",
@@ -26,7 +26,7 @@
           "python_build_id": "cpython-3.13-noofy-v1",
           "torch_version": "2.11.0",
           "torch_wheel_build_tag": "torch==2.11.0:macos-arm64-default-mps",
-          "core_dependency_lock_hash": "sha256:1b727aad6ad34a1cbcd126ff17f9fda0a9b6f22bf22ea8bb0c118987164bce55",
+          "core_dependency_lock_hash": "sha256:d4619fe9e961cfc7e044fba7f8acce276bb0c4a43848a89dad1430a52dcd8986",
           "install_policy_version": "core_only_no_community",
           "launch_defaults": {
             "preview_method": "auto",
@@ -53,7 +53,7 @@
           "python_build_id": "cpython-3.13-noofy-v1",
           "torch_version": "2.11.0",
           "torch_wheel_build_tag": "torch==2.11.0:macos-arm64-default-cpu",
-          "core_dependency_lock_hash": "sha256:1b727aad6ad34a1cbcd126ff17f9fda0a9b6f22bf22ea8bb0c118987164bce55",
+          "core_dependency_lock_hash": "sha256:d4619fe9e961cfc7e044fba7f8acce276bb0c4a43848a89dad1430a52dcd8986",
           "install_policy_version": "core_only_no_community",
           "launch_defaults": {
             "preview_method": "auto",
@@ -79,7 +79,7 @@
           "python_build_id": "cpython-3.13-noofy-v1",
           "torch_version": "2.11.0",
           "torch_wheel_build_tag": "torch==2.11.0+cu130",
-          "core_dependency_lock_hash": "sha256:1b727aad6ad34a1cbcd126ff17f9fda0a9b6f22bf22ea8bb0c118987164bce55",
+          "core_dependency_lock_hash": "sha256:d4619fe9e961cfc7e044fba7f8acce276bb0c4a43848a89dad1430a52dcd8986",
           "install_policy_version": "core_only_no_community",
           "launch_defaults": {
             "preview_method": "auto",
@@ -106,7 +106,7 @@
           "python_build_id": "cpython-3.13-noofy-v1",
           "torch_version": "2.11.0",
           "torch_wheel_build_tag": "torch==2.11.0+cpu",
-          "core_dependency_lock_hash": "sha256:1b727aad6ad34a1cbcd126ff17f9fda0a9b6f22bf22ea8bb0c118987164bce55",
+          "core_dependency_lock_hash": "sha256:d4619fe9e961cfc7e044fba7f8acce276bb0c4a43848a89dad1430a52dcd8986",
           "install_policy_version": "core_only_no_community",
           "launch_defaults": {
             "preview_method": "auto",
@@ -132,7 +132,7 @@
           "python_build_id": "cpython-3.13-noofy-v1",
           "torch_version": "2.11.0",
           "torch_wheel_build_tag": "torch==2.11.0+cu130",
-          "core_dependency_lock_hash": "sha256:1b727aad6ad34a1cbcd126ff17f9fda0a9b6f22bf22ea8bb0c118987164bce55",
+          "core_dependency_lock_hash": "sha256:d4619fe9e961cfc7e044fba7f8acce276bb0c4a43848a89dad1430a52dcd8986",
           "install_policy_version": "core_only_no_community",
           "launch_defaults": {
             "preview_method": "auto",
@@ -159,7 +159,7 @@
           "python_build_id": "cpython-3.13-noofy-v1",
           "torch_version": "2.11.0",
           "torch_wheel_build_tag": "torch==2.11.0+cpu",
-          "core_dependency_lock_hash": "sha256:1b727aad6ad34a1cbcd126ff17f9fda0a9b6f22bf22ea8bb0c118987164bce55",
+          "core_dependency_lock_hash": "sha256:d4619fe9e961cfc7e044fba7f8acce276bb0c4a43848a89dad1430a52dcd8986",
           "install_policy_version": "core_only_no_community",
           "launch_defaults": {
             "preview_method": "auto",

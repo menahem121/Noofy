@@ -200,6 +200,11 @@ export interface WorkflowStatusResponse {
   can_cancel_job: boolean;
 }
 
+export interface WorkflowInstallDeveloperDetailsResponse {
+  workflow_id: string;
+  developer_details: Record<string, unknown>;
+}
+
 export interface WorkflowRunnerLeaseResponse {
   workflow_id: string;
   status: string;
@@ -255,6 +260,9 @@ export interface WorkflowValidationResult {
   missing_models: MissingModel[];
   errors: string[];
   user_errors?: RunUserFixableError[];
+  error_category?: string | null;
+  error_code?: string | null;
+  developer_details?: Record<string, unknown>;
 }
 
 export interface RunUserFixableError {
@@ -715,6 +723,12 @@ export function fetchWorkflowPackage(workflowId: string): Promise<WorkflowPackag
 
 export function fetchWorkflowStatus(workflowId: string) {
   return getJson<WorkflowStatusResponse>(`/workflows/${encodeURIComponent(workflowId)}/status`);
+}
+
+export function fetchWorkflowInstallDeveloperDetails(workflowId: string) {
+  return getJson<WorkflowInstallDeveloperDetailsResponse>(
+    `/workflows/${encodeURIComponent(workflowId)}/install-state/developer-details`,
+  );
 }
 
 export function fetchWorkflowModelSummary(workflowId: string) {

@@ -16,8 +16,12 @@ from app.runtime.dependencies.custom_nodes import (
     CustomNodeMaterializationErrorCode,
 )
 from app.diagnostics import DiagnosticsSink
-from app.runtime.dependencies.dependency_lock import DependencyPolicyError
+from app.runtime.dependencies.dependency_lock import (
+    DependencyPolicyError,
+    DependencyPolicyErrorCode,
+)
 from app.runtime.dependencies.dependency_env import DependencyEnvironmentInstallError
+from app.runtime.dependencies.dependency_resolver import DependencyResolutionError
 from app.runtime.install_state import (
     InstallStateStore,
     now_iso,
@@ -51,6 +55,18 @@ from app.trust import capsule_source_policy
 WorkspaceSmokeTest = Callable[
     [CapsuleLock, PreparedRuntimeWorkspace], Awaitable[SmokeTestReport | None]
 ]
+
+_DEPENDENCY_POLICY_BLOCK_CODES = frozenset(
+    {
+        DependencyPolicyErrorCode.EDITABLE_INSTALL_NOT_ALLOWED,
+        DependencyPolicyErrorCode.INSTALL_SCRIPT_NOT_ALLOWED,
+        DependencyPolicyErrorCode.PROJECT_CODE_EXECUTION_REQUIRED,
+        DependencyPolicyErrorCode.SOURCE_POLICY_MISMATCH,
+        DependencyPolicyErrorCode.UNSUPPORTED_DEPENDENCY_DECLARATION,
+        DependencyPolicyErrorCode.UNAPPROVED_SOURCE,
+        DependencyPolicyErrorCode.DEPENDENCY_BUILD_POLICY_BLOCKED,
+    }
+)
 
 
 class CapsuleInstallError(RuntimeError):
@@ -103,6 +119,13 @@ class CapsuleInstaller:
             last_error=None,
             smoke_test_status=SmokeTestStatus.NOT_RUN,
             smoke_test_report=SmokeTestReport(),
+            last_error_code=None,
+            last_install_transaction_id=(
+                install_transaction.transaction_id
+                if install_transaction is not None
+                else None
+            ),
+            diagnostic_log_names=[],
         )
         source_policy = capsule_source_policy(capsule_lock)
         if (
@@ -212,21 +235,59 @@ class CapsuleInstaller:
             )
             raise CapsuleInstallError(str(exc), state=state) from exc
         except DependencyEnvironmentInstallError as exc:
+            blocked = _dependency_error_is_policy_block(exc.code)
+            message = _dependency_user_message(exc.code)
             state = self._transition(
                 fingerprint,
-                InstallStatus.BLOCKED_BY_POLICY,
+                (
+                    InstallStatus.BLOCKED_BY_POLICY
+                    if blocked
+                    else InstallStatus.FAILED
+                ),
                 workflow_id,
-                last_error=str(exc),
+                last_error=message,
+                last_error_code=exc.code.value,
+                diagnostic_log_names=self._transaction_diagnostic_log_names(
+                    install_transaction
+                ),
             )
-            raise CapsuleInstallError(str(exc), state=state) from exc
+            raise CapsuleInstallError(message, state=state) from exc
+        except DependencyResolutionError as exc:
+            blocked = _dependency_error_is_policy_block(exc.code)
+            message = _dependency_user_message(exc.code)
+            state = self._transition(
+                fingerprint,
+                (
+                    InstallStatus.BLOCKED_BY_POLICY
+                    if blocked
+                    else InstallStatus.FAILED
+                ),
+                workflow_id,
+                last_error=message,
+                last_error_code=exc.code.value,
+                diagnostic_log_names=self._transaction_diagnostic_log_names(
+                    install_transaction
+                ),
+            )
+            raise CapsuleInstallError(message, state=state) from exc
         except DependencyPolicyError as exc:
+            blocked = _dependency_error_is_policy_block(exc.code)
+            message = _dependency_user_message(exc.code)
             state = self._transition(
                 fingerprint,
-                InstallStatus.BLOCKED_BY_POLICY,
+                (
+                    InstallStatus.BLOCKED_BY_POLICY
+                    if blocked
+                    else InstallStatus.FAILED
+                ),
                 workflow_id,
-                last_error=str(exc),
+                last_error=message,
+                last_error_code=exc.code.value,
+                diagnostic_log_names=self._transaction_diagnostic_log_names(
+                    install_transaction
+                ),
             )
-            raise CapsuleInstallError(str(exc), state=state) from exc
+            raise CapsuleInstallError(message, state=state) from exc
         except CustomNodeMaterializationError as exc:
             status = (
                 InstallStatus.CANNOT_PREPARE_AUTOMATICALLY
@@ -380,6 +441,35 @@ class CapsuleInstaller:
             capsule_lock.runtime.capsule_fingerprint
         )
 
+    def developer_details(self, state: InstallState) -> dict[str, object]:
+        details: dict[str, object] = {
+            "last_error": state.last_error,
+            "last_error_code": state.last_error_code,
+            "install_transaction_id": state.last_install_transaction_id,
+            "diagnostic_log_names": state.diagnostic_log_names,
+        }
+        if (
+            self.workspace_preparer is not None
+            and state.last_install_transaction_id is not None
+        ):
+            details["dependency_logs"] = (
+                self.workspace_preparer.install_transaction_store.diagnostic_logs(
+                    state.last_install_transaction_id
+                )
+            )
+        return details
+
+    def _transaction_diagnostic_log_names(
+        self, transaction
+    ) -> list[str]:
+        if self.workspace_preparer is None or transaction is None:
+            return []
+        return sorted(
+            self.workspace_preparer.install_transaction_store.diagnostic_logs(
+                transaction.transaction_id
+            )
+        )
+
     async def _run_workspace_smoke_test(
         self,
         capsule_lock: CapsuleLock,
@@ -500,6 +590,28 @@ class CapsuleInstaller:
             },
         )
         return state
+
+
+def _dependency_error_is_policy_block(
+    code: DependencyPolicyErrorCode,
+) -> bool:
+    return code in _DEPENDENCY_POLICY_BLOCK_CODES
+
+
+def _dependency_user_message(code: DependencyPolicyErrorCode) -> str:
+    if code is DependencyPolicyErrorCode.UNSUPPORTED_UV_VERSION:
+        return "Noofy's workflow support tools need an update. Update Noofy and try again."
+    if _dependency_error_is_policy_block(code):
+        return (
+            "This workflow extension uses a dependency installation method "
+            "that Noofy cannot prepare automatically."
+        )
+    if code is DependencyPolicyErrorCode.DEPENDENCY_SOURCE_BUILD_FAILED:
+        return (
+            "Noofy could not build one of this workflow's extensions for "
+            "this computer."
+        )
+    return "Noofy could not prepare one of this workflow's extensions."
 
 
 def _prepared_runtime_fields(

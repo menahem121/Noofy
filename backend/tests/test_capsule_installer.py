@@ -1109,10 +1109,14 @@ async def test_prepare_dependency_policy_failure_marks_blocked_by_policy(tmp_pat
         log_store=log_store,
     )
 
-    with pytest.raises(CapsuleInstallError, match="dependency source is not approved") as exc:
+    with pytest.raises(
+        CapsuleInstallError,
+        match="uses a dependency installation method",
+    ) as exc:
         await installer.prepare(capsule)
 
     assert exc.value.state.status is InstallStatus.BLOCKED_BY_POLICY
+    assert exc.value.state.last_error_code == "unapproved_source"
     persisted = state_store.get("fp-dependency-policy")
     assert persisted is not None
     assert persisted.status is InstallStatus.BLOCKED_BY_POLICY

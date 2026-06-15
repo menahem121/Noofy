@@ -2,6 +2,7 @@
 
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 from unittest.mock import patch
 
@@ -9,6 +10,14 @@ import pytest
 
 from app.diagnostics import LogStore
 from app.runtime.uv_executable import _venv_uv_path, resolve_noofy_uv_executable
+
+
+def test_runtime_tool_versions_manifest_is_packaged() -> None:
+    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    package_data = pyproject["tool"]["setuptools"]["package-data"]["app.runtime"]
+
+    assert "runtime_tool_versions.json" in package_data
+
 
 # ---------------------------------------------------------------------------
 # _venv_uv_path — cross-platform path construction
@@ -241,7 +250,7 @@ def test_dependency_lock_resolver_uses_uv_executable_in_commands(
         seen_executables.append(command[0])
         if command[1:2] == ["--version"]:
             return subprocess.CompletedProcess(
-                command, 0, stdout="uv 0.9.0\n", stderr=""
+                command, 0, stdout="uv 0.11.10\n", stderr=""
             )
         output_flag_index = command.index("--output-file")
         Path(command[output_flag_index + 1]).write_text("", encoding="utf-8")

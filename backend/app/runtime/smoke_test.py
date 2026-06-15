@@ -574,7 +574,24 @@ async def _check_dependency_imports_with_runner(
             message=f"Dependency lock file is unreadable: {exc}",
         )
 
-    import_targets = _dependency_import_targets(lock_payload)
+    inventory_path = (
+        prepared_workspace.dependency_env_path / "installed-dependencies.json"
+    )
+    inventory_payload: Mapping[str, object] | None = None
+    if inventory_path.exists():
+        try:
+            loaded_inventory = json.loads(
+                inventory_path.read_text(encoding="utf-8")
+            )
+            if isinstance(loaded_inventory, dict):
+                inventory_payload = loaded_inventory
+        except (OSError, json.JSONDecodeError):
+            inventory_payload = None
+    import_targets = (
+        _dependency_import_targets_from_inventory(inventory_payload)
+        if inventory_payload is not None
+        else _dependency_import_targets(lock_payload)
+    )
     if not import_targets:
         return SmokeStageResult(
             status=SmokeStageStatus.PASSED,
@@ -645,6 +662,26 @@ async def _check_dependency_imports_with_runner(
     )
 
 
+def _dependency_import_targets_from_inventory(
+    inventory_payload: Mapping[str, object],
+) -> list[dict[str, object]]:
+    records = inventory_payload.get("distributions", [])
+    if not isinstance(records, list):
+        return []
+    normalized: list[object] = []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        normalized.append(
+            {
+                "name": record.get("name"),
+                "relationship": "direct",
+                "import_names": record.get("import_names", []),
+            }
+        )
+    return _dependency_import_targets_from_records(normalized)
+
+
 async def _run_dependency_import_command(
     command: list[str],
     prepared_workspace: PreparedRuntimeWorkspace,
@@ -663,19 +700,28 @@ async def _run_dependency_import_command(
 def _dependency_import_targets(
     lock_payload: Mapping[str, object],
 ) -> list[dict[str, object]]:
+    requirements = lock_payload.get("requirements", [])
+    if isinstance(requirements, list) and requirements:
+        return _dependency_import_targets_from_records(requirements)
     wheels = lock_payload.get("wheels", [])
     if not isinstance(wheels, list):
         return []
+    return _dependency_import_targets_from_records(wheels)
+
+
+def _dependency_import_targets_from_records(
+    records: list[object],
+) -> list[dict[str, object]]:
     targets: dict[str, set[str]] = {}
-    for wheel in wheels:
-        if not isinstance(wheel, dict):
+    for record in records:
+        if not isinstance(record, dict):
             continue
-        relationship = wheel.get("relationship")
+        relationship = record.get("relationship")
         if relationship == "core":
             continue
-        name = wheel.get("name")
+        name = record.get("name")
         if isinstance(name, str) and name:
-            raw_import_names = wheel.get("import_names", [])
+            raw_import_names = record.get("import_names", [])
             import_names = (
                 {
                     str(item)

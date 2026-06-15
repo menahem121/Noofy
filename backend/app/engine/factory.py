@@ -455,7 +455,6 @@ def create_default_engine_service() -> EngineService:
             active_runtime_profile_provider=runtime_profile_state.snapshot,
             dependency_env_installer=UvDependencyEnvironmentInstaller(
                 wheel_cache_dir=paths.wheel_cache_dir,
-                uv_cache_dir=paths.cache_dir / "uv",
                 uv_executable=resolve_noofy_uv_executable(),
                 log_store=log_store,
             ),
@@ -463,7 +462,6 @@ def create_default_engine_service() -> EngineService:
             dependency_lock_resolver=UvDependencyLockResolver(
                 wheel_cache_dir=paths.wheel_cache_dir,
                 work_dir=paths.install_transactions_dir,
-                uv_cache_dir=paths.cache_dir / "uv",
                 uv_executable=resolve_noofy_uv_executable(),
                 log_store=log_store,
             ),

@@ -1877,6 +1877,92 @@ describe("WorkflowRunPage", () => {
     });
   });
 
+  it("keeps source-build logs hidden until Developer details is opened", async () => {
+    const pendingStatus = {
+      ...workflowStatus,
+      workflow: { ...workflowStatus.workflow, custom_node_count: 1 },
+      install: {
+        status: "pending",
+        user_facing_message: "Not started",
+        requires_preparation: true,
+      },
+    };
+    const failedStatus = {
+      ...pendingStatus,
+      install: {
+        status: "failed",
+        user_facing_message: "Noofy could not prepare this workflow.",
+        last_error: "A custom-node dependency could not be installed.",
+        last_error_code: "dependency_source_build_failed",
+        developer_details_available: true,
+        requires_preparation: true,
+      },
+    };
+    let statusCalls = 0;
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/workflows/text_to_image_v0/status")) {
+        statusCalls += 1;
+        return Promise.resolve(jsonResponse(statusCalls > 1 ? failedStatus : pendingStatus));
+      }
+      if (url.endsWith("/api/workflows/text_to_image_v0/validate")) return Promise.resolve(jsonResponse(validWorkflow));
+      if (url.endsWith("/api/workflows/text_to_image_v0/run") && init?.method === "POST") {
+        return Promise.resolve(
+          jsonResponse({
+            workflow_id: "text_to_image_v0",
+            valid: false,
+            missing_models: [],
+            errors: ["A custom-node dependency could not be installed."],
+            error_category: "workflow_preparation",
+            error_code: "dependency_source_build_failed",
+            developer_details: { developer_details_available: true },
+          }),
+        );
+      }
+      if (url.endsWith("/api/workflows/text_to_image_v0/install-state/developer-details")) {
+        return Promise.resolve(
+          jsonResponse({
+            workflow_id: "text_to_image_v0",
+            developer_details: {
+              last_error_code: "dependency_source_build_failed",
+              transaction_id: "install-test",
+              diagnostic_logs: {
+                "dependency-install/uv-install.log": "build backend failed while compiling groundingdino-py",
+              },
+            },
+          }),
+        );
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderRunPage();
+
+    await waitForReadyStatus();
+    fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Workflow could not be prepared" });
+    expect(screen.getByText("A custom-node dependency could not be installed.")).toBeInTheDocument();
+    expect(screen.queryByText(/build backend failed/)).not.toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.some(([input]) =>
+        String(input).endsWith("/api/workflows/text_to_image_v0/install-state/developer-details"),
+      ),
+    ).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "Developer details" }));
+
+    expect(await screen.findByText(/build backend failed while compiling groundingdino-py/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Hide developer details" })).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog", { name: "Workflow could not be prepared" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /run workflow/i })).toBeEnabled();
+  });
+
   it("does not flash the preparation dialog when a custom-node workflow is already ready", async () => {
     const runRequest = deferred<Response>();
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {

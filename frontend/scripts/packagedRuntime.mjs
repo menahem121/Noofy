@@ -1,6 +1,16 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -19,6 +29,10 @@ export const backendSourceRoot = path.join(repoRoot, "backend");
 export const backendPackagedPath = "backend";
 export const backendAppPackagedPath = "backend/app";
 export const backendPyprojectPackagedPath = "backend/pyproject.toml";
+const runtimeToolVersions = readJson(
+  path.join(backendSourceRoot, "app", "runtime", "runtime_tool_versions.json"),
+);
+export const supportedUvVersion = runtimeToolVersions.uv;
 
 export const requiredBackendImports = [
   "app",
@@ -307,6 +321,11 @@ export function verifyRuntimeManifest(manifest, { runtimeRoot = defaultRuntimeRo
   if (!manifest.uv.version) {
     throw new Error(`${runtimeManifestName} must record uv.version.`);
   }
+  if (manifest.uv.version !== supportedUvVersion) {
+    throw new Error(
+      `Packaged uv version must be ${supportedUvVersion}, found ${manifest.uv.version}.`,
+    );
+  }
 
   const python = resolveManifestPath(runtimeRoot, manifest.python.executable, "Packaged Python");
   const uv = resolveManifestPath(runtimeRoot, manifest.uv.executable, "Packaged uv");
@@ -336,6 +355,53 @@ export function verifyRuntimeManifest(manifest, { runtimeRoot = defaultRuntimeRo
     }
   } else {
     assertTargetArchitecture(uv, expectedTarget, "Packaged uv executable");
+  }
+}
+
+export function verifyUvExcludesCapability(uv) {
+  const workDir = mkdtempSync(path.join(tmpdir(), "noofy-uv-excludes-"));
+  try {
+    const input = path.join(workDir, "requirements.in");
+    const excludes = path.join(workDir, "excludes.txt");
+    const output = path.join(workDir, "requirements.lock");
+    writeFileSync(input, "requests-cache==1.2.1\n");
+    writeFileSync(excludes, "requests\n");
+    runChecked(
+      uv,
+      [
+        "pip",
+        "compile",
+        input,
+        "--generate-hashes",
+        "--excludes",
+        excludes,
+        "--python-version",
+        "3.13",
+        "--default-index",
+        "https://pypi.org/simple",
+        "--no-sources",
+        "--no-config",
+        "--no-progress",
+        "--output-file",
+        output,
+      ],
+      {
+        cwd: workDir,
+        env: {
+          ...process.env,
+          UV_CACHE_DIR: path.join(workDir, "uv-cache"),
+          UV_NO_PYTHON_DOWNLOADS: "1",
+        },
+      },
+    );
+    const lock = readFileSync(output, "utf8");
+    if (!/^requests-cache==1\.2\.1\b/m.test(lock) || /^requests==/m.test(lock)) {
+      throw new Error(
+        "Bundled uv does not provide the required transitive --excludes behavior.",
+      );
+    }
+  } finally {
+    rmSync(workDir, { recursive: true, force: true });
   }
 }
 

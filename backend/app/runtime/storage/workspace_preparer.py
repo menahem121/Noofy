@@ -202,6 +202,7 @@ class RuntimeWorkspacePreparer:
                 dependency_manifest,
                 profile_selection,
                 workflow_id=workflow_id,
+                transaction=transaction,
             )
             runner_manifest = self._runner_workspace_manifest(
                 capsule_lock,
@@ -514,6 +515,7 @@ class RuntimeWorkspacePreparer:
                     target_dir=staging_dir,
                     python_version=manifest.python_version,
                     workflow_id=workflow_id,
+                    transaction_root=transaction.root_dir,
                     python_executable=self._dependency_python_executable(
                         manifest.python_version
                     ),
@@ -960,6 +962,7 @@ class RuntimeWorkspacePreparer:
         profile_selection: RuntimeProfileSelection | None,
         *,
         workflow_id: str,
+        transaction: InstallTransaction,
     ) -> DependencyEnvManifest:
         if self.dependency_env_installer is None:
             return manifest
@@ -989,13 +992,14 @@ class RuntimeWorkspacePreparer:
                     ),
                     workflow_id=workflow_id,
                     source_policy=source_policy,
+                    transaction_dir=transaction.root_dir / "dependency-resolution",
                 )
             )
             if existing_core_lock is not None:
                 lock = merge_resolved_dependency_locks(
                     existing_core_lock, [custom_node_lock]
                 )
-            elif custom_node_lock.wheels:
+            elif custom_node_lock.wheels or custom_node_lock.requirements:
                 lock = merge_resolved_dependency_locks(
                     core_dependency_lock_from_capsule(capsule_lock), [custom_node_lock]
                 )

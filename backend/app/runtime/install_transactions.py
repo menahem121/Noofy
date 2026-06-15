@@ -160,6 +160,27 @@ class InstallTransactionStore:
         )
         return path
 
+    def diagnostic_logs(self, transaction_id: str) -> dict[str, str]:
+        root = self.root_dir / transaction_id
+        if not root.is_dir():
+            return {}
+        logs: dict[str, str] = {}
+        for path in sorted(root.rglob("*")):
+            if (
+                not path.is_file()
+                or path.name in {INSTALL_TRANSACTION_FILENAME, INSTALL_QUARANTINE_FILENAME}
+                or path.suffix not in {".log", ".json", ".txt"}
+            ):
+                continue
+            try:
+                relative = path.relative_to(root).as_posix()
+                logs[relative] = path.read_text(
+                    encoding="utf-8", errors="replace"
+                )
+            except OSError:
+                continue
+        return logs
+
     @contextmanager
     def artifact_lock(self, *, artifact_kind: str, fingerprint: str) -> Iterator[None]:
         lock_key = f"{artifact_kind}-{_safe_fingerprint(fingerprint)}"

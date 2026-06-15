@@ -13,7 +13,11 @@ import pytest
 from app.artifacts import AssetOwnership, ModelVerificationLevel
 from app.diagnostics import LogStore
 from app.engine.models import EngineJob, JobProgress
-from app.engine.service import EngineService, _smoke_execution_fixture_for_capsule
+from app.engine.service import (
+    EngineService,
+    _smoke_execution_fixture_for_capsule,
+    _workflow_runner_unavailable_result,
+)
 from app.runtime.capsule_installer import CapsuleInstaller
 from app.runtime.install_state import InstallStateStore
 from app.runtime.dependencies.isolation import (
@@ -43,6 +47,27 @@ from app.runtime.storage.workspace_store import DependencyEnvManifestStore, Runn
 from app.workflows.capsule import CAPSULE_LOCK_FILENAME, CapsuleLockLoader
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.validator import WorkflowPackageValidator
+
+
+def test_workflow_runner_preparation_failure_has_structured_validation_payload() -> None:
+    result = _workflow_runner_unavailable_result(
+        "workflow",
+        {
+            "status": "failed",
+            "last_error": "Noofy could not build one workflow extension.",
+            "last_error_code": "dependency_source_build_failed",
+            "developer_details_available": True,
+        },
+    )
+
+    assert result.valid is False
+    assert result.error_category == "workflow_preparation"
+    assert result.error_code == "dependency_source_build_failed"
+    assert result.errors == ["Noofy could not build one workflow extension."]
+    assert result.developer_details == {
+        "install_status": "failed",
+        "developer_details_available": True,
+    }
 
 
 class StubRuntimeManager:

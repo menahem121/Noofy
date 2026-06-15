@@ -1,8 +1,8 @@
-"""Resolved dependency lock schema and strict install policy helpers.
+"""Resolved dependency lock schema and isolated install policy helpers.
 
 Phase 5b treats raw dependency declarations as input data only. The runtime
-environment contract is a Noofy-owned resolved lock made of wheel facts,
-runtime profile facts, and resolver metadata.
+environment contract is a Noofy-owned resolved lock made of pinned registry
+requirements, build facts, runtime profile facts, and resolver metadata.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ import tomllib
 from enum import StrEnum
 from pathlib import Path
 from typing import Iterable
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -20,8 +21,10 @@ from app.runtime.fingerprints import dependency_env_fingerprint, sha256_fingerpr
 from app.runtime.dependencies.isolation import SHA256_PATTERN, CapsuleLock
 from app.source_policy import SourcePolicy
 
-DEPENDENCY_LOCK_SCHEMA_VERSION = "0.1.0"
-DEFAULT_COMMUNITY_INSTALL_POLICY_VERSION = "quarantined-community-v1"
+DEPENDENCY_LOCK_SCHEMA_VERSION = "0.2.0"
+DEFAULT_COMMUNITY_INSTALL_POLICY_VERSION = "isolated-community-index-build-v2"
+LEGACY_COMMUNITY_INSTALL_POLICY_VERSION = "quarantined-community-v1"
+DEFAULT_APPROVED_INDEX_URL = "https://pypi.org/simple"
 
 _NORMALIZED_NAME_PATTERN = re.compile(r"[-_.]+")
 _VALID_IMPORT_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$")
@@ -53,6 +56,12 @@ class DependencySourceKind(StrEnum):
     APPROVED_CACHE = "approved_cache"
 
 
+class DependencyDistributionKind(StrEnum):
+    WHEEL = "wheel"
+    SDIST = "sdist"
+    UNKNOWN = "unknown"
+
+
 class DependencyPolicyErrorCode(StrEnum):
     CONFLICTING_RESOLUTION = "conflicting_resolution"
     CROSS_RUNTIME_LOCK_MERGE = "cross_runtime_lock_merge"
@@ -67,6 +76,14 @@ class DependencyPolicyErrorCode(StrEnum):
     SDIST_NOT_ALLOWED = "sdist_not_allowed"
     UNSUPPORTED_DEPENDENCY_DECLARATION = "unsupported_dependency_declaration"
     UNAPPROVED_SOURCE = "unapproved_source"
+    UNSUPPORTED_UV_VERSION = "unsupported_uv_version"
+    DEPENDENCY_RESOLUTION_FAILED = "dependency_resolution_failed"
+    DEPENDENCY_BUILD_POLICY_BLOCKED = "dependency_build_policy_blocked"
+    DEPENDENCY_BUILD_REQUIREMENTS_FAILED = "dependency_build_requirements_failed"
+    DEPENDENCY_SOURCE_BUILD_FAILED = "dependency_source_build_failed"
+    DEPENDENCY_BUILD_RESOLUTION_UNSTABLE = "dependency_build_resolution_unstable"
+    DEPENDENCY_INSTALL_FAILED = "dependency_install_failed"
+    DEPENDENCY_OVERLAY_VALIDATION_FAILED = "dependency_overlay_validation_failed"
 
 
 class DependencyPolicyError(RuntimeError):
@@ -148,6 +165,57 @@ class ResolvedDependencyWheel(BaseModel):
         return self
 
 
+class ResolvedDependencyRequirement(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str = Field(min_length=1)
+    version: str = Field(min_length=1)
+    hashes: list[str] = Field(min_length=1)
+    environment_marker: str | None = None
+    relationship: DependencyRelationship
+    requested_by: list[str] = Field(default_factory=list)
+    distribution_kind: DependencyDistributionKind = DependencyDistributionKind.UNKNOWN
+    distribution_filename: str | None = None
+    distribution_url: str | None = None
+    distribution_sha256: str | None = Field(default=None, pattern=SHA256_PATTERN)
+    source_index_url: str = DEFAULT_APPROVED_INDEX_URL
+    import_names: list[str] = Field(default_factory=list)
+    build_system_requires: list[str] = Field(default_factory=list)
+    legacy_setuptools_build: bool = False
+    dynamic_build_requirements_possible: bool = False
+
+    @field_validator("name")
+    @classmethod
+    def _normalize_name(cls, value: str) -> str:
+        return normalize_package_name(value)
+
+    @field_validator("hashes")
+    @classmethod
+    def _validate_hashes(cls, value: list[str]) -> list[str]:
+        hashes = sorted(set(value))
+        if not hashes or any(not re.fullmatch(SHA256_PATTERN, item) for item in hashes):
+            raise ValueError("dependency requirement hashes must be sha256 values")
+        return hashes
+
+    @field_validator("distribution_filename")
+    @classmethod
+    def _validate_distribution_filename(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if value in {"", ".", ".."} or "/" in value or "\\" in value:
+            raise ValueError("distribution_filename must be a safe filename")
+        return value
+
+    @field_validator("import_names")
+    @classmethod
+    def _validate_import_names(cls, value: list[str]) -> list[str]:
+        names = sorted(set(value))
+        for name in names:
+            if not _VALID_IMPORT_NAME_RE.match(name):
+                raise ValueError("import_names must be valid dotted Python import names")
+        return names
+
+
 class ResolvedDependencyLock(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -156,9 +224,23 @@ class ResolvedDependencyLock(BaseModel):
     runtime_profile_id: str = Field(min_length=1)
     runtime_profile_variant_id: str = Field(min_length=1)
     runtime_profile_manifest_hash: str = Field(min_length=1)
+    python_version: str | None = None
+    python_platform: str | None = None
     install_policy_version: str = Field(min_length=1)
     source_policy: SourcePolicy | None = None
     resolver: ResolverMetadata
+    requirements: list[ResolvedDependencyRequirement] = Field(default_factory=list)
+    requirements_lock: str | None = None
+    requirements_lock_hash: str | None = Field(default=None, pattern=SHA256_PATTERN)
+    runtime_excludes: list[str] = Field(default_factory=list)
+    runtime_excludes_hash: str | None = Field(default=None, pattern=SHA256_PATTERN)
+    build_constraints: str | None = None
+    build_constraints_hash: str | None = Field(default=None, pattern=SHA256_PATTERN)
+    source_distributions: list[str] = Field(default_factory=list)
+    resolution_cutoff: str | None = None
+    approved_index_url: str | None = None
+    ignored_dependencies: list[dict[str, str | None]] = Field(default_factory=list)
+    build_requirements_complete: bool = True
     wheels: list[ResolvedDependencyWheel] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -166,6 +248,24 @@ class ResolvedDependencyLock(BaseModel):
         for wheel in self.wheels:
             if wheel.resolver_name != self.resolver.name or wheel.resolver_version != self.resolver.version:
                 raise ValueError("wheel resolver metadata must match lock resolver metadata")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_v2_artifact_hashes(self) -> ResolvedDependencyLock:
+        for contents, digest, label in (
+            (self.requirements_lock, self.requirements_lock_hash, "requirements lock"),
+            (self.build_constraints, self.build_constraints_hash, "build constraints"),
+            (
+                "\n".join(self.runtime_excludes) + ("\n" if self.runtime_excludes else ""),
+                self.runtime_excludes_hash,
+                "runtime excludes",
+            ),
+        ):
+            if contents is None or digest is None:
+                continue
+            actual = "sha256:" + hashlib.sha256(contents.encode("utf-8")).hexdigest()
+            if actual != digest:
+                raise ValueError(f"{label} hash does not match its contents")
         return self
 
 
@@ -260,6 +360,7 @@ def merge_resolved_dependency_locks(
 ) -> ResolvedDependencyLock:
     """Merge profile-core and custom-node locks into one dependency-env lock."""
     merged: dict[str, ResolvedDependencyWheel] = {}
+    merged_requirements: dict[str, ResolvedDependencyRequirement] = {}
     custom_locks = tuple(custom_node_locks)
     merged_resolver = ResolverMetadata(
         name="noofy-lock-merge",
@@ -274,6 +375,27 @@ def merge_resolved_dependency_locks(
                 merged[wheel.name] = wheel
                 continue
             merged[wheel.name] = _merge_wheel_or_raise(existing, wheel)
+        for requirement in lock.requirements:
+            existing_requirement = merged_requirements.get(requirement.name)
+            if existing_requirement is None:
+                merged_requirements[requirement.name] = requirement
+                continue
+            if existing_requirement != requirement:
+                raise DependencyPolicyError(
+                    DependencyPolicyErrorCode.CONFLICTING_RESOLUTION,
+                    f"Conflicting resolved dependency for {requirement.name}.",
+                )
+
+    artifact_locks = [lock for lock in custom_locks if lock.requirements_lock is not None]
+    artifact_source = artifact_locks[0] if artifact_locks else core_lock
+    if any(
+        lock.requirements_lock_hash != artifact_source.requirements_lock_hash
+        for lock in artifact_locks[1:]
+    ):
+        raise DependencyPolicyError(
+            DependencyPolicyErrorCode.CONFLICTING_RESOLUTION,
+            "Custom-node dependency locks contain conflicting compiled artifacts.",
+        )
 
     merged_lock = core_lock.model_copy(
         update={
@@ -290,6 +412,22 @@ def merge_resolved_dependency_locks(
                 ),
                 key=lambda item: (item.name, item.version, item.wheel_filename),
             ),
+            "requirements": sorted(
+                merged_requirements.values(), key=lambda item: (item.name, item.version)
+            ),
+            "requirements_lock": artifact_source.requirements_lock,
+            "requirements_lock_hash": artifact_source.requirements_lock_hash,
+            "runtime_excludes": artifact_source.runtime_excludes,
+            "runtime_excludes_hash": artifact_source.runtime_excludes_hash,
+            "build_constraints": artifact_source.build_constraints,
+            "build_constraints_hash": artifact_source.build_constraints_hash,
+            "source_distributions": artifact_source.source_distributions,
+            "resolution_cutoff": artifact_source.resolution_cutoff,
+            "approved_index_url": artifact_source.approved_index_url,
+            "ignored_dependencies": artifact_source.ignored_dependencies,
+            "build_requirements_complete": artifact_source.build_requirements_complete,
+            "python_version": artifact_source.python_version,
+            "python_platform": artifact_source.python_platform,
             "source_policy": _merged_source_policy(core_lock, custom_locks),
             "lock_hash": None,
         }
@@ -304,6 +442,12 @@ def validate_quarantined_community_lock(
     wheel_cache_dir: Path | None = None,
 ) -> None:
     """Validate the default community policy before any environment install."""
+    if (
+        lock.install_policy_version == DEFAULT_COMMUNITY_INSTALL_POLICY_VERSION
+        and not lock.wheels
+    ):
+        _validate_index_build_lock(lock)
+        return
     approved_indexes = set(approved_index_urls)
     for wheel in lock.wheels:
         if wheel.source_distribution or not wheel.wheel_filename.endswith(".whl"):
@@ -333,14 +477,61 @@ def validate_quarantined_community_lock(
                     f"Dependency {wheel.name} uses an unapproved index.",
                 )
         elif wheel_cache_dir is not None:
-            _verify_cached_wheel(wheel, wheel_cache_dir)
+                _verify_cached_wheel(wheel, wheel_cache_dir)
+
+
+def _validate_index_build_lock(lock: ResolvedDependencyLock) -> None:
+    if not lock.python_version or not lock.python_platform:
+        raise DependencyPolicyError(
+            DependencyPolicyErrorCode.DEPENDENCY_OVERLAY_VALIDATION_FAILED,
+            "Dependency lock is missing its target Python or platform identity.",
+        )
+    if lock.approved_index_url != DEFAULT_APPROVED_INDEX_URL:
+        raise DependencyPolicyError(
+            DependencyPolicyErrorCode.UNAPPROVED_SOURCE,
+            "Dependency lock does not use Noofy's approved package index.",
+        )
+    if lock.requirements and not lock.requirements_lock:
+        raise DependencyPolicyError(
+            DependencyPolicyErrorCode.MISSING_HASH,
+            "Dependency lock is missing its compiled requirements artifact.",
+        )
+    excluded = {normalize_package_name(name) for name in lock.runtime_excludes}
+    for requirement in lock.requirements:
+        if requirement.name in excluded:
+            raise DependencyPolicyError(
+                DependencyPolicyErrorCode.DEPENDENCY_OVERLAY_VALIDATION_FAILED,
+                f"Protected dependency {requirement.name} remained in the compiled lock.",
+            )
+        if not requirement.hashes:
+            raise DependencyPolicyError(
+                DependencyPolicyErrorCode.MISSING_HASH,
+                f"Dependency {requirement.name} is missing distribution hashes.",
+            )
+        if requirement.source_index_url != DEFAULT_APPROVED_INDEX_URL:
+            raise DependencyPolicyError(
+                DependencyPolicyErrorCode.UNAPPROVED_SOURCE,
+                f"Dependency {requirement.name} uses an unapproved index.",
+            )
+        if requirement.distribution_url is not None:
+            parsed = urlparse(requirement.distribution_url)
+            if (
+                parsed.scheme != "https"
+                or parsed.hostname not in {"files.pythonhosted.org", "pypi.org"}
+                or parsed.username is not None
+                or parsed.password is not None
+            ):
+                raise DependencyPolicyError(
+                    DependencyPolicyErrorCode.UNAPPROVED_SOURCE,
+                    f"Dependency {requirement.name} uses an unapproved distribution URL.",
+                )
 
 
 def validate_dependency_lock_source_policy(
     lock: ResolvedDependencyLock,
     expected_policy: SourcePolicy | None,
 ) -> None:
-    if expected_policy is None or not lock.wheels:
+    if expected_policy is None or not (lock.wheels or lock.requirements):
         return
     if lock.source_policy is None:
         raise DependencyPolicyError(

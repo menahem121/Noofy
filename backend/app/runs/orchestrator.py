@@ -54,7 +54,10 @@ from app.runs.queue_service import (
 ValidatePackage = Callable[[WorkflowPackage, EngineAdapter], Awaitable[WorkflowValidationResult]]
 UnavailablePackageReason = Callable[[WorkflowPackage], str | None]
 ApplyInputBindings = Callable[[WorkflowPackage, dict[str, Any]], dict[str, Any]]
-EnsureWorkflowRunner = Callable[[WorkflowPackage], Awaitable[str | dict[str, Any] | None]]
+EnsureWorkflowRunner = Callable[
+    [WorkflowPackage],
+    Awaitable[str | dict[str, Any] | WorkflowValidationResult | None],
+]
 WorkflowRunMemoryDecision = Callable[..., MemoryGovernorDecision | None]
 EvictIdleRunners = Callable[..., Awaitable[EngineJob | None]]
 MemoryStatusPayload = Callable[..., dict[str, Any]]
@@ -273,6 +276,23 @@ class RunOrchestrator:
         runtime_package = package_for_input_bindings(package, runtime_inputs)
         if self.ensure_workflow_runner is not None:
             runner_unavailable = await self.ensure_workflow_runner(package)
+            if isinstance(runner_unavailable, WorkflowValidationResult):
+                message = (
+                    "; ".join(runner_unavailable.errors)
+                    or "Workflow preparation failed"
+                )
+                self._record_run_blocked(package, message)
+                self.log_store.add(
+                    "warning",
+                    "Workflow run blocked because workflow preparation failed",
+                    "runs.orchestrator",
+                    workflow_id=workflow_id,
+                    details={
+                        "error": message,
+                        "error_code": runner_unavailable.error_code,
+                    },
+                )
+                return runner_unavailable
             if isinstance(runner_unavailable, dict):
                 runner_start_queue_id = runner_unavailable.get("queue_id")
                 wait_reason = str(runner_unavailable.get("status") or "waiting_for_runner_start")

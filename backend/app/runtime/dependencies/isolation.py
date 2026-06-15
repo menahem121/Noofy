@@ -282,6 +282,9 @@ class InstallState(BaseModel):
     smoke_test_status: SmokeTestStatus = SmokeTestStatus.NOT_RUN
     smoke_test_report: SmokeTestReport = Field(default_factory=SmokeTestReport)
     last_error: str | None = None
+    last_error_code: str | None = None
+    last_install_transaction_id: str | None = None
+    diagnostic_log_names: list[str] = Field(default_factory=list)
 
 
 class DependencyEnvManifest(BaseModel):

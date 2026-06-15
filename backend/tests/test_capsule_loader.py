@@ -10,6 +10,7 @@ from app.runtime.fingerprints import (
     sha256_fingerprint,
 )
 from app.runtime.dependencies.isolation import TrustLevel
+from app.runtime.dependencies.dependency_lock import DEPENDENCY_LOCK_SCHEMA_VERSION
 from app.runtime.profiles import load_runtime_profile_catalog
 from app.workflows.capsule import CAPSULE_LOCK_FILENAME, CapsuleLockLoader
 
@@ -118,6 +119,7 @@ def test_bundled_text_to_image_capsule_uses_phase4_fingerprints() -> None:
 
     expected_dependency_lock_hash = sha256_fingerprint(
         {
+            "schema_version": DEPENDENCY_LOCK_SCHEMA_VERSION,
             "kind": "core_dependency_lock",
             "lock_file": lock.dependencies.lock_file,
             "dependencies": [],

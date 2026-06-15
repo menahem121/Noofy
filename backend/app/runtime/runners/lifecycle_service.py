@@ -727,9 +727,11 @@ class WorkflowRunnerLifecycleService:
         if capsule_lock is None:
             return {"workflow_id": workflow_id, "developer_details": {}}
         state = self.capsule_installer.get_state(capsule_lock)
+        details = _install_developer_details(state)
+        details.update(self.capsule_installer.developer_details(state))
         return {
             "workflow_id": workflow_id,
-            "developer_details": _install_developer_details(state),
+            "developer_details": sanitize(details),
         }
 
     def workflow_status(self, workflow_id: str) -> dict[str, object]:
@@ -1405,6 +1407,7 @@ class WorkflowRunnerLifecycleService:
             "smoke_test_status": state.smoke_test_status.value,
             "smoke_test_report": state.smoke_test_report.model_dump(mode="json"),
             "last_error": state.last_error,
+            "last_error_code": state.last_error_code,
             "developer_details_available": state.last_error is not None or bool(state.smoke_test_report.model_dump(mode="json")),
             "source_policy": capsule_source_policy(capsule_lock).model_dump(mode="json")
             if capsule_lock is not None
@@ -1866,6 +1869,9 @@ def _install_developer_details(state: InstallState) -> dict[str, object]:
     details["smoke_test_report"] = state.smoke_test_report.model_dump(mode="json")
     details["dependency_env_path"] = state.dependency_env_path
     details["runner_workspace_path"] = state.runner_workspace_path
+    details["last_error_code"] = state.last_error_code
+    details["install_transaction_id"] = state.last_install_transaction_id
+    details["diagnostic_log_names"] = state.diagnostic_log_names
     return sanitize(details)
 
 

@@ -817,7 +817,7 @@ class EngineService:
 
     async def _ensure_workflow_runner_for_run(
         self, package: WorkflowPackage
-    ) -> str | dict[str, object] | None:
+    ) -> str | dict[str, object] | WorkflowValidationResult | None:
         """Prepare and bind a workflow runner before running custom-node capsules."""
         workflow_id = package.metadata.id
         capsule_lock = self.workflow_runner_lifecycle_service.preparable_capsule_lock(
@@ -836,7 +836,7 @@ class EngineService:
 
     async def _ensure_workflow_runner_for_run_locked(
         self, workflow_id: str, capsule_lock: CapsuleLock
-    ) -> str | dict[str, object] | None:
+    ) -> str | dict[str, object] | WorkflowValidationResult | None:
         runner = self.runner_supervisor.runner_for_workflow(workflow_id)
         expected_compatibility_key = (
             getattr(capsule_lock.runtime, "runner_process_compatibility_key", None)
@@ -887,7 +887,7 @@ class EngineService:
         }:
             return install
         if install.get("status") != InstallStatus.READY.value:
-            return _workflow_runner_unavailable_message(install)
+            return _workflow_runner_unavailable_result(workflow_id, install)
 
         start = await self.workflow_runner_lifecycle_service.start_workflow_runner(
             workflow_id
@@ -907,7 +907,7 @@ class EngineService:
                 workflow_id
             )
             if install.get("status") != InstallStatus.READY.value:
-                return _workflow_runner_unavailable_message(install)
+                return _workflow_runner_unavailable_result(workflow_id, install)
             start = await self.workflow_runner_lifecycle_service.start_workflow_runner(
                 workflow_id
             )
@@ -924,7 +924,7 @@ class EngineService:
                 RunnerStatus.STARTING.value,
             }:
                 return start
-            return _workflow_runner_unavailable_message(start)
+            return _workflow_runner_unavailable_result(workflow_id, start)
         return None
 
     async def handoff_next_queued_runner_start(
@@ -1256,6 +1256,7 @@ class EngineService:
             "smoke_test_status": state.smoke_test_status.value,
             "smoke_test_report": state.smoke_test_report.model_dump(mode="json"),
             "last_error": state.last_error,
+            "last_error_code": state.last_error_code,
             "developer_details_available": state.last_error is not None or bool(state.smoke_test_report.model_dump(mode="json")),
             "source_policy": capsule_source_policy(capsule_lock).model_dump(mode="json")
             if capsule_lock is not None
@@ -1476,6 +1477,29 @@ def _workflow_runner_unavailable_message(payload: dict[str, object]) -> str:
     if isinstance(status, str) and status.strip():
         return f"Workflow runner is not ready: {status}."
     return "Workflow runner is not ready."
+
+
+def _workflow_runner_unavailable_result(
+    workflow_id: str,
+    payload: dict[str, object],
+) -> WorkflowValidationResult:
+    message = _workflow_runner_unavailable_message(payload)
+    error_code = payload.get("last_error_code")
+    status = payload.get("status") or payload.get("install_status")
+    return WorkflowValidationResult(
+        workflow_id=workflow_id,
+        valid=False,
+        errors=[message],
+        error_category="workflow_preparation",
+        error_code=error_code if isinstance(error_code, str) else None,
+        developer_details={
+            "install_status": status if isinstance(status, str) else None,
+            "developer_details_available": payload.get(
+                "developer_details_available"
+            )
+            is True,
+        },
+    )
 
 
 def _workflow_runner_start_needs_reprepare(payload: dict[str, object]) -> bool:

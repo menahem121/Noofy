@@ -63,3 +63,32 @@ def test_startup_sweep_removes_legacy_unscoped_transaction_dirs(tmp_path: Path) 
     assert not legacy_model.exists()
     assert not legacy_dependency.exists()
     assert unrelated.exists()
+
+
+def test_quarantined_transaction_exposes_only_named_diagnostic_artifacts(
+    tmp_path: Path,
+) -> None:
+    store = InstallTransactionStore(tmp_path / "transactions", log_store=LogStore())
+    transaction = store.open(
+        workflow_id="workflow-a",
+        capsule_fingerprint="sha256:abc",
+    )
+    diagnostics = transaction.root_dir / "dependency-resolution"
+    diagnostics.mkdir()
+    (diagnostics / "uv-compile.log").write_text(
+        "source build failed",
+        encoding="utf-8",
+    )
+    (diagnostics / "resolution-summary.json").write_text(
+        '{"package":"groundingdino-py"}',
+        encoding="utf-8",
+    )
+    (diagnostics / "source.tar.gz").write_bytes(b"archive")
+    store.quarantine(transaction, reason="dependency source build failed")
+
+    logs = store.diagnostic_logs(transaction.transaction_id)
+
+    assert logs == {
+        "dependency-resolution/resolution-summary.json": '{"package":"groundingdino-py"}',
+        "dependency-resolution/uv-compile.log": "source build failed",
+    }

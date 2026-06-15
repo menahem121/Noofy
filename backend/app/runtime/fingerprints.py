@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 from app.runtime.dependencies.isolation import CapsuleLock, CustomNodeLock, ModelLock, TrustMetadata
 
-FINGERPRINT_SCHEMA_VERSION = "0.1.0"
+FINGERPRINT_SCHEMA_VERSION = "0.2.0"
 
 
 def canonical_json_bytes(payload: Any) -> bytes:
