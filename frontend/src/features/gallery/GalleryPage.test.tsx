@@ -53,20 +53,33 @@ describe("GalleryPage", () => {
   it("renders intentional mixed-media cards and filters by kind", async () => {
     render(<GalleryPage onNavigate={onNavigate} />);
     expect(await screen.findByAltText("studio portrait")).toBeInTheDocument();
-    expect(screen.getByText("motion.webm")).toBeInTheDocument();
-    expect(screen.getByText("voice.wav")).toBeInTheDocument();
-    expect(screen.getByText("mesh.glb")).toBeInTheDocument();
-    expect(screen.getByText("captions.srt")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open video: Motion Maker" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open audio: Voice Maker" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open 3d model: Mesh Maker" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open file: Transcript Maker" })).toBeInTheDocument();
+    expect(screen.queryByText("portrait.png")).not.toBeInTheDocument();
+    expect(screen.queryByText("motion.webm")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Audio" }));
-    expect(screen.getByText("voice.wav")).toBeInTheDocument();
-    expect(screen.queryByText("motion.webm")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open audio: Voice Maker" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open video: Motion Maker" })).not.toBeInTheDocument();
+  });
+
+  it("lets users recover from an empty filtered Gallery", async () => {
+    render(<GalleryPage onNavigate={onNavigate} />);
+    fireEvent.change(await screen.findByRole("searchbox", { name: "Search generated media" }), { target: { value: "does not exist" } });
+
+    expect(screen.getByRole("heading", { name: "No media found" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+
+    expect(screen.getByRole("button", { name: "Open image: Portrait Maker" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "No media found" })).not.toBeInTheDocument();
   });
 
   it("opens saved 3D models immediately in a bounded Gallery viewer", async () => {
     render(<GalleryPage onNavigate={onNavigate} />);
     fireEvent.click(await screen.findByRole("button", { name: "3D Models" }));
-    fireEvent.click(screen.getByRole("button", { name: "Open 3d model: mesh.glb" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open 3d model: Mesh Maker" }));
 
     const dialog = screen.getByRole("dialog", { name: "3D model details" });
     expect(dialog.querySelector(".img-modal--three-d")).toBeInTheDocument();
@@ -84,12 +97,13 @@ describe("GalleryPage", () => {
 
   it("opens a safe file detail without embedding arbitrary file content", async () => {
     render(<GalleryPage onNavigate={onNavigate} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Open file: captions.srt" }));
-    expect(screen.getByRole("dialog", { name: "File details" })).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "Open file: Transcript Maker" }));
+    const dialog = screen.getByRole("dialog", { name: "File details" });
+    expect(dialog).toBeInTheDocument();
     expect(screen.queryByRole("iframe")).not.toBeInTheDocument();
-    expect(screen.getByText("Transcript Maker")).toBeInTheDocument();
-    expect(screen.getByText("application/x-subrip")).toBeInTheDocument();
-    expect(screen.getByText("400 B")).toBeInTheDocument();
+    expect(dialog).toHaveTextContent("Transcript Maker");
+    expect(dialog).toHaveTextContent("application/x-subrip");
+    expect(dialog).toHaveTextContent("400 B");
     expect(screen.queryByRole("button", { name: /details/i })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Download" })).toBeInTheDocument();
@@ -119,10 +133,10 @@ describe("GalleryPage", () => {
     });
     render(<GalleryPage onNavigate={onNavigate} />);
     expect(await screen.findByText("Output unavailable")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("checkbox", { name: "Select captions.srt" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Transcript Maker" }));
     expect(screen.getByRole("button", { name: /download selected/i })).toBeDisabled();
     expect(screen.getByText("0 available to download")).toBeInTheDocument();
-    fireEvent.click(await screen.findByRole("button", { name: "Open file: captions.srt" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Open file: Transcript Maker" }));
     expect(screen.getByRole("button", { name: "Open" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Download" })).toBeDisabled();
   });
@@ -131,8 +145,8 @@ describe("GalleryPage", () => {
     const downloads: string[] = [];
     const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) { downloads.push(this.href); });
     render(<GalleryPage onNavigate={onNavigate} />);
-    fireEvent.click(await screen.findByRole("checkbox", { name: "Select voice.wav" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: "Select captions.srt" }));
+    fireEvent.click(await screen.findByRole("checkbox", { name: "Select Voice Maker" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Transcript Maker" }));
     fireEvent.click(screen.getByRole("button", { name: /download selected/i }));
     expect(downloads).toHaveLength(2);
     expect(downloads.every((url) => url.includes("/api/gallery/") && url.includes("download=true"))).toBe(true);
@@ -141,8 +155,8 @@ describe("GalleryPage", () => {
 
   it("deletes selected mixed-media items", async () => {
     render(<GalleryPage onNavigate={onNavigate} />);
-    fireEvent.click(await screen.findByRole("checkbox", { name: "Select voice.wav" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: "Select captions.srt" }));
+    fireEvent.click(await screen.findByRole("checkbox", { name: "Select Voice Maker" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Transcript Maker" }));
     fireEvent.click(screen.getByRole("button", { name: /delete selected/i }));
 
     const dialog = screen.getByRole("dialog", { name: "Delete 2 Gallery items?" });
@@ -152,7 +166,7 @@ describe("GalleryPage", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Delete items" }));
 
-    await waitFor(() => expect(screen.queryByText("voice.wav")).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole("article", { name: "Voice Maker" })).not.toBeInTheDocument());
     expect(fetchMock).toHaveBeenCalledWith("/api/gallery/audio-1", expect.objectContaining({ method: "DELETE" }));
     expect(fetchMock).toHaveBeenCalledWith("/api/gallery/file-1", expect.objectContaining({ method: "DELETE" }));
     expect(dialog).not.toBeInTheDocument();
@@ -160,7 +174,7 @@ describe("GalleryPage", () => {
 
   it("uses a Noofy confirmation popup before deleting one Gallery item", async () => {
     render(<GalleryPage onNavigate={onNavigate} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Open image: portrait.png" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Open image: Portrait Maker" }));
     fireEvent.click(screen.getByRole("button", { name: "Delete item" }));
 
     const dialog = screen.getByRole("dialog", { name: "Delete Gallery item?" });

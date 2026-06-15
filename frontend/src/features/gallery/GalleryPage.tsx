@@ -4,6 +4,7 @@ import {
   ArrowRight,
   Box,
   Calendar,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Download,
@@ -43,10 +44,6 @@ interface PendingGalleryDeletion {
 
 interface GalleryPageProps {
   onNavigate: (route: AppRouteId) => void;
-}
-
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
 function formatDateTime(iso: string): string {
@@ -146,6 +143,13 @@ export function GalleryPage({ onNavigate }: GalleryPageProps) {
   );
   const selectedIndex = selectedId ? displayedItems.findIndex((item) => item.id === selectedId) : -1;
   const selected = selectedIndex >= 0 ? displayedItems[selectedIndex] : null;
+  const hasActiveFilters = kindFilter !== "all" || Boolean(query.trim()) || favoritesOnly;
+
+  function clearFilters() {
+    setKindFilter("all");
+    setQuery("");
+    setFavoritesOnly(false);
+  }
 
   useEffect(() => {
     const visible = new Set(displayedItems.map((item) => item.id));
@@ -210,28 +214,37 @@ export function GalleryPage({ onNavigate }: GalleryPageProps) {
         </div>
       </section>
 
-      <nav className="gallery-kind-tabs" aria-label="Gallery media types">
+      <nav className="models-type-tabs gallery-kind-tabs" aria-label="Gallery media types">
         {([
           ["all", "All"], ["image", "Images"], ["video", "Videos"], ["audio", "Audio"], ["3d", "3D Models"], ["file", "Files"],
         ] as Array<[KindFilter, string]>).map(([value, label]) => (
-          <button key={value} className={kindFilter === value ? "gallery-kind-tab gallery-kind-tab--active" : "gallery-kind-tab"} type="button" onClick={() => setKindFilter(value)}>
+          <button
+            key={value}
+            className={kindFilter === value ? "models-type-tab models-type-tab--active" : "models-type-tab"}
+            type="button"
+            aria-pressed={kindFilter === value}
+            onClick={() => setKindFilter(value)}
+          >
             {label}
           </button>
         ))}
       </nav>
 
-      <div className="gallery-toolbar">
-        <label className="search-field gallery-search">
+      <div className="models-toolbar gallery-toolbar">
+        <div className="search-field gallery-search">
           <Search size={17} aria-hidden="true" />
-          <span className="sr-only">Search generated media</span>
-          <input type="search" placeholder="Search items, prompts, or workflows..." value={query} onChange={(event) => setQuery(event.target.value)} />
-        </label>
+          <input aria-label="Search generated media" type="search" placeholder="Search items, prompts, or workflows..." value={query} onChange={(event) => setQuery(event.target.value)} />
+          {query ? <button className="gallery-search__clear" type="button" aria-label="Clear Gallery search" onClick={() => setQuery("")}><X size={15} /></button> : null}
+        </div>
         <div className="gallery-toolbar__right">
-          <select className="filter-select" aria-label="Sort Gallery items" value={sortOrder} onChange={(event) => setSortOrder(event.target.value as SortOrder)}>
-            <option value="newest">Newest first</option>
-            <option value="oldest">Oldest first</option>
-          </select>
-          <button className={favoritesOnly ? "secondary-button gallery-filter-btn--active" : "secondary-button"} type="button" onClick={() => setFavoritesOnly((value) => !value)}>
+          <div className="filter-select-wrap">
+            <select className="filter-select" aria-label="Sort Gallery items" value={sortOrder} onChange={(event) => setSortOrder(event.target.value as SortOrder)}>
+              <option value="newest">Newest first</option>
+              <option value="oldest">Oldest first</option>
+            </select>
+            <ChevronDown size={13} aria-hidden="true" />
+          </div>
+          <button className={favoritesOnly ? "secondary-button secondary-button--selected gallery-filter-btn" : "secondary-button gallery-filter-btn"} type="button" aria-pressed={favoritesOnly} onClick={() => setFavoritesOnly((value) => !value)}>
             <Heart size={14} aria-hidden="true" /> Favorites
           </button>
         </div>
@@ -257,7 +270,12 @@ export function GalleryPage({ onNavigate }: GalleryPageProps) {
       {phase === "error" ? <GalleryErrorState error={error} onRetry={() => void loadGallery()} /> : null}
       {phase === "ready" && items.length === 0 ? <GalleryEmptyState onNavigate={onNavigate} /> : null}
       {phase === "ready" && items.length > 0 && displayedItems.length === 0 ? (
-        <div className="gallery-no-results"><Search size={34} /><p>No generated media matches these filters.</p></div>
+        <div className="gallery-no-results">
+          <Search size={34} aria-hidden="true" />
+          <h2>No media found</h2>
+          <p>No generated media matches your current search and filters.</p>
+          {hasActiveFilters ? <button className="secondary-button" type="button" onClick={clearFilters}>Clear filters</button> : null}
+        </div>
       ) : null}
       {phase === "ready" && displayedItems.length > 0 ? (
         <section className="gallery-grid" aria-label="Generated media">
@@ -303,15 +321,18 @@ export function GalleryPage({ onNavigate }: GalleryPageProps) {
 }
 
 function GalleryCard({ item, checked, onOpen, onCheck, onFavorite }: { item: GalleryItem; checked: boolean; onOpen: () => void; onCheck: () => void; onFavorite: () => void }) {
+  const label = item.workflowName || `${kindLabel(item.kind)} workflow`;
   return (
-    <article className={checked ? "gallery-thumb gallery-thumb--selected" : "gallery-thumb"} aria-label={itemLabel(item)}>
-      <button className="gallery-thumb__btn" type="button" onClick={onOpen} aria-label={`Open ${kindLabel(item.kind).toLowerCase()}: ${itemLabel(item)}`}>
+    <article className={checked ? "gallery-thumb gallery-thumb--selected" : "gallery-thumb"} aria-label={label}>
+      <button className="gallery-thumb__btn" type="button" onClick={onOpen} aria-label={`Open ${kindLabel(item.kind).toLowerCase()}: ${label}`}>
         <CardVisual item={item} />
         <div className="gallery-thumb__overlay"><span className="gallery-thumb__open-hint">Open {kindLabel(item.kind).toLowerCase()}</span></div>
       </button>
-      <label className="gallery-thumb__select"><input type="checkbox" checked={checked} aria-label={`Select ${itemLabel(item)}`} onChange={onCheck} /><span className="gallery-thumb__checkbox" /></label>
-      <button className={item.favorite ? "gallery-thumb__fav gallery-thumb__fav--active" : "gallery-thumb__fav"} type="button" aria-label={item.favorite ? "Remove from favorites" : "Add to favorites"} onClick={onFavorite}><Heart size={13} /></button>
-      <div className="gallery-thumb__meta"><span className="gallery-thumb__workflow">{item.filename}</span><span className="gallery-thumb__date">{formatDate(item.createdAt)}</span></div>
+      <label className="gallery-thumb__select"><input type="checkbox" checked={checked} aria-label={`Select ${label}`} onChange={onCheck} /><span className="gallery-thumb__checkbox" /></label>
+      <button className={item.favorite ? "gallery-thumb__fav gallery-thumb__fav--active" : "gallery-thumb__fav"} type="button" aria-pressed={item.favorite} aria-label={item.favorite ? "Remove from favorites" : "Add to favorites"} onClick={onFavorite}><Heart size={13} /></button>
+      <div className="gallery-thumb__meta">
+        <strong className="gallery-thumb__label">{label}</strong>
+      </div>
     </article>
   );
 }
@@ -363,7 +384,7 @@ function MediaDetail({ item, index, total, onClose, onFavorite, onDelete, delete
         <aside className="img-modal__body">
           <div className="img-modal__header">
             <div className="img-modal__header-meta"><span className="img-modal__workflow-badge">{kindLabel(item.kind)}</span><strong className="gallery-detail-title">{item.filename}</strong><p className="img-modal__date"><Calendar size={12} />{formatDateTime(item.createdAt)}</p></div>
-            <button className={item.favorite ? "gallery-thumb__fav gallery-thumb__fav--modal gallery-thumb__fav--active" : "gallery-thumb__fav gallery-thumb__fav--modal"} type="button" aria-label={item.favorite ? "Remove from favorites" : "Add to favorites"} onClick={onFavorite}><Heart size={15} /></button>
+            <button className={item.favorite ? "gallery-thumb__fav gallery-thumb__fav--modal gallery-thumb__fav--active" : "gallery-thumb__fav gallery-thumb__fav--modal"} type="button" aria-pressed={item.favorite} aria-label={item.favorite ? "Remove from favorites" : "Add to favorites"} onClick={onFavorite}><Heart size={15} /></button>
           </div>
           <div className="img-modal__scroll">
             <div className="img-modal__section"><span className="img-modal__section-label">Generated with</span><p className="img-modal__prompt">{item.widgetTitle || item.workflowName}</p></div>
