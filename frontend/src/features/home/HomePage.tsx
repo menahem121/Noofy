@@ -337,6 +337,13 @@ interface PendingSetupBanner {
   message: string;
 }
 
+interface PendingWorkflowRemoval {
+  workflowId: string;
+  workflowName: string;
+  busy: boolean;
+  error: string | null;
+}
+
 interface HomePageProps {
   onOpenWorkflow: (workflowId: string, workflowName?: string) => void;
   nativeImportRequest?: NativeWorkflowImportRequest | null;
@@ -373,6 +380,7 @@ export function HomePage({
   });
   const [menuOpenFor, setMenuOpenFor] = useState<string | null>(null);
   const [cardActionError, setCardActionError] = useState<string | null>(null);
+  const [pendingRemoval, setPendingRemoval] = useState<PendingWorkflowRemoval | null>(null);
   const [draftDismissTick, setDraftDismissTick] = useState(0);
   const [pendingImportedSetups, setPendingImportedSetups] = useState<PendingImportedSetup[]>(
     loadPendingImportedSetups,
@@ -588,14 +596,36 @@ export function HomePage({
     onNavigate("models");
   }
 
-  async function handleRemoveWorkflowCard(workflow: WorkflowCard) {
+  function requestRemoveWorkflowCard(workflow: WorkflowCard) {
     const workflowId = activeWorkflowId(workflow);
     const workflowTitle = activeWorkflowTitle(workflow);
     if (!workflow.canRemove) return;
-    const confirmed = window.confirm(`Remove "${workflowTitle}" from Noofy?`);
-    if (!confirmed) return;
     setMenuOpenFor(null);
     setCardActionError(null);
+    setPendingRemoval({
+      workflowId,
+      workflowName: workflowTitle,
+      busy: false,
+      error: null,
+    });
+  }
+
+  function requestRemoveRecentWorkflow(workflow: WorkflowSummary) {
+    if (!workflow.can_remove) return;
+    setMenuOpenFor(null);
+    setCardActionError(null);
+    setPendingRemoval({
+      workflowId: workflow.id,
+      workflowName: workflowDisplayName(workflow),
+      busy: false,
+      error: null,
+    });
+  }
+
+  async function confirmWorkflowRemoval() {
+    if (!pendingRemoval || pendingRemoval.busy) return;
+    const { workflowId } = pendingRemoval;
+    setPendingRemoval((current) => current ? { ...current, busy: true, error: null } : current);
     try {
       await removeWorkflow(workflowId);
       cleanupRemovedWorkflowFrontendState(workflowId, workflowTabs);
@@ -603,8 +633,10 @@ export function HomePage({
         return current.filter((item) => item.workflowId !== workflowId);
       });
       await refreshWorkflows();
+      setPendingRemoval(null);
     } catch (error) {
-      setCardActionError(error instanceof Error ? error.message : String(error));
+      const message = error instanceof Error ? error.message : String(error);
+      setPendingRemoval((current) => current ? { ...current, busy: false, error: message } : current);
     }
   }
 
@@ -635,6 +667,24 @@ export function HomePage({
     }
     try {
       const packageData = await fetchWorkflowPackage(workflowId);
+      open(buildDashboardSchemaForEditing(packageData));
+    } catch (error) {
+      setCardActionError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function handleEditRecentWorkflow(
+    workflow: WorkflowSummary,
+    open?: (schema: DashboardSchema) => void,
+  ) {
+    setMenuOpenFor(null);
+    setCardActionError(null);
+    if (!open) {
+      onConfigureDashboard?.(workflow.id, workflowDisplayName(workflow));
+      return;
+    }
+    try {
+      const packageData = await fetchWorkflowPackage(workflow.id);
       open(buildDashboardSchemaForEditing(packageData));
     } catch (error) {
       setCardActionError(error instanceof Error ? error.message : String(error));
@@ -908,14 +958,16 @@ export function HomePage({
                         )}
                       </div>
                       <div className="recent-row__body">
-                        <h3>{recent.name}</h3>
+                        <div className="recent-row__title">
+                          <h3>{recent.name}</h3>
+                          <span className="mini-status">{workflowSearchStatusLabel(recent)}</span>
+                        </div>
                         <p>
                           {recentWorkflowKind(recent)}
                           <span aria-hidden="true" />
                           {formatOpenedAt(recent.last_opened)}
                         </p>
                       </div>
-                      <span className="mini-status">{workflowSearchStatusLabel(recent)}</span>
                       <button
                         className="secondary-button secondary-button--small"
                         type="button"
@@ -923,6 +975,42 @@ export function HomePage({
                       >
                         Open
                       </button>
+                      <WorkflowActionMenu
+                        workflow={recent}
+                        menuOpen={menuOpenFor === `recent:${recent.id}`}
+                        mode="settings"
+                        buttonClassName="icon-button icon-button--recent"
+                        menuClassName="workflow-action-menu--recent"
+                        onOpen={() => onOpenWorkflow(recent.id)}
+                        onDetails={() => {
+                          setMenuOpenFor(null);
+                          onNavigate("workflows", { workflowSearch: workflowDisplayName(recent) });
+                        }}
+                        onToggleMenu={() =>
+                          setMenuOpenFor((current) =>
+                            current === `recent:${recent.id}` ? null : `recent:${recent.id}`,
+                          )
+                        }
+                        onCloseMenu={() => setMenuOpenFor(null)}
+                        onEditDashboard={() => void handleEditRecentWorkflow(recent, onEditDashboard)}
+                        onEditWidgets={() => void handleEditRecentWorkflow(recent, onEditWidgets)}
+                        onExportNoofy={() =>
+                          setExportDialog({
+                            workflowName: workflowDisplayName(recent),
+                            exportUrl: exportWorkflowUrl(recent.id),
+                            extension: ".noofy",
+                            review: workflowSummaryExportReview(recent),
+                          })
+                        }
+                        onExportComfyJson={() =>
+                          setExportDialog({
+                            workflowName: workflowDisplayName(recent),
+                            exportUrl: exportWorkflowComfyJsonUrl(recent.id),
+                            extension: ".json",
+                          })
+                        }
+                        onRemove={() => requestRemoveRecentWorkflow(recent)}
+                      />
                     </article>
                   );
                 })
@@ -983,10 +1071,17 @@ export function HomePage({
                     extension: ".json",
                   })
                 }
-                onRemove={() => void handleRemoveWorkflowCard(workflow)}
+                onRemove={() => requestRemoveWorkflowCard(workflow)}
               />
             ))}
           </section>
+          {pendingRemoval ? (
+            <WorkflowRemovalDialog
+              removal={pendingRemoval}
+              onCancel={() => setPendingRemoval(null)}
+              onConfirm={() => void confirmWorkflowRemoval()}
+            />
+          ) : null}
           {exportDialog ? (
             <WorkflowExportDialog
               workflowName={exportDialog.workflowName}
@@ -1044,6 +1139,91 @@ function workflowCardExportReview(workflow: WorkflowCard): WorkflowExportReviewM
     source: workflow.source === "backend" ? workflow.category : "Starter workflow",
     requiredModels: [],
   };
+}
+
+function workflowSummaryExportReview(workflow: WorkflowSummary): WorkflowExportReviewModel {
+  return {
+    name: workflowDisplayName(workflow),
+    description: workflow.description,
+    category: workflow.category ?? "",
+    tags: workflow.tags ?? [],
+    icon: workflow.icon ?? "",
+    source: workflow.source_label ?? workflow.trust?.label ?? "Noofy workflow",
+    requiredModels: workflow.main_model?.name
+      ? [{
+          name: workflow.main_model.name,
+          type: workflow.main_model.type,
+          size_bytes: workflow.main_model.size_bytes,
+          status_label: workflow.missing_model_count && workflow.missing_model_count > 0 ? "Missing" : "Available",
+        }]
+      : [],
+  };
+}
+
+function WorkflowRemovalDialog({
+  removal,
+  onCancel,
+  onConfirm,
+}: {
+  removal: PendingWorkflowRemoval;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  useEffect(() => {
+    function handleKeyDown(event: globalThis.KeyboardEvent) {
+      if (event.key === "Escape" && !removal.busy) {
+        onCancel();
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [onCancel, removal.busy]);
+
+  return (
+    <div
+      className="modal-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="workflow-remove-title"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !removal.busy) onCancel();
+      }}
+    >
+      <section className="workflow-close-modal" aria-busy={removal.busy}>
+        <header className="workflow-close-modal__header">
+          <h2 id="workflow-remove-title">Remove workflow?</h2>
+          <p>
+            Remove <strong>{removal.workflowName}</strong> from Noofy? This removes its local workflow files and saved
+            setup.
+          </p>
+        </header>
+        {removal.error ? (
+          <div className="notice notice--error" role="status">
+            <AlertCircle size={18} aria-hidden="true" />
+            <div>
+              <strong>Workflow could not be removed</strong>
+              <span>{removal.error}</span>
+            </div>
+          </div>
+        ) : null}
+        <footer className="workflow-close-modal__footer">
+          <button
+            className="secondary-button"
+            type="button"
+            autoFocus
+            disabled={removal.busy}
+            onClick={onCancel}
+          >
+            Cancel
+          </button>
+          <button className="danger-button" type="button" disabled={removal.busy} onClick={onConfirm}>
+            {removal.busy ? "Removing..." : "Remove workflow"}
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
 }
 
 function nativeVariantSelectionKey(workflow: WorkflowCard) {

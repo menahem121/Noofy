@@ -3185,12 +3185,24 @@ button.dashboard-image-input__surface {
   flex: 1;
 }
 
+.recent-row__title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
 .recent-row h3 {
+  min-width: 0;
   overflow: hidden;
   font-size: 15px;
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.recent-row__title .mini-status {
+  flex: 0 0 auto;
 }
 
 .recent-row p {
@@ -3354,6 +3366,12 @@ button.dashboard-image-input__surface {
   min-height: 32px;
   padding: 0 12px;
   font-size: 12px;
+}
+
+.icon-button--recent {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
 }
 
 .ghost-button {
@@ -3532,7 +3550,8 @@ button.dashboard-image-input__surface {
   }
 
   .mini-status,
-  .recent-row .secondary-button {
+  .recent-row .secondary-button,
+  .recent-row .workflow-action-menu {
     align-self: flex-start;
   }
 

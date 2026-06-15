@@ -152,12 +152,16 @@ const searchableWorkflows = [
 const onOpenWorkflow = vi.fn();
 const onNavigate = vi.fn();
 const onConfigureDashboard = vi.fn();
+const onEditDashboard = vi.fn();
+const onEditWidgets = vi.fn();
 
 function renderHomePage(options: {
   runtimeState?: Partial<RuntimeHealthState>;
   skipInitialRefresh?: boolean;
   workflowState?: ComponentProps<typeof WorkflowLibraryProvider>["initialWorkflowState"];
   onConfigureDashboard?: typeof onConfigureDashboard;
+  onEditDashboard?: typeof onEditDashboard;
+  onEditWidgets?: typeof onEditWidgets;
   nativeImportRequest?: ComponentProps<typeof HomePage>["nativeImportRequest"];
 } = {}) {
   return render(
@@ -170,6 +174,8 @@ function renderHomePage(options: {
           onOpenWorkflow={onOpenWorkflow}
           nativeImportRequest={options.nativeImportRequest}
           onConfigureDashboard={options.onConfigureDashboard}
+          onEditDashboard={options.onEditDashboard}
+          onEditWidgets={options.onEditWidgets}
           onNavigate={onNavigate}
         />
       </WorkflowLibraryProvider>
@@ -191,6 +197,8 @@ describe("HomePage", () => {
     onOpenWorkflow.mockReset();
     onNavigate.mockReset();
     onConfigureDashboard.mockReset();
+    onEditDashboard.mockReset();
+    onEditWidgets.mockReset();
     window.localStorage.clear();
   });
 
@@ -676,6 +684,7 @@ describe("HomePage", () => {
       "Second Opened",
       "Third Opened",
     ]);
+    expect(rows.every((row) => row.querySelector(".recent-row__title .mini-status"))).toBe(true);
     expect(within(recentSection).queryByRole("heading", { name: "Oldest Opened" })).not.toBeInTheDocument();
 
     fireEvent.click(within(rows[1] as HTMLElement).getByRole("button", { name: "Open" }));
@@ -683,6 +692,135 @@ describe("HomePage", () => {
 
     // Flush the fire-and-forget /api/resources fetch so its trailing setState lands inside act().
     await act(async () => {});
+  });
+
+  it("shows workflow settings beside Open in the requested order", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
+      if (url.endsWith("/api/workflows")) return new Promise<Response>(() => {});
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderHomePage({
+      runtimeState: readyRuntimeState,
+      skipInitialRefresh: true,
+      workflowState: {
+        workflows: [
+          {
+            id: "recent_import",
+            name: "Recent Import",
+            version: "1.0.0",
+            description: "Recently imported workflow.",
+            trust_level: "quarantined_community",
+            source_label: "Imported",
+            category: "Inpainting",
+            status: "imported",
+            status_label: "Imported",
+            last_opened: "2026-06-15T08:00:00+00:00",
+            can_remove: true,
+            can_export_noofy: true,
+            can_export_comfyui_json: true,
+          },
+        ],
+        hasLoaded: true,
+        lastLoadedAt: Date.now(),
+      },
+    });
+
+    const recentSection = screen.getByRole("region", { name: "Recently Opened" });
+    expect(within(recentSection).getByRole("button", { name: "Open" })).toBeInTheDocument();
+    fireEvent.click(within(recentSection).getByRole("button", { name: "Actions for Recent Import" }));
+
+    expect(screen.getAllByRole("menuitem").map((item) => item.textContent?.trim())).toEqual([
+      "Export the Noofy workflow",
+      "Export ComfyUI JSON",
+      "View details",
+      "Edit dashboard",
+      "Edit Widgets",
+      "Remove workflow",
+    ]);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Export the Noofy workflow" }));
+    expect(screen.getByRole("dialog", { name: "Export workflow" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Filename")).toHaveValue("Recent Import.noofy");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    fireEvent.click(within(recentSection).getByRole("button", { name: "Actions for Recent Import" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "View details" }));
+    expect(onNavigate).toHaveBeenCalledWith("workflows", { workflowSearch: "Recent Import" });
+
+    await act(async () => {});
+  });
+
+  it("confirms recent workflow removal with a Noofy dialog", async () => {
+    const recentWorkflow = {
+      id: "recent_import",
+      name: "Recent Import",
+      version: "1.0.0",
+      description: "Recently imported workflow.",
+      trust_level: "quarantined_community",
+      source_label: "Imported",
+      category: "Inpainting",
+      status: "imported",
+      status_label: "Imported",
+      last_opened: "2026-06-15T08:00:00+00:00",
+      can_remove: true,
+      can_export_noofy: true,
+      can_export_comfyui_json: true,
+    };
+    let removed = false;
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
+      if (url.endsWith("/api/workflows/recent_import") && init?.method === "DELETE") {
+        removed = true;
+        return Promise.resolve(jsonResponse({ workflow_id: "recent_import", removed: true }));
+      }
+      if (url.endsWith("/api/workflows")) {
+        return Promise.resolve(jsonResponse(removed ? [] : [recentWorkflow]));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderHomePage({
+      runtimeState: readyRuntimeState,
+      skipInitialRefresh: true,
+      workflowState: {
+        workflows: [recentWorkflow],
+        hasLoaded: true,
+        lastLoadedAt: Date.now(),
+      },
+    });
+
+    const actionsButton = screen.getByRole("button", { name: "Actions for Recent Import" });
+    fireEvent.click(actionsButton);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Remove workflow" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Remove workflow?" });
+    expect(within(dialog).getByText("Recent Import")).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      "/api/workflows/recent_import",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog", { name: "Remove workflow?" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Recent Import" })).toBeInTheDocument();
+
+    fireEvent.click(actionsButton);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Remove workflow" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove workflow" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/workflows/recent_import",
+        expect.objectContaining({ method: "DELETE" }),
+      );
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Remove workflow?" })).not.toBeInTheDocument();
+    });
   });
 
   it("pressing Enter on Home search navigates to Workflows with the query preserved", async () => {

@@ -25,6 +25,7 @@ export interface WorkflowActionMenuWorkflow {
 interface WorkflowActionMenuProps {
   workflow: WorkflowActionMenuWorkflow;
   menuOpen: boolean;
+  mode?: "standard" | "settings";
   buttonClassName?: string;
   menuClassName?: string;
   onOpen: () => void;
@@ -41,6 +42,7 @@ interface WorkflowActionMenuProps {
 export function WorkflowActionMenu({
   workflow,
   menuOpen,
+  mode = "standard",
   buttonClassName = "icon-button",
   menuClassName = "",
   onOpen,
@@ -55,6 +57,56 @@ export function WorkflowActionMenu({
 }: WorkflowActionMenuProps) {
   const menuClasses = ["workflow-action-menu", menuClassName].filter(Boolean).join(" ");
   const canExportComfyJson = workflow.can_export_comfyui_json !== false;
+  const exportNoofyAction = workflow.can_export_noofy ? (
+    <button
+      role="menuitem"
+      type="button"
+      onClick={() => {
+        onCloseMenu();
+        onExportNoofy();
+      }}
+    >
+      <Download size={14} aria-hidden="true" />
+      Export the Noofy workflow
+    </button>
+  ) : null;
+  const exportComfyJsonAction = canExportComfyJson ? (
+    <button
+      role="menuitem"
+      type="button"
+      onClick={() => {
+        onCloseMenu();
+        onExportComfyJson();
+      }}
+    >
+      <FileJson size={14} aria-hidden="true" />
+      Export ComfyUI JSON
+    </button>
+  ) : null;
+  const detailsAction = (
+    <button role="menuitem" type="button" onClick={onDetails}>
+      <PackageOpen size={14} aria-hidden="true" />
+      View details
+    </button>
+  );
+  const editDashboardAction = (
+    <button role="menuitem" type="button" onClick={onEditDashboard}>
+      <Edit3 size={14} aria-hidden="true" />
+      Edit dashboard
+    </button>
+  );
+  const editWidgetsAction = (
+    <button role="menuitem" type="button" onClick={onEditWidgets}>
+      <SlidersHorizontal size={14} aria-hidden="true" />
+      Edit Widgets
+    </button>
+  );
+  const removeAction = workflow.can_remove ? (
+    <button className="workflow-action-menu__danger" role="menuitem" type="button" onClick={onRemove}>
+      <Trash2 size={14} aria-hidden="true" />
+      Remove workflow
+    </button>
+  ) : null;
   const displayName = workflowDisplayName(workflow);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
@@ -149,54 +201,29 @@ export function WorkflowActionMenu({
       {menuOpen
         ? createPortal(
             <div ref={contentRef} className="workflow-action-menu__content" role="menu" style={menuStyle}>
-              <button role="menuitem" type="button" onClick={onOpen}>
-                <Play size={14} aria-hidden="true" />
-                Open
-              </button>
-              <button role="menuitem" type="button" onClick={onDetails}>
-                <PackageOpen size={14} aria-hidden="true" />
-                View details
-              </button>
-              <button role="menuitem" type="button" onClick={onEditDashboard}>
-                <Edit3 size={14} aria-hidden="true" />
-                Edit dashboard
-              </button>
-              <button role="menuitem" type="button" onClick={onEditWidgets}>
-                <SlidersHorizontal size={14} aria-hidden="true" />
-                Edit Widgets
-              </button>
-              {workflow.can_export_noofy ? (
-                <button
-                  role="menuitem"
-                  type="button"
-                  onClick={() => {
-                    onCloseMenu();
-                    onExportNoofy();
-                  }}
-                >
-                  <Download size={14} aria-hidden="true" />
-                  Export the Noofy workflow
-                </button>
-              ) : null}
-              {canExportComfyJson ? (
-                <button
-                  role="menuitem"
-                  type="button"
-                  onClick={() => {
-                    onCloseMenu();
-                    onExportComfyJson();
-                  }}
-                >
-                  <FileJson size={14} aria-hidden="true" />
-                  Export ComfyUI JSON
-                </button>
-              ) : null}
-              {workflow.can_remove ? (
-                <button className="workflow-action-menu__danger" role="menuitem" type="button" onClick={onRemove}>
-                  <Trash2 size={14} aria-hidden="true" />
-                  Remove workflow
-                </button>
-              ) : null}
+              {mode === "settings" ? (
+                <>
+                  {exportNoofyAction}
+                  {exportComfyJsonAction}
+                  {detailsAction}
+                  {editDashboardAction}
+                  {editWidgetsAction}
+                  {removeAction}
+                </>
+              ) : (
+                <>
+                  <button role="menuitem" type="button" onClick={onOpen}>
+                    <Play size={14} aria-hidden="true" />
+                    Open
+                  </button>
+                  {detailsAction}
+                  {editDashboardAction}
+                  {editWidgetsAction}
+                  {exportNoofyAction}
+                  {exportComfyJsonAction}
+                  {removeAction}
+                </>
+              )}
             </div>,
             document.body,
           )
