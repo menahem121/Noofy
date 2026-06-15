@@ -47,6 +47,7 @@ from app.workflows.model_architecture import (
 )
 from app.workflows.store_paths import assert_path_within, mutable_package_dir, safe_store_segment
 from app.workflows.validator import WorkflowPackageValidator
+from app.workflows.widget_metadata import comfyui_widget_input_metadata
 
 
 class DashboardAuthoringError(ValueError):
@@ -89,12 +90,19 @@ class DashboardAuthoringService:
         package = self._get_package(workflow_id)
         if object_info is None and self.object_info_provider is not None:
             object_info = self.object_info_provider(workflow_id)
-        nodes = _classify_graph_inputs(package.comfyui_graph, object_info=object_info)
+        nodes = _classify_graph_inputs(
+            package.comfyui_graph,
+            object_info=object_info,
+            widget_metadata=package.comfyui_widget_metadata,
+        )
         nodes, filter_events = filter_bindable_input_nodes_for_architecture(package, nodes)
         self._log_architecture_filter_events(workflow_id, filter_events)
         return {
             "workflow_id": workflow_id,
-            "enrichment": "object_info" if object_info is not None else "heuristic",
+            "enrichment": _bindable_input_enrichment(
+                object_info=object_info,
+                widget_metadata=package.comfyui_widget_metadata,
+            ),
             "nodes": nodes,
         }
 
@@ -600,10 +608,27 @@ _LORA_NODE_TYPES = frozenset({"LoraLoader", "LoraLoaderModelOnly"})
 _NOTE_NODE_TYPES = frozenset({"Note"})
 
 
+def _bindable_input_enrichment(
+    *,
+    object_info: Mapping[str, Any] | None,
+    widget_metadata: Mapping[str, Any] | None,
+) -> str:
+    has_object_info = object_info is not None
+    has_widget_metadata = bool(widget_metadata)
+    if has_object_info and has_widget_metadata:
+        return "object_info+exported_widgets"
+    if has_object_info:
+        return "object_info"
+    if has_widget_metadata:
+        return "exported_widgets"
+    return "heuristic"
+
+
 def _classify_graph_inputs(
     graph: dict[str, Any],
     *,
     object_info: Mapping[str, Any] | None = None,
+    widget_metadata: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     nodes: list[dict[str, Any]] = []
     seen_note_node_ids: set[str] = set()
@@ -695,7 +720,14 @@ def _classify_graph_inputs(
                 continue
             if _is_ignored_media_node_input(node_type, input_name):
                 continue
-            option_spec = _options_for_node_input(object_info, node_type, input_name)
+            option_spec = _merge_input_option_specs(
+                _options_for_node_input(object_info, node_type, input_name),
+                _options_for_exported_widget_input(
+                    widget_metadata,
+                    node_id_str,
+                    input_name,
+                ),
+            )
             kind = _value_kind(input_name, value, node_type)
             if option_spec.options and kind not in {"image_input", "audio_input", "video_input", "three_d_input", "file_input", "lora"}:
                 kind = "select"
@@ -1386,6 +1418,42 @@ def _options_from_input_spec(input_spec: Any) -> _ComfyInputOptionSpec:
         options=_dedupe_preserving_order(options),
         tooltip=_metadata_string(metadata, "tooltip"),
         display_name=_metadata_string(metadata, "display_name"),
+    )
+
+
+def _options_for_exported_widget_input(
+    widget_metadata: Mapping[str, Any] | None,
+    node_id: str,
+    input_name: str,
+) -> _ComfyInputOptionSpec:
+    metadata = comfyui_widget_input_metadata(widget_metadata, node_id, input_name)
+    if metadata is None:
+        return _ComfyInputOptionSpec()
+    raw_options = metadata.get("options")
+    options = (
+        [
+            str(option)
+            for option in raw_options
+            if isinstance(option, (str, int, float, bool))
+        ]
+        if isinstance(raw_options, list)
+        else []
+    )
+    return _ComfyInputOptionSpec(
+        options=_dedupe_preserving_order(options),
+        tooltip=_metadata_string(metadata, "tooltip"),
+        display_name=_metadata_string(metadata, "display_name"),
+    )
+
+
+def _merge_input_option_specs(
+    primary: _ComfyInputOptionSpec,
+    fallback: _ComfyInputOptionSpec,
+) -> _ComfyInputOptionSpec:
+    return _ComfyInputOptionSpec(
+        options=primary.options or fallback.options,
+        tooltip=primary.tooltip or fallback.tooltip,
+        display_name=primary.display_name or fallback.display_name,
     )
 
 

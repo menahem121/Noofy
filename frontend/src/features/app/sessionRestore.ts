@@ -46,7 +46,7 @@ export function recordBackendSessionRestart(backendSessionId: string) {
       JSON.stringify({ backendSessionId, detectedAt: Date.now() } satisfies SessionRestartMarker),
     );
   } catch {
-    // Hard reload still safely clears runtime state when storage is unavailable.
+    // Runtime restart handling remains best effort when storage is unavailable.
   }
 }
 

@@ -264,6 +264,7 @@ class WorkflowPackage(BaseModel):
     export_report: dict[str, Any] = Field(default_factory=dict)
     exported_package: dict[str, Any] = Field(default_factory=dict)
     exported_capsule: dict[str, Any] = Field(default_factory=dict)
+    comfyui_widget_metadata: dict[str, Any] = Field(default_factory=dict)
     observed_hardware: dict[str, Any] = Field(default_factory=dict)
     smoke_tests: WorkflowSmokeTests = Field(default_factory=WorkflowSmokeTests)
     import_metadata: WorkflowImportMetadata | None = None

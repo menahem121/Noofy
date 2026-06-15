@@ -14,12 +14,14 @@ import hashlib
 import json
 import struct
 import zipfile
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from app.diagnostics import LogStore
+from app.gallery import CapturedGalleryOutput, GalleryStore
 from app.workflows.assets import DashboardAssetService
 from app.workflows.exporter import WorkflowExportError, WorkflowExporter, stored_comfyui_graph_file
 from app.workflows.importer import ImportedWorkflowPackageStore
@@ -90,6 +92,43 @@ def _png_bytes() -> bytes:
         + chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0))
         + chunk(b"IDAT", zlib.compress(b"\x00\xff\xff\xff"))
         + chunk(b"IEND", b"")
+    )
+
+
+def _gallery_item(
+    store: GalleryStore,
+    *,
+    kind: str = "image",
+    filename: str = "gallery-current.png",
+    mime_type: str = "image/png",
+    data: bytes | None = None,
+):
+    payload = data if data is not None else _png_bytes()
+    staged = store.create_staging_path()
+    staged.write_bytes(payload)
+    return store.save_staged_output(
+        CapturedGalleryOutput(
+            idempotency_key=f"export-test|{kind}|{filename}",
+            created_at=datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC),
+            workflow_id="wf",
+            workflow_title="Workflow",
+            job_id="job",
+            control_id="result",
+            output_id=kind,
+            node_id="9",
+            widget_title="Result",
+            kind=kind,
+            staged_path=staged,
+            source_filename=filename,
+            source_mime_type=mime_type,
+            extension=Path(filename).suffix,
+            size_bytes=len(payload),
+            width=None,
+            height=None,
+            duration_seconds=None,
+            fps=None,
+            generation_settings={},
+        )
     )
 
 
@@ -383,6 +422,77 @@ def test_export_archive_packages_uploaded_user_state_media_default(tmp_path: Pat
     assert packaged_bytes == (assets_dir / uploaded["asset_id"]).read_bytes()
     assert graph_data["10"]["inputs"]["image"] == "original.png"
     assert uploaded["asset_id"].encode("utf-8") not in archive_text
+
+
+def test_export_archive_packages_current_gallery_media_default(tmp_path: Path) -> None:
+    gallery_store = GalleryStore(tmp_path / "gallery")
+    gallery_item = _gallery_item(gallery_store, filename="selected-gallery.png")
+    dashboard = {
+        "version": "0.1.0",
+        "status": "configured",
+        "inputs": [
+            {
+                "id": "input-image",
+                "label": "Input image",
+                "control": "load_image",
+                "binding": {"node_id": "10", "input_name": "image"},
+                "default": None,
+                "validation": {},
+            }
+        ],
+        "outputs": [],
+        "sections": [],
+    }
+    archive_bytes = _archive_with_json_updates(
+        _make_archive(with_signature=True, dashboard=dashboard),
+        {
+            "comfyui_graph.json": lambda graph: graph.update(
+                {"10": {"class_type": "LoadImage", "inputs": {"image": "original.png"}}}
+            )
+        },
+    )
+    store = ImportedWorkflowPackageStore(tmp_path / "packages", log_store=LogStore())
+    pkg = store.import_archive(archive_bytes, original_filename="gallery_media_default.noofy")
+    loader = WorkflowPackageLoader(
+        Path("missing-bundled"),
+        imported_packages_dir=tmp_path / "packages",
+    )
+    exporter = WorkflowExporter(
+        workflow_store_dir=tmp_path / "packages",
+        workflow_loader=loader,
+        gallery_store=gallery_store,
+    )
+
+    exported, _ = exporter.export_archive(
+        pkg.metadata.id,
+        input_values={
+            "input-image": {
+                "source": "gallery",
+                "gallery_item_id": gallery_item.id,
+                "kind": "image",
+                "filename": gallery_item.filename,
+                "extension": gallery_item.extension,
+                "mime_type": gallery_item.mime_type,
+                "size_bytes": gallery_item.size_bytes,
+            }
+        },
+    )
+
+    with zipfile.ZipFile(io.BytesIO(exported)) as zf:
+        names = set(zf.namelist())
+        dashboard_data = json.loads(zf.read("dashboard.json"))
+        graph_data = json.loads(zf.read("comfyui_graph.json"))
+        default = dashboard_data["inputs"][0]["default"]
+        packaged_bytes = zf.read(f"assets/{default['asset_id']}")
+        exported_json = b"".join(zf.read(name) for name in names if name.endswith(".json"))
+
+    assert default["source"] == "package_asset"
+    assert default["kind"] == "image"
+    assert default["filename"] == "selected-gallery.png"
+    assert dashboard_data["inputs"][0]["default_pinned"] is True
+    assert packaged_bytes == gallery_store.content_path(gallery_item.id).read_bytes()
+    assert graph_data["10"]["inputs"]["image"] == "original.png"
+    assert gallery_item.id.encode("utf-8") not in exported_json
 
 
 def test_export_archive_packages_accessible_local_media_default(tmp_path: Path) -> None:
@@ -929,6 +1039,42 @@ def test_exported_package_json_excludes_internal_import_state(tmp_path: Path) ->
         assert key not in exported_package
     assert "/Users/me/private" not in exported_text
     assert "source_cache_ref" not in exported_package["custom_nodes"][0]
+
+
+def test_exported_package_json_preserves_comfyui_widget_metadata(tmp_path: Path) -> None:
+    archive = _archive_with_package_update(
+        _make_archive(with_signature=True, dashboard=_CONFIGURED_DASHBOARD),
+        lambda package: package.update(
+            {
+                "comfyui_widget_metadata": {
+                    "schema_version": "0.1.0",
+                    "nodes": {
+                        "1": {
+                            "inputs": {
+                                "text": {
+                                    "options": ["short", "detailed"],
+                                    "display_name": "Prompt preset",
+                                }
+                            }
+                        }
+                    },
+                }
+            }
+        ),
+    )
+    exporter, workflow_id, _ = _setup_with_configured_dashboard(
+        tmp_path,
+        archive_bytes=archive,
+    )
+
+    archive_bytes, _ = exporter.export_archive(workflow_id)
+
+    with zipfile.ZipFile(io.BytesIO(archive_bytes)) as zf:
+        package_data = json.loads(zf.read("package.json"))
+    assert package_data["comfyui_widget_metadata"]["nodes"]["1"]["inputs"]["text"] == {
+        "options": ["short", "detailed"],
+        "display_name": "Prompt preset",
+    }
 
 
 def test_exported_archive_includes_selected_custom_icon_asset(tmp_path: Path) -> None:

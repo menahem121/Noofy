@@ -279,6 +279,63 @@ def test_selected_input_asset_becomes_pinned_dashboard_default(tmp_path: Path) -
     assert str(image) not in json.dumps(documents)
 
 
+def test_build_package_documents_preserves_sanitized_comfyui_widget_metadata() -> None:
+    documents = exporter.build_package_documents(
+        graph={
+            "12": {"class_type": "CustomStyleSelector", "inputs": {"style": "cinematic"}},
+            "13": {"class_type": "LoadImage", "inputs": {"image": "creator-private.png"}},
+        },
+        workflow_name="Custom dropdown",
+        runtime=exporter.RuntimeMetadata("test", "test", "linux", "cpu", None),
+        custom_nodes=[],
+        models=[],
+        outputs=[],
+        hardware=exporter.MemoryObservation(None, None),
+        started_at="2026-06-15T00:00:00Z",
+        finished_at="2026-06-15T00:00:01Z",
+        duration_seconds=1,
+        graph_adjustments={},
+        warnings=[],
+        comfyui_widget_metadata={
+            "schema_version": "future",
+            "nodes": {
+                12: {
+                    "inputs": {
+                        "style": {
+                            "options": ["cinematic", "illustration", "cinematic", {"bad": True}],
+                            "display_name": " Rendering style ",
+                            "tooltip": " Choose a style. ",
+                        },
+                        "not_a_dropdown": {"options": []},
+                    }
+                },
+                13: {
+                    "inputs": {
+                        "image": {
+                            "options": ["creator-private.png", "another-private.png"],
+                        }
+                    }
+                },
+            },
+        },
+    )
+
+    assert documents["package_json"]["comfyui_widget_metadata"] == {
+        "schema_version": "0.1.0",
+        "nodes": {
+            "12": {
+                "inputs": {
+                    "style": {
+                        "options": ["cinematic", "illustration"],
+                        "display_name": "Rendering style",
+                        "tooltip": "Choose a style.",
+                    }
+                }
+            }
+        },
+    }
+
+
 def test_oversized_input_asset_candidate_is_not_selectable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     image = tmp_path / "large.png"
     image.write_bytes(b"123456")

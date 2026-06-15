@@ -21,7 +21,7 @@ from urllib.parse import parse_qsl, urlsplit, urlunsplit
 
 
 EXPORTER_NAME = "Noofy ComfyUI Export Extension"
-EXPORTER_VERSION = "0.1.1"
+EXPORTER_VERSION = "0.1.2"
 SCHEMA_VERSION = "0.1.0"
 TRUST_LEVEL = "public_unverified"
 TEST_INPUT_MODE = "workflow_current_load_image_inputs"
@@ -2009,6 +2009,68 @@ def build_package_id(workflow_name: str | None, graph_sha256: str) -> str:
     return f"workflow-{graph_sha256[:12]}"
 
 
+def normalize_comfyui_widget_metadata(
+    raw: Any,
+    *,
+    graph: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {}
+    raw_nodes = raw.get("nodes")
+    if not isinstance(raw_nodes, dict):
+        return {}
+
+    nodes: dict[str, Any] = {}
+    for raw_node_id, raw_node in raw_nodes.items():
+        if not isinstance(raw_node, dict):
+            continue
+        raw_inputs = raw_node.get("inputs")
+        if not isinstance(raw_inputs, dict):
+            continue
+        inputs: dict[str, Any] = {}
+        for raw_input_name, raw_input in raw_inputs.items():
+            if (
+                not isinstance(raw_input_name, str)
+                or not raw_input_name
+                or not isinstance(raw_input, dict)
+            ):
+                continue
+            graph_node = graph.get(str(raw_node_id)) if isinstance(graph, dict) else None
+            graph_inputs = graph_node.get("inputs") if isinstance(graph_node, dict) else None
+            node_type = graph_node.get("class_type") if isinstance(graph_node, dict) else None
+            current_value = (
+                graph_inputs.get(raw_input_name)
+                if isinstance(graph_inputs, dict)
+                else None
+            )
+            if (
+                isinstance(node_type, str)
+                and expected_input_kind(node_type, raw_input_name, current_value) is not None
+            ):
+                continue
+            raw_options = raw_input.get("options")
+            if not isinstance(raw_options, list):
+                continue
+            options = dedupe_strings(
+                str(option)
+                for option in raw_options
+                if isinstance(option, (str, int, float, bool))
+            )
+            if not options:
+                continue
+            record: dict[str, Any] = {"options": options}
+            for key in ("display_name", "tooltip"):
+                value = raw_input.get(key)
+                if isinstance(value, str) and value.strip():
+                    record[key] = value.strip()
+            inputs[raw_input_name] = record
+        if inputs:
+            nodes[str(raw_node_id)] = {"inputs": inputs}
+    if not nodes:
+        return {}
+    return {"schema_version": SCHEMA_VERSION, "nodes": nodes}
+
+
 def build_package_documents(
     *,
     graph: dict[str, Any],
@@ -2026,6 +2088,7 @@ def build_package_documents(
     warnings: list[str],
     bundled_input_assets: dict[tuple[str, str], BundledInputAsset] | None = None,
     export_metadata: dict[str, Any] | None = None,
+    comfyui_widget_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     graph_hash = sha256_bytes(canonical_json_bytes(graph))
     metadata_name = (
@@ -2059,6 +2122,12 @@ def build_package_documents(
         },
         "unresolved_runtime_inputs": unresolved_runtime_inputs or [],
     }
+    normalized_widget_metadata = normalize_comfyui_widget_metadata(
+        comfyui_widget_metadata,
+        graph=graph,
+    )
+    if normalized_widget_metadata:
+        package_json["comfyui_widget_metadata"] = normalized_widget_metadata
     apply_metadata_mirrors(package_json, package_metadata)
     assert_metadata_mirrors_consistent(package_json)
 

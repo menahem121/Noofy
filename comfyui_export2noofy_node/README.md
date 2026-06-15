@@ -99,7 +99,7 @@ Example shape:
   "created_at": "2026-04-30T00:00:00Z",
   "exporter": {
     "name": "Noofy ComfyUI Export Extension",
-    "version": "0.1.1"
+    "version": "0.1.2"
   },
   "engine": {
     "type": "comfyui",
@@ -124,6 +124,8 @@ Noofy treats this graph as engine-specific execution data. Noofy uses package me
 `comfyui_workflow.json` preserves ComfyUI's editable workflow document, including node layout and `widgets_values`. `comfyui_workflow_bindings.json` records the widget index for named node inputs so Noofy can apply current dashboard values when exporting JSON back to ComfyUI. These files are an optional pair for compatibility with older packages and are never used as the execution graph.
 
 Creator-local media loader values are redacted from the editable workflow as well as `comfyui_graph.json`. If a redacted media widget cannot be mapped safely, the editable workflow files are omitted instead of bundling creator-local paths.
+
+Export2Noofy also snapshots dropdown choices from the live ComfyUI frontend into `package.json` under `comfyui_widget_metadata`. This captures custom frontend widgets and instance-specific dynamic choices that are not represented by ComfyUI's standard `/object_info` response. Creator-local media and file picker choices are excluded. Noofy uses this metadata only as a Dashboard Builder fallback when live runner metadata is unavailable or incomplete.
 
 ## dashboard.json
 

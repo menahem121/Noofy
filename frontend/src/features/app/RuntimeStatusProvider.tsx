@@ -77,7 +77,6 @@ export function RuntimeStatusProvider({
   const inFlightRef = useRef<Promise<RuntimeStatus | null> | null>(null);
   const stateRef = useRef(state);
   const backendSessionIdRef = useRef<string | null>(null);
-  const reloadRequestedRef = useRef(false);
   const refreshPage = useCallback(() => reloadPage(), [reloadPage]);
 
   useEffect(() => {
@@ -98,13 +97,10 @@ export function RuntimeStatusProvider({
       adoptBackendSessionId(backendSessionId);
       return;
     }
-    if (reloadRequestedRef.current) return;
     backendSessionIdRef.current = backendSessionId;
-    reloadRequestedRef.current = true;
     setPageRefreshRequired(true);
     recordBackendSessionRestart(backendSessionId);
-    refreshPage();
-  }, [refreshPage]);
+  }, []);
 
   const setRuntimeFromResponse = useCallback((runtime: RuntimeStatus | null) => {
     if (runtime) observeBackendSession(runtime);

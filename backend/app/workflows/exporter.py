@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+from app.gallery import GalleryStore
 from app.workflows.assets import workflow_icon_asset_id
 from app.workflows.bindings import apply_input_bindings
 from app.workflows.library import (
@@ -26,6 +27,7 @@ from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.media_values import (
     MEDIA_LOAD_CONTROLS,
     is_empty_media_value,
+    is_gallery_media_reference,
     is_package_asset_value,
     is_uploaded_asset_value,
     media_metadata_matches_input,
@@ -44,6 +46,7 @@ from app.workflows.package_assets import (
 )
 from app.workflows.store_paths import mutable_package_dir, path_is_within, safe_store_segment
 from app.workflows.user_state import UserStateService
+from app.workflows.widget_metadata import normalize_comfyui_widget_metadata
 
 MAX_EXPORTED_DEFAULT_ASSET_BYTES = 512 * 1024 * 1024
 MAX_COMFYUI_WORKFLOW_JSON_BYTES = 16 * 1024 * 1024
@@ -65,6 +68,7 @@ class WorkflowExporter:
         workflow_library_store: WorkflowLibraryStore | None = None,
         dashboard_assets_dir: Path | None = None,
         dashboard_overrides_dir: Path | None = None,
+        gallery_store: GalleryStore | None = None,
     ) -> None:
         self.workflow_store_dir = workflow_store_dir
         self.workflow_loader = workflow_loader
@@ -72,6 +76,7 @@ class WorkflowExporter:
         self.workflow_library_store = workflow_library_store
         self.dashboard_assets_dir = dashboard_assets_dir
         self.dashboard_overrides_dir = dashboard_overrides_dir
+        self.gallery_store = gallery_store
 
     def export_archive(
         self,
@@ -339,6 +344,34 @@ class WorkflowExporter:
                         if isinstance(metadata.get("original_filename"), str)
                         else source_path.name
                     ),
+                )
+                continue
+            if is_gallery_media_reference(default):
+                if self.gallery_store is None:
+                    raise WorkflowExportError("Noofy could not package a Gallery item because the Gallery is unavailable.")
+                gallery_item_id = str(default["gallery_item_id"])
+                gallery_item = self.gallery_store.get_item(gallery_item_id)
+                source_path = self.gallery_store.content_path(gallery_item_id)
+                if gallery_item is None or source_path is None:
+                    raise WorkflowExportError(f"Workflow input '{workflow_input.id}' references a Gallery item that could not be found.")
+                if gallery_item.file_state != "available" or not source_path.is_file():
+                    raise WorkflowExportError(f"Workflow input '{workflow_input.id}' references a Gallery item file that is unavailable.")
+                if not media_metadata_matches_input(
+                    workflow_input,
+                    kind=gallery_item.kind,
+                    extension=gallery_item.extension,
+                    mime_type=gallery_item.mime_type,
+                ):
+                    raise WorkflowExportError(f"Workflow input '{workflow_input.id}' references a Gallery item that is not compatible with this input.")
+                self._write_export_media_default(
+                    zf,
+                    item,
+                    workflow_input,
+                    source_path,
+                    written,
+                    kind=target_media_kind_for_input(workflow_input) if workflow_input.control == "load_file" else gallery_item.kind,
+                    content_type=gallery_item.mime_type,
+                    original_filename=gallery_item.filename,
                 )
                 continue
             local_source_path = _local_media_default_path(default)
@@ -609,6 +642,12 @@ def _build_export_package_json(
     smoke_tests = package.smoke_tests.model_dump(mode="json", exclude_none=True)
     if smoke_tests:
         base["smoke_tests"] = smoke_tests
+    comfyui_widget_metadata = normalize_comfyui_widget_metadata(
+        package.comfyui_widget_metadata,
+        graph=package.comfyui_graph,
+    )
+    if comfyui_widget_metadata:
+        base["comfyui_widget_metadata"] = comfyui_widget_metadata
 
     if metadata is not None:
         _apply_library_metadata(base, metadata)

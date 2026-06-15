@@ -1,5 +1,6 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
+import { collectComfyUIWidgetMetadata } from "./noofy_widget_metadata.mjs";
 
 const EXTENSION_NAME = "Noofy.Export";
 const BUTTON_ID = "noofy-export-button";
@@ -113,6 +114,10 @@ async function collectPromptPayload() {
     prompt: graphExport.output,
     workflow: graphExport.workflow ?? null,
     workflow_widget_bindings: collectWorkflowWidgetBindings(),
+    comfyui_widget_metadata: await collectComfyUIWidgetMetadata(
+      app?.graph?._nodes,
+      graphExport.output,
+    ),
     workflow_name: getWorkflowName(),
     client_id: api.clientId ?? null,
     started_at: new Date().toISOString(),

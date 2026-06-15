@@ -269,7 +269,7 @@ describe("RuntimeStatusProvider", () => {
     expect(result.current.statusView.label).toBe("Working");
   });
 
-  it("reloads exactly once when a later runtime response reports a new backend session", async () => {
+  it("marks page refresh required without auto-reloading when a later runtime response reports a new backend session", async () => {
     const reloadPage = vi.fn();
     fetchMock
       .mockResolvedValueOnce(jsonResponse({ ...readyRuntime, backend_session_id: "bs-first" }))
@@ -289,16 +289,17 @@ describe("RuntimeStatusProvider", () => {
       await result.current.refreshRuntime({ force: true });
     });
 
-    expect(reloadPage).toHaveBeenCalledTimes(1);
-    expect(window.localStorage.getItem("noofy.backendSession.v1")).toBe("bs-second");
-    expect(window.sessionStorage.getItem("noofy.tabBackendSession.v1")).toBe("bs-second");
+    expect(reloadPage).not.toHaveBeenCalled();
+    expect(window.localStorage.getItem("noofy.backendSession.v1")).toBe("bs-third");
+    expect(window.sessionStorage.getItem("noofy.tabBackendSession.v1")).toBe("bs-third");
     expect(JSON.parse(window.sessionStorage.getItem("noofy.sessionRestart.v1") ?? "{}")).toMatchObject({
-      backendSessionId: "bs-second",
+      backendSessionId: "bs-third",
     });
     expect(result.current.pageRefreshRequired).toBe(true);
+    expect(result.current.backendStatus).toBe("reachable");
   });
 
-  it("reloads when the first runtime response differs from the session previously observed by this tab", async () => {
+  it("recovers in-app when the first runtime response differs from the session previously observed by this tab", async () => {
     const reloadPage = vi.fn();
     window.localStorage.setItem("noofy.backendSession.v1", "bs-current-in-another-tab");
     window.sessionStorage.setItem("noofy.tabBackendSession.v1", "bs-previous-in-this-tab");
@@ -315,8 +316,9 @@ describe("RuntimeStatusProvider", () => {
       await result.current.refreshRuntime({ force: true });
     });
 
-    expect(reloadPage).toHaveBeenCalledTimes(1);
+    expect(reloadPage).not.toHaveBeenCalled();
     expect(result.current.pageRefreshRequired).toBe(true);
+    expect(result.current.backendStatus).toBe("reachable");
     expect(window.sessionStorage.getItem("noofy.tabBackendSession.v1")).toBe("bs-current-in-another-tab");
   });
 

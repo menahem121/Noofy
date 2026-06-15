@@ -124,6 +124,7 @@ from app.workflows.store_paths import (
     package_identity_dir,
     safe_store_segment,
 )
+from app.workflows.widget_metadata import normalize_comfyui_widget_metadata
 
 NOOFY_ARCHIVE_SCHEMA_VERSION = "0.1.0"
 MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
@@ -759,6 +760,10 @@ class NoofyArchiveImporter:
                 export_report=export_report,
                 exported_package=package_json,
                 exported_capsule=capsule_json,
+                comfyui_widget_metadata=normalize_comfyui_widget_metadata(
+                    package_json.get("comfyui_widget_metadata"),
+                    graph=graph,
+                ),
                 observed_hardware=observed_hardware,
                 smoke_tests=WorkflowSmokeTests.model_validate(
                     package_json.get("smoke_tests") or {}

@@ -148,6 +148,9 @@ def create_api_services(
     workflow_library_service = getattr(engine_service, "workflow_library_service", None)
     if workflow_library_service is not None:
         workflow_library_service.history_service = history
+    workflow_exporter = getattr(engine_service, "workflow_exporter", None)
+    if workflow_exporter is not None:
+        workflow_exporter.gallery_store = gallery
 
     tags = model_tag_store or ModelTagStore(settings.paths.settings_dir / "model-tags.json")
     ownership = model_ownership_store or ModelOwnershipStore(settings.paths.settings_dir / "model-ownership.json")

@@ -12,6 +12,7 @@ from app.engine.service import (
     _workflow_runner_launch_spec,
     _workflow_source_files_dir,
 )
+from app.gallery import GalleryStore
 from app.history import ActivityLogStore, HistoryService
 from app.runtime.capsule_installer import CapsuleInstaller
 from app.runtime.comfyui.comfyui_sidecar_service import ComfyUISidecarService
@@ -619,6 +620,7 @@ def create_default_engine_service() -> EngineService:
             workflow_library_store=workflow_library_store,
             dashboard_assets_dir=paths.dashboard_assets_dir,
             dashboard_overrides_dir=paths.workflow_dashboard_overrides_dir,
+            gallery_store=GalleryStore(paths.gallery_outputs_dir, log_store=log_store),
         ),
         model_roots_ref=model_roots,
         model_availability_service=model_availability_service,

@@ -53,6 +53,7 @@ if PromptServer is not None:
         flatten_warnings,
         infer_static_output_kinds,
         infer_suggested_category,
+        normalize_comfyui_widget_metadata,
         output_export_path,
         prepare_graph_for_export,
         prepare_workflow_for_package,
@@ -207,6 +208,9 @@ if PromptServer is not None:
                 workflow_widget_bindings, dict
             ):
                 workflow_widget_bindings = None
+            comfyui_widget_metadata = normalize_comfyui_widget_metadata(
+                body.get("comfyui_widget_metadata")
+            )
 
             workflow_name = body.get("workflow_name")
             if workflow_name is not None and not isinstance(workflow_name, str):
@@ -309,6 +313,7 @@ if PromptServer is not None:
                 warnings=warnings,
                 bundled_input_assets=bundled_input_assets,
                 export_metadata=export_metadata,
+                comfyui_widget_metadata=comfyui_widget_metadata,
             )
             filename = build_export_filename(documents["package_json"]["display_name"])
             target_path = output_export_path(folder_paths.get_output_directory(), filename)

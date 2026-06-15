@@ -39,6 +39,7 @@ def _make_minimal_archive(
     graph: dict[str, Any] | None = None,
     dashboard: dict[str, Any] | None = None,
     extra_files: dict[str, bytes] | None = None,
+    package_update: dict[str, Any] | None = None,
 ) -> bytes:
     """Build a minimal .noofy archive suitable for import."""
     if graph is None:
@@ -67,6 +68,7 @@ def _make_minimal_archive(
         "required_models": [],
         "custom_nodes": [],
     }
+    package_data.update(package_update or {})
 
     capsule_data: dict[str, Any] = {
         "schema_version": "0.5.0",
@@ -883,6 +885,41 @@ def test_get_bindable_inputs_works_without_runner(tmp_path: Path) -> None:
     assert text_inputs, "text input should be classified"
 
 
+def test_get_bindable_inputs_uses_exported_widget_metadata_without_runner(
+    tmp_path: Path,
+) -> None:
+    archive = _make_minimal_archive(
+        graph={
+            "12": {
+                "class_type": "CustomFrontendSelector",
+                "inputs": {"style": "cinematic"},
+            }
+        },
+        package_update={
+            "comfyui_widget_metadata": {
+                "schema_version": "0.1.0",
+                "nodes": {
+                    "12": {
+                        "inputs": {
+                            "style": {
+                                "options": ["cinematic", "illustration"],
+                                "display_name": "Rendering style",
+                            }
+                        }
+                    }
+                },
+            }
+        },
+    )
+    service, workflow_id = _import_and_setup(tmp_path, archive)
+
+    result = service.get_bindable_inputs(workflow_id)
+
+    assert result["enrichment"] == "exported_widgets"
+    assert result["nodes"][0]["inputs"][0]["options"] == ["cinematic", "illustration"]
+    assert result["nodes"][0]["inputs"][0]["suggested_label"] == "Rendering style"
+
+
 def test_classify_graph_inputs_labels_clip_text_from_downstream_prompt_role() -> None:
     nodes = _classify_graph_inputs(
         {
@@ -1651,6 +1688,85 @@ def test_get_bindable_inputs_uses_modern_combo_metadata_for_custom_node_dropdown
         "hint": "Choose the custom-node rendering style.",
         "suggested_label": "Rendering style",
     }
+
+
+def test_get_bindable_inputs_uses_exported_frontend_widget_dropdown_fallback() -> None:
+    nodes = _classify_graph_inputs(
+        {
+            "12": {
+                "class_type": "CustomFrontendSelector",
+                "inputs": {"style": "cinematic"},
+            }
+        },
+        object_info={
+            "CustomFrontendSelector": {
+                "input": {"required": {"style": ["STRING", {"tooltip": "Live tooltip."}]}}
+            }
+        },
+        widget_metadata={
+            "schema_version": "0.1.0",
+            "nodes": {
+                "12": {
+                    "inputs": {
+                        "style": {
+                            "options": ["cinematic", "illustration"],
+                            "display_name": "Rendering style",
+                            "tooltip": "Exported tooltip.",
+                        }
+                    }
+                }
+            },
+        },
+    )
+
+    assert nodes[0]["inputs"][0] == {
+        "input_name": "style",
+        "current_value": "cinematic",
+        "kind": "select",
+        "suggested_widget_type": "select",
+        "widget_types": ["select", "string_field"],
+        "options": ["cinematic", "illustration"],
+        "hint": "Live tooltip.",
+        "suggested_label": "Rendering style",
+    }
+
+
+def test_get_bindable_inputs_prefers_live_dropdown_options_over_export_snapshot() -> None:
+    nodes = _classify_graph_inputs(
+        {
+            "12": {
+                "class_type": "CustomFrontendSelector",
+                "inputs": {"style": "live"},
+            }
+        },
+        object_info={
+            "CustomFrontendSelector": {
+                "input": {
+                    "required": {
+                        "style": [
+                            "COMBO",
+                            {"options": ["live", "new"], "display_name": "Live style"},
+                        ]
+                    }
+                }
+            }
+        },
+        widget_metadata={
+            "nodes": {
+                "12": {
+                    "inputs": {
+                        "style": {
+                            "options": ["old", "snapshot"],
+                            "display_name": "Snapshot style",
+                        }
+                    }
+                }
+            }
+        },
+    )
+
+    assert nodes[0]["inputs"][0]["options"] == ["live", "new"]
+    assert nodes[0]["inputs"][0]["suggested_label"] == "Live style"
 
 
 def test_get_bindable_inputs_suggests_generic_file_only_for_strong_file_signals() -> None:

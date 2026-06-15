@@ -163,6 +163,42 @@ def test_imported_export2noofy_package_preserves_discovery_metadata(tmp_path: Pa
     assert package.metadata.tags == ["video", "starter"]
 
 
+def test_imported_export2noofy_package_preserves_sanitized_comfyui_widget_metadata() -> None:
+    archive = _archive_bytes_with_package_update(
+        {
+            "comfyui_widget_metadata": {
+                "schema_version": "future",
+                "nodes": {
+                    12: {
+                        "inputs": {
+                            "style": {
+                                "options": ["cinematic", "illustration", "cinematic", {"bad": True}],
+                                "display_name": " Rendering style ",
+                            }
+                        }
+                    }
+                },
+            }
+        }
+    )
+
+    package = NoofyArchiveImporter(archive).normalize()
+
+    assert package.comfyui_widget_metadata == {
+        "schema_version": "0.1.0",
+        "nodes": {
+            "12": {
+                "inputs": {
+                    "style": {
+                        "options": ["cinematic", "illustration"],
+                        "display_name": "Rendering style",
+                    }
+                }
+            }
+        },
+    }
+
+
 def test_noofy_importer_normalizes_real_export_without_importing_custom_nodes() -> None:
     custom_nodes_was_loaded = "custom_nodes" in sys.modules
 
