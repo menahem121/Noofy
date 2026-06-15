@@ -232,9 +232,12 @@ When no compatible wheel exists, registry sdists may run their PEP 517 or
 legacy setuptools build backend only inside the current install transaction.
 The transaction owns the uv cache, temporary directories, source archives,
 build environments, logs, and staged dependency overlay. Repository-owned
-custom-node installers such as `install.py` and `setup.py`, direct URLs, VCS
-requirements, local paths, alternate indexes, and config-file source overrides
-remain unsupported.
+custom-node installer files such as `install.py` and `setup.py` are never
+executed or used for dependency extraction. Their presence alone does not block
+preparation when dependencies can be read from `requirements.txt` or static
+PEP 621 metadata. Direct URLs, VCS requirements, local paths, alternate
+indexes, and config-file source overrides remain unsupported in both marker
+formats.
 
 Build requirements are resolved separately and pinned in
 `build-constraints.txt`. Build-only NumPy is allowed in uv's ephemeral isolated

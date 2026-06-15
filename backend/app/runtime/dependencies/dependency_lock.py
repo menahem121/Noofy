@@ -563,16 +563,6 @@ def inspect_dependency_marker_files(source_dir: Path) -> DependencyMarkerInspect
     if pyproject_path.exists():
         _inspect_pyproject_file(pyproject_path, declarations, findings)
 
-    setup_path = source_dir / "setup.py"
-    if setup_path.exists():
-        findings.append(
-            DependencyMarkerPolicyFinding(
-                code=DependencyPolicyErrorCode.PROJECT_CODE_EXECUTION_REQUIRED,
-                source_file="setup.py",
-                message="setup.py dependency extraction is unsupported because it requires executing project code.",
-            )
-        )
-
     return DependencyMarkerInspection(declarations=declarations, findings=findings)
 
 
@@ -692,16 +682,13 @@ def _inspect_requirements_file(
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
-        if _is_unsupported_requirement_line(line):
-            findings.append(
-                DependencyMarkerPolicyFinding(
-                    code=DependencyPolicyErrorCode.UNSUPPORTED_DEPENDENCY_DECLARATION,
-                    source_file="requirements.txt",
-                    message=f"Unsupported requirements.txt entry at line {line_number}.",
-                )
-            )
-            continue
-        declarations.append(DependencyDeclaration(source_file="requirements.txt", requirement=line))
+        _append_dependency_declaration(
+            line,
+            source_file="requirements.txt",
+            location=f"line {line_number}",
+            declarations=declarations,
+            findings=findings,
+        )
 
 
 def _inspect_pyproject_file(
@@ -738,28 +725,68 @@ def _inspect_pyproject_file(
 
     dependencies = project.get("dependencies") or []
     if isinstance(dependencies, list):
-        for requirement in dependencies:
+        for index, requirement in enumerate(dependencies, start=1):
             if isinstance(requirement, str):
-                declarations.append(DependencyDeclaration(source_file="pyproject.toml", requirement=requirement))
+                _append_dependency_declaration(
+                    requirement,
+                    source_file="pyproject.toml",
+                    location=f"project.dependencies item {index}",
+                    declarations=declarations,
+                    findings=findings,
+                )
 
     optional_dependencies = project.get("optional-dependencies") or {}
     if isinstance(optional_dependencies, dict):
-        for requirements in optional_dependencies.values():
+        for group, requirements in optional_dependencies.items():
             if not isinstance(requirements, list):
                 continue
-            for requirement in requirements:
+            for index, requirement in enumerate(requirements, start=1):
                 if isinstance(requirement, str):
-                    declarations.append(DependencyDeclaration(source_file="pyproject.toml", requirement=requirement))
+                    _append_dependency_declaration(
+                        requirement,
+                        source_file="pyproject.toml",
+                        location=f"project.optional-dependencies.{group} item {index}",
+                        declarations=declarations,
+                        findings=findings,
+                    )
 
 
-def _is_unsupported_requirement_line(line: str) -> bool:
-    normalized = line.lower()
+def _append_dependency_declaration(
+    requirement: str,
+    *,
+    source_file: str,
+    location: str,
+    declarations: list[DependencyDeclaration],
+    findings: list[DependencyMarkerPolicyFinding],
+) -> None:
+    requirement = requirement.strip()
+    if dependency_declaration_uses_unsupported_source(requirement):
+        findings.append(
+            DependencyMarkerPolicyFinding(
+                code=DependencyPolicyErrorCode.UNSUPPORTED_DEPENDENCY_DECLARATION,
+                source_file=source_file,
+                message=f"Unsupported {source_file} dependency at {location}.",
+            )
+        )
+        return
+    declarations.append(
+        DependencyDeclaration(source_file=source_file, requirement=requirement)
+    )
+
+
+def dependency_declaration_uses_unsupported_source(line: str) -> bool:
+    """Return whether a dependency declaration bypasses the approved index."""
+    normalized = line.strip().lower()
     if normalized.startswith("-") or normalized.startswith(_UNSAFE_REQUIREMENT_PREFIXES):
         return True
-    if normalized.startswith(("git+", "hg+", "svn+", "bzr+")):
+    if normalized.startswith(
+        ("git+", "hg+", "svn+", "bzr+", "file:", "./", "../", "/", "~/")
+    ):
         return True
     if "://" in normalized:
         return True
-    if " @ file:" in normalized or normalized.startswith(("./", "../", "/")):
+    if re.search(r"\s@\s*", normalized):
+        return True
+    if re.match(r"^[a-z]:[\\/]", normalized):
         return True
     return False

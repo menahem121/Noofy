@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -356,13 +357,18 @@ test = ["pytest==8.3.0"]
     ]
 
 
-def test_inspect_dependency_marker_files_blocks_setup_py_execution(tmp_path: Path) -> None:
+def test_inspect_dependency_marker_files_ignores_setup_py_without_execution(
+    tmp_path: Path,
+) -> None:
     (tmp_path / "setup.py").write_text("from setuptools import setup\nsetup(install_requires=['x'])\n", encoding="utf-8")
+    (tmp_path / "requirements.txt").write_text("requests==2.32.0\n", encoding="utf-8")
 
     inspection = inspect_dependency_marker_files(tmp_path)
 
-    assert not inspection.supported
-    assert inspection.findings[0].code is DependencyPolicyErrorCode.PROJECT_CODE_EXECUTION_REQUIRED
+    assert inspection.supported
+    assert [declaration.requirement for declaration in inspection.declarations] == [
+        "requests==2.32.0"
+    ]
 
 
 def test_inspect_dependency_marker_files_blocks_dynamic_pyproject_dependencies(tmp_path: Path) -> None:
@@ -396,3 +402,34 @@ def test_inspect_dependency_marker_files_blocks_unsafe_requirement_entries(tmp_p
         DependencyPolicyErrorCode.UNSUPPORTED_DEPENDENCY_DECLARATION,
     ]
     assert [declaration.requirement for declaration in inspection.declarations] == ["requests==2.32.0"]
+
+
+@pytest.mark.parametrize(
+    "requirement",
+    [
+        "demo @ git+https://github.com/example/demo.git",
+        "demo @ https://example.invalid/demo-1.0.0-py3-none-any.whl",
+        "demo @ file:///tmp/demo",
+        "demo @ ../demo",
+        "--extra-index-url https://example.invalid/simple",
+    ],
+)
+def test_inspect_dependency_marker_files_blocks_unsafe_pyproject_dependencies(
+    tmp_path: Path,
+    requirement: str,
+) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\n"
+        'name = "custom-node"\n'
+        f"dependencies = [{json.dumps(requirement)}]\n",
+        encoding="utf-8",
+    )
+
+    inspection = inspect_dependency_marker_files(tmp_path)
+
+    assert not inspection.supported
+    assert inspection.declarations == []
+    assert inspection.findings[0].code is (
+        DependencyPolicyErrorCode.UNSUPPORTED_DEPENDENCY_DECLARATION
+    )
+    assert inspection.findings[0].source_file == "pyproject.toml"

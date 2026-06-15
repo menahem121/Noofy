@@ -39,6 +39,7 @@ from app.runtime.dependencies.dependency_lock import (
     ResolvedDependencyRequirement,
     ResolvedDependencyWheel,
     ResolverMetadata,
+    dependency_declaration_uses_unsupported_source,
     inspect_dependency_marker_files,
     normalize_package_name,
     validate_quarantined_community_lock,
@@ -1156,12 +1157,7 @@ def _validate_build_requirements(requirements: list[str]) -> None:
 
 
 def _build_requirement_is_unsafe(requirement: str) -> bool:
-    normalized = requirement.strip().lower()
-    return (
-        normalized.startswith(("-", "./", "../", "/", "git+", "hg+", "svn+", "bzr+"))
-        or "://" in normalized
-        or " @ file:" in normalized
-    )
+    return dependency_declaration_uses_unsupported_source(requirement)
 
 
 def _read_package_index_metadata(

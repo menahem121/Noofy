@@ -189,43 +189,60 @@ def test_uv_resolver_generates_noofy_lock_and_materializes_wheels(
     assert ("custom_nodes" in sys.modules) is custom_nodes_was_loaded
 
 
-def test_uv_resolver_blocks_setup_py_marker_before_running_uv(tmp_path: Path) -> None:
+def test_uv_resolver_ignores_repository_setup_py_and_uses_static_requirements(
+    tmp_path: Path,
+) -> None:
     custom_node = tmp_path / "source-files" / "custom_nodes" / "node-a"
     custom_node.mkdir(parents=True)
     (custom_node / "setup.py").write_text(
-        "from setuptools import setup\n", encoding="utf-8"
+        "raise RuntimeError('must not execute repository setup.py')\n",
+        encoding="utf-8",
     )
+    (custom_node / "requirements.txt").write_text("demo>=1\n", encoding="utf-8")
+    wheel_bytes = b"wheel bytes"
+    digest = hashlib.sha256(wheel_bytes).hexdigest()
+    commands: list[list[str]] = []
 
     def runner(
         command: list[str], *, cwd: Path, env: dict[str, str]
     ) -> subprocess.CompletedProcess[str]:
-        raise AssertionError("uv must not run for setup.py dependency extraction")
+        commands.append(command)
+        if command == ["uv", "--version"]:
+            return subprocess.CompletedProcess(
+                command, 0, stdout="uv 0.11.10\n", stderr=""
+            )
+        output_path = Path(command[command.index("--output-file") + 1])
+        output_path.write_text(
+            f"demo==1.0.0 \\\n    --hash=sha256:{digest}\n",
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
     resolver = UvDependencyLockResolver(
         wheel_cache_dir=tmp_path / "wheel-cache",
         work_dir=tmp_path / "transactions",
-        package_index_client=_FakePackageIndexClient(b"wheel bytes"),
+        package_index_client=_FakePackageIndexClient(wheel_bytes),
         command_runner=runner,
         log_store=LogStore(),
     )
 
-    with pytest.raises(DependencyResolutionError) as error:
-        resolver.resolve(
-            DependencyResolutionRequest(
-                source_dirs=custom_node_dependency_source_dirs(
-                    tmp_path / "source-files"
-                ),
-                runtime_profile_id="noofy-comfyui-v1-default",
-                runtime_profile_variant_id="darwin-arm64-mps",
-                runtime_profile_manifest_hash="sha256:" + ("9" * 64),
-                install_policy_version=DEFAULT_COMMUNITY_INSTALL_POLICY_VERSION,
-                python_version="3.13",
-                python_platform="aarch64-apple-darwin",
-                workflow_id="workflow",
-            )
+    lock = resolver.resolve(
+        DependencyResolutionRequest(
+            source_dirs=custom_node_dependency_source_dirs(
+                tmp_path / "source-files"
+            ),
+            runtime_profile_id="noofy-comfyui-v1-default",
+            runtime_profile_variant_id="darwin-arm64-mps",
+            runtime_profile_manifest_hash="sha256:" + ("9" * 64),
+            install_policy_version=DEFAULT_COMMUNITY_INSTALL_POLICY_VERSION,
+            python_version="3.13",
+            python_platform="aarch64-apple-darwin",
+            workflow_id="workflow",
         )
+    )
 
-    assert error.value.code is DependencyPolicyErrorCode.PROJECT_CODE_EXECUTION_REQUIRED
+    assert [requirement.name for requirement in lock.requirements] == ["demo"]
+    assert any(command[:3] == ["uv", "pip", "compile"] for command in commands)
 
 
 def test_pypi_materializer_selects_target_platform_wheel(
@@ -666,7 +683,7 @@ def test_uv_resolver_allows_sdist_with_pinned_build_constraints(
                 sha256=f"sha256:{digest}",
                 source_index_url="https://pypi.org/simple",
                 import_names=[],
-                build_system_requires=["setuptools>=40.8.0"],
+                build_system_requires=["numpy>=2.0", "setuptools>=40.8.0"],
                 legacy_setuptools_build=True,
                 dynamic_build_requirements_possible=True,
             )
@@ -686,6 +703,8 @@ def test_uv_resolver_allows_sdist_with_pinned_build_constraints(
         input_path = Path(command[3])
         if input_path.name == "build-requirements.in":
             output_path.write_text(
+                "numpy==2.2.0 \\\n"
+                f"    --hash=sha256:{'c' * 64}\n"
                 "setuptools==82.0.1 \\\n"
                 f"    --hash=sha256:{build_digest}\n",
                 encoding="utf-8",
@@ -713,11 +732,13 @@ def test_uv_resolver_allows_sdist_with_pinned_build_constraints(
     grounding = lock.requirements[0]
     assert grounding.distribution_kind is DependencyDistributionKind.SDIST
     assert grounding.legacy_setuptools_build is True
-    assert grounding.build_system_requires == ["setuptools>=40.8.0"]
+    assert grounding.build_system_requires == ["numpy>=2.0", "setuptools>=40.8.0"]
     assert lock.source_distributions == ["groundingdino-py"]
     assert lock.python_version == "3.13"
     assert lock.python_platform == "aarch64-apple-darwin"
     assert "setuptools==82.0.1" in (lock.build_constraints or "")
+    assert "numpy==2.2.0" in (lock.build_constraints or "")
+    assert "numpy" not in [requirement.name for requirement in lock.requirements]
     assert inspection_count == 1
     distribution_diagnostics = json.loads(
         (transaction_dir / "diagnostics" / "source-distributions.json").read_text(
@@ -823,6 +844,64 @@ def test_uv_resolver_blocks_torch_as_a_declared_build_requirement(
         error.value.code
         is DependencyPolicyErrorCode.DEPENDENCY_BUILD_POLICY_BLOCKED
     )
+
+
+def test_uv_resolver_blocks_local_direct_build_requirement(
+    tmp_path: Path,
+) -> None:
+    digest = "a" * 64
+    custom_node = tmp_path / "source-files" / "custom_nodes" / "node-a"
+    custom_node.mkdir(parents=True)
+    (custom_node / "requirements.txt").write_text(
+        "native-demo==1.0.0\n", encoding="utf-8"
+    )
+
+    class SourceIndex:
+        def inspect_distribution(
+            self,
+            requirement: ResolvedRequirement,
+            *,
+            work_dir: Path,
+        ) -> DistributionCandidate:
+            return DistributionCandidate(
+                kind=DependencyDistributionKind.SDIST,
+                filename="native-demo-1.0.0.tar.gz",
+                url="https://files.pythonhosted.org/native-demo-1.0.0.tar.gz",
+                sha256=f"sha256:{digest}",
+                source_index_url="https://pypi.org/simple",
+                import_names=[],
+                build_system_requires=["build-helper @ ../build-helper"],
+                legacy_setuptools_build=False,
+                dynamic_build_requirements_possible=True,
+            )
+
+    def runner(
+        command: list[str], *, cwd: Path, env: dict[str, str]
+    ) -> subprocess.CompletedProcess[str]:
+        if command == ["uv", "--version"]:
+            return subprocess.CompletedProcess(
+                command, 0, stdout=f"uv {SUPPORTED_UV_VERSION}\n", stderr=""
+            )
+        output_path = Path(command[command.index("--output-file") + 1])
+        output_path.write_text(
+            "native-demo==1.0.0 \\\n"
+            f"    --hash=sha256:{digest}\n",
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    resolver = UvDependencyLockResolver(
+        wheel_cache_dir=tmp_path / "wheel-cache",
+        work_dir=tmp_path / "transactions",
+        package_index_client=SourceIndex(),
+        command_runner=runner,
+        log_store=LogStore(),
+    )
+
+    with pytest.raises(DependencyResolutionError) as error:
+        resolver.resolve(_resolution_request(tmp_path))
+
+    assert error.value.code is DependencyPolicyErrorCode.UNAPPROVED_SOURCE
 
 
 def test_uv_resolver_fails_when_sdist_selection_does_not_stabilize(
