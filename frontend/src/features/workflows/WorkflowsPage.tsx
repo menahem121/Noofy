@@ -1,5 +1,6 @@
 import { ChangeEvent, type MutableRefObject, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import {
+  AlertCircle,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
@@ -76,6 +77,15 @@ interface WorkflowSortState {
   direction: SortDirection;
 }
 
+interface PendingWorkflowRemoval {
+  workflows: WorkflowSummary[];
+  bulk: boolean;
+  skippedCount: number;
+  removedCount: number;
+  busy: boolean;
+  error: string | null;
+}
+
 const workflowStatusSortOrder: Record<string, number> = {
   missing_models: 0,
   need_setup: 1,
@@ -129,7 +139,7 @@ export function WorkflowsPage({
   const [sort, setSort] = useState<WorkflowSortState | null>({ key: "name", direction: "asc" });
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
-  const [removeBusy, setRemoveBusy] = useState(false);
+  const [pendingRemoval, setPendingRemoval] = useState<PendingWorkflowRemoval | null>(null);
   const [detailsPanelOpen, setDetailsPanelOpen] = useState(false);
   const [details, setDetails] = useState<Record<string, WorkflowDetails>>({});
   const [detailsLoading, setDetailsLoading] = useState(false);
@@ -299,27 +309,19 @@ export function WorkflowsPage({
     onConfigureDashboard(result.workflow.id, workflowDisplayName(result.workflow));
   }
 
-  async function handleRemove(workflow: WorkflowSummary) {
+  function requestRemoveWorkflow(workflow: WorkflowSummary) {
     if (!workflow.can_remove) return;
-    const confirmed = window.confirm(`Remove "${workflowDisplayName(workflow)}" from Noofy?`);
-    if (!confirmed) return;
+    setMenuOpenFor(null);
     setActionError(null);
-    try {
-      await removeWorkflow(workflow.id);
-      cleanupRemovedWorkflowFrontendState(workflow.id, workflowTabs);
-      if (selectedWorkflowId === workflow.id) {
-        setDetailsPanelOpen(false);
-        setSelectedWorkflowId(null);
-      }
-      setDetails((current) => {
-        const next = { ...current };
-        delete next[workflow.id];
-        return next;
-      });
-      await workflowLibrary.refreshWorkflows();
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : String(error));
-    }
+    setActionMessage(null);
+    setPendingRemoval({
+      workflows: [workflow],
+      bulk: false,
+      skippedCount: 0,
+      removedCount: 0,
+      busy: false,
+      error: null,
+    });
   }
 
   function handleToggleCheck(id: string, checked: boolean) {
@@ -343,63 +345,77 @@ export function WorkflowsPage({
     });
   }
 
-  async function handleRemoveSelectedWorkflows() {
+  function requestRemoveSelectedWorkflows() {
     if (selectedRemovableWorkflows.length === 0) {
       setActionError("None of the selected workflows can be removed from Noofy.");
       return;
     }
-
-    const removeLabel =
-      selectedRemovableWorkflows.length === 1
-        ? `"${workflowDisplayName(selectedRemovableWorkflows[0])}"`
-        : `${selectedRemovableWorkflows.length} workflows`;
-    const skippedLabel =
-      selectedBlockedCount > 0
-        ? ` ${selectedBlockedCount} selected workflow${selectedBlockedCount === 1 ? "" : "s"} will be skipped because ${
-            selectedBlockedCount === 1 ? "it cannot" : "they cannot"
-          } be removed.`
-        : "";
-    if (!window.confirm(`Remove ${removeLabel} from Noofy?${skippedLabel}`)) return;
-
-    setRemoveBusy(true);
     setActionError(null);
     setActionMessage(null);
+    setPendingRemoval({
+      workflows: selectedRemovableWorkflows,
+      bulk: true,
+      skippedCount: selectedBlockedCount,
+      removedCount: 0,
+      busy: false,
+      error: null,
+    });
+  }
+
+  async function confirmWorkflowRemoval() {
+    if (!pendingRemoval || pendingRemoval.busy) return;
+    const workflowsToRemove = pendingRemoval.workflows;
+    const previousRemovedCount = pendingRemoval.removedCount;
+    setPendingRemoval((current) => current ? { ...current, busy: true, error: null } : current);
     const failedIds = new Set<string>();
     const removedIds = new Set<string>();
-    try {
-      for (const workflow of selectedRemovableWorkflows) {
-        try {
-          await removeWorkflow(workflow.id);
-          cleanupRemovedWorkflowFrontendState(workflow.id, workflowTabs);
-          removedIds.add(workflow.id);
-        } catch {
-          failedIds.add(workflow.id);
+    let singleError: string | null = null;
+    for (const workflow of workflowsToRemove) {
+      try {
+        await removeWorkflow(workflow.id);
+        cleanupRemovedWorkflowFrontendState(workflow.id, workflowTabs);
+        removedIds.add(workflow.id);
+      } catch (error) {
+        failedIds.add(workflow.id);
+        if (workflowsToRemove.length === 1) {
+          singleError = error instanceof Error ? error.message : String(error);
         }
       }
+    }
 
-      if (removedIds.has(selectedWorkflowId ?? "")) {
-        setDetailsPanelOpen(false);
-        setSelectedWorkflowId(null);
-      }
-      setDetails((current) => {
-        const next = { ...current };
-        removedIds.forEach((id) => delete next[id]);
-        return next;
-      });
-      setCheckedIds(new Set(failedIds));
-      await workflowLibrary.refreshWorkflows();
+    if (removedIds.has(selectedWorkflowId ?? "")) {
+      setDetailsPanelOpen(false);
+      setSelectedWorkflowId(null);
+    }
+    setDetails((current) => {
+      const next = { ...current };
+      removedIds.forEach((id) => delete next[id]);
+      return next;
+    });
+    setCheckedIds((current) => new Set([...current].filter((id) => !removedIds.has(id))));
+    await workflowLibrary.refreshWorkflows();
 
-      if (failedIds.size > 0) {
-        setActionError(
-          `Removed ${removedIds.size} workflow${removedIds.size === 1 ? "" : "s"}. ${
-            failedIds.size
-          } selected workflow${failedIds.size === 1 ? "" : "s"} could not be removed.`,
-        );
-      } else {
-        setActionMessage(`Removed ${removedIds.size} workflow${removedIds.size === 1 ? "" : "s"} from Noofy.`);
-      }
-    } finally {
-      setRemoveBusy(false);
+    const totalRemovedCount = previousRemovedCount + removedIds.size;
+    if (failedIds.size > 0) {
+      const failedWorkflows = workflowsToRemove.filter((workflow) => failedIds.has(workflow.id));
+      const message = singleError ?? (
+        `Removed ${totalRemovedCount} workflow${totalRemovedCount === 1 ? "" : "s"}. ${
+          failedIds.size
+        } selected workflow${failedIds.size === 1 ? "" : "s"} could not be removed.`
+      );
+      setPendingRemoval((current) => current ? {
+        ...current,
+        workflows: failedWorkflows,
+        removedCount: totalRemovedCount,
+        busy: false,
+        error: message,
+      } : current);
+      return;
+    }
+
+    setPendingRemoval(null);
+    if (workflowsToRemove.length > 1 || pendingRemoval.skippedCount > 0) {
+      setActionMessage(`Removed ${totalRemovedCount} workflow${totalRemovedCount === 1 ? "" : "s"} from Noofy.`);
     }
   }
 
@@ -615,8 +631,8 @@ Noofy hides the technical complexity, manages the workflow experience, and lets 
                 <button
                   className="secondary-button secondary-button--small secondary-button--danger"
                   type="button"
-                  onClick={() => void handleRemoveSelectedWorkflows()}
-                  disabled={removeBusy || selectedRemovableWorkflows.length === 0}
+                  onClick={requestRemoveSelectedWorkflows}
+                  disabled={selectedRemovableWorkflows.length === 0}
                   title={
                     selectedRemovableWorkflows.length === 0
                       ? "Selected workflows cannot be removed from Noofy"
@@ -724,7 +740,7 @@ Noofy hides the technical complexity, manages the workflow experience, and lets 
                   onExportComfyJson={() =>
                     setExportDialog({ workflowName: workflowDisplayName(workflow), exportUrl: exportWorkflowComfyJsonUrl(workflow.id), extension: ".json" })
                   }
-                  onRemove={() => void handleRemove(workflow)}
+                  onRemove={() => requestRemoveWorkflow(workflow)}
                 />
               ))}
             </div>
@@ -769,6 +785,13 @@ Noofy hides the technical complexity, manages the workflow experience, and lets 
           onClose={() => setExportDialog(null)}
         />
       ) : null}
+      {pendingRemoval ? (
+        <WorkflowRemovalDialog
+          removal={pendingRemoval}
+          onCancel={() => setPendingRemoval(null)}
+          onConfirm={() => void confirmWorkflowRemoval()}
+        />
+      ) : null}
       {importFlow.pendingImport?.duplicate_identity && !importFlow.pendingImport.model_summary ? (
         <DuplicateWorkflowModal
           importResult={importFlow.pendingImport}
@@ -796,6 +819,93 @@ Noofy hides the technical complexity, manages the workflow experience, and lets 
         />
       ) : null}
     </AppLayout>
+  );
+}
+
+function WorkflowRemovalDialog({
+  removal,
+  onCancel,
+  onConfirm,
+}: {
+  removal: PendingWorkflowRemoval;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const count = removal.workflows.length;
+  const isSingle = !removal.bulk;
+  const title = isSingle ? "Remove workflow?" : "Remove selected workflows?";
+
+  useEffect(() => {
+    function handleKeyDown(event: globalThis.KeyboardEvent) {
+      if (event.key === "Escape" && !removal.busy) onCancel();
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [onCancel, removal.busy]);
+
+  return (
+    <div
+      className="modal-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="workflow-remove-title"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !removal.busy) onCancel();
+      }}
+    >
+      <section className="workflow-close-modal" aria-busy={removal.busy}>
+        <header className="workflow-close-modal__header">
+          <h2 id="workflow-remove-title">{title}</h2>
+          <p>
+            {isSingle ? (
+              <>
+                Remove <strong>{workflowDisplayName(removal.workflows[0])}</strong> from Noofy? This removes its local
+                workflow files and saved setup.
+              </>
+            ) : (
+              <>
+                Remove {count} selected workflow{count === 1 ? "" : "s"} from Noofy? Their local workflow files and
+                saved setup will be removed.
+              </>
+            )}
+          </p>
+          {removal.skippedCount > 0 ? (
+            <p className="workflow-remove-modal__note">
+              {removal.skippedCount} selected workflow{removal.skippedCount === 1 ? "" : "s"} cannot be removed and
+              will be skipped.
+            </p>
+          ) : null}
+          {removal.removedCount > 0 ? (
+            <p className="workflow-remove-modal__note">
+              {removal.removedCount} workflow{removal.removedCount === 1 ? "" : "s"} already removed.
+            </p>
+          ) : null}
+        </header>
+        {removal.error ? (
+          <div className="notice notice--error" role="status">
+            <AlertCircle size={18} aria-hidden="true" />
+            <div>
+              <strong>Workflow removal failed</strong>
+              <span>{removal.error}</span>
+            </div>
+          </div>
+        ) : null}
+        <footer className="workflow-close-modal__footer">
+          <button className="secondary-button" type="button" autoFocus disabled={removal.busy} onClick={onCancel}>
+            Cancel
+          </button>
+          <button className="danger-button" type="button" disabled={removal.busy} onClick={onConfirm}>
+            {removal.busy
+              ? "Removing..."
+              : removal.error
+                ? "Retry removal"
+                : isSingle
+                  ? "Remove workflow"
+                  : "Remove selected"}
+          </button>
+        </footer>
+      </section>
+    </div>
   );
 }
 

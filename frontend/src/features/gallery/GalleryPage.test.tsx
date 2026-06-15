@@ -144,8 +144,35 @@ describe("GalleryPage", () => {
     fireEvent.click(await screen.findByRole("checkbox", { name: "Select voice.wav" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "Select captions.srt" }));
     fireEvent.click(screen.getByRole("button", { name: /delete selected/i }));
+
+    const dialog = screen.getByRole("dialog", { name: "Delete 2 Gallery items?" });
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      "/api/gallery/audio-1",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Delete items" }));
+
     await waitFor(() => expect(screen.queryByText("voice.wav")).not.toBeInTheDocument());
     expect(fetchMock).toHaveBeenCalledWith("/api/gallery/audio-1", expect.objectContaining({ method: "DELETE" }));
     expect(fetchMock).toHaveBeenCalledWith("/api/gallery/file-1", expect.objectContaining({ method: "DELETE" }));
+    expect(dialog).not.toBeInTheDocument();
+  });
+
+  it("uses a Noofy confirmation popup before deleting one Gallery item", async () => {
+    render(<GalleryPage onNavigate={onNavigate} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Open image: portrait.png" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete item" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Delete Gallery item?" });
+    expect(screen.getByRole("dialog", { name: "Image details" })).toBeInTheDocument();
+    expect(dialog).toHaveTextContent("portrait.png");
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      "/api/gallery/image-1",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog", { name: "Delete Gallery item?" })).not.toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Image details" })).toBeInTheDocument();
   });
 });

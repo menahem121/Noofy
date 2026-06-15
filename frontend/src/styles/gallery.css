@@ -340,14 +340,6 @@
   flex-wrap: wrap;
 }
 
-.gallery-bulk-bar__error {
-  width: 100%;
-  margin: 0;
-  color: #fecaca;
-  font-size: 12px;
-  font-weight: 600;
-}
-
 /* ── Sort / filter popover ── */
 
 .sort-filter-panel {
@@ -756,6 +748,10 @@
   animation: backdrop-in 200ms ease;
 }
 
+.gallery-delete-backdrop {
+  z-index: 120;
+}
+
 @keyframes backdrop-in {
   from {
     opacity: 0;
@@ -1038,23 +1034,6 @@
 
 .img-modal__actions--danger {
   padding-top: 2px;
-}
-
-.img-modal__delete-confirm {
-  width: 100%;
-}
-
-.img-modal__delete-confirm > span {
-  display: block;
-  margin-bottom: 8px;
-  font-size: 13px;
-  color: var(--text-secondary);
-}
-
-.img-modal__delete-confirm-btns {
-  display: flex;
-  align-items: center;
-  gap: 8px;
 }
 
 /* ── Modal nav + counter ── */

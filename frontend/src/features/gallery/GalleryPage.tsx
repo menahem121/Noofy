@@ -13,7 +13,6 @@ import {
   Film,
   Heart,
   Image as ImageIcon,
-  Loader2,
   RefreshCw,
   Search,
   Trash2,
@@ -34,6 +33,13 @@ import { ThreeDViewer } from "../three-d/ThreeDViewer";
 
 type KindFilter = "all" | GalleryKind;
 type SortOrder = "newest" | "oldest";
+
+interface PendingGalleryDeletion {
+  ids: string[];
+  label: string | null;
+  busy: boolean;
+  error: string | null;
+}
 
 interface GalleryPageProps {
   onNavigate: (route: AppRouteId) => void;
@@ -95,8 +101,7 @@ export function GalleryPage({ onNavigate }: GalleryPageProps) {
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
-  const [bulkBusy, setBulkBusy] = useState(false);
-  const [bulkError, setBulkError] = useState<string | null>(null);
+  const [pendingDeletion, setPendingDeletion] = useState<PendingGalleryDeletion | null>(null);
 
   const loadGallery = useCallback(async () => {
     setPhase("loading");
@@ -158,16 +163,41 @@ export function GalleryPage({ onNavigate }: GalleryPageProps) {
     }
   }
 
-  async function deleteItems(ids: string[]) {
-    setBulkBusy(true);
-    setBulkError(null);
+  function requestDeleteItems(itemsToDelete: GalleryItem[]) {
+    if (itemsToDelete.length === 0) return;
+    setPendingDeletion({
+      ids: itemsToDelete.map((item) => item.id),
+      label: itemsToDelete.length === 1 ? itemLabel(itemsToDelete[0]) : null,
+      busy: false,
+      error: null,
+    });
+  }
+
+  async function confirmDeleteItems() {
+    if (!pendingDeletion || pendingDeletion.busy) return;
+    const ids = pendingDeletion.ids;
+    setPendingDeletion((current) => current ? { ...current, busy: true, error: null } : current);
     const results = await Promise.allSettled(ids.map(deleteGalleryItem));
     const removed = new Set(ids.filter((_, index) => results[index].status === "fulfilled"));
+    const failedIds = ids.filter((id) => !removed.has(id));
     setItems((current) => current.filter((item) => !removed.has(item.id)));
     setCheckedIds((current) => new Set([...current].filter((id) => !removed.has(id))));
     if (selectedId && removed.has(selectedId)) setSelectedId(null);
-    if (removed.size !== ids.length) setBulkError("Some selected items could not be deleted. Try again.");
-    setBulkBusy(false);
+    if (failedIds.length === 0) {
+      setPendingDeletion(null);
+      return;
+    }
+    const failedItem = failedIds.length === 1
+      ? items.find((item) => item.id === failedIds[0])
+      : null;
+    setPendingDeletion({
+      ids: failedIds,
+      label: failedItem ? itemLabel(failedItem) : "Gallery item",
+      busy: false,
+      error: failedIds.length === 1
+        ? "This Gallery item could not be deleted. Try again."
+        : "Some selected Gallery items could not be deleted. Try again.",
+    });
   }
 
   return (
@@ -214,13 +244,12 @@ export function GalleryPage({ onNavigate }: GalleryPageProps) {
             <span>{downloadableCheckedItems.length === checkedItems.length ? "Ready for bulk actions" : `${downloadableCheckedItems.length} available to download`}</span>
           </div>
           <div className="gallery-bulk-bar__actions">
-            <button className="secondary-button" type="button" onClick={() => downloadableCheckedItems.forEach(directDownload)} disabled={downloadableCheckedItems.length === 0 || bulkBusy}><Download size={14} /> Download selected</button>
-            <button className="secondary-button secondary-button--danger" type="button" onClick={() => void deleteItems(checkedItems.map((item) => item.id))} disabled={bulkBusy}>
-              {bulkBusy ? <Loader2 className="spin" size={14} /> : <Trash2 size={14} />} Delete selected
+            <button className="secondary-button" type="button" onClick={() => downloadableCheckedItems.forEach(directDownload)} disabled={downloadableCheckedItems.length === 0}><Download size={14} /> Download selected</button>
+            <button className="secondary-button secondary-button--danger" type="button" onClick={() => requestDeleteItems(checkedItems)}>
+              <Trash2 size={14} /> Delete selected
             </button>
             <button className="ghost-button" type="button" onClick={() => setCheckedIds(new Set())}>Clear selection</button>
           </div>
-          {bulkError ? <p className="gallery-bulk-bar__error">{bulkError}</p> : null}
         </div>
       )}
 
@@ -256,9 +285,17 @@ export function GalleryPage({ onNavigate }: GalleryPageProps) {
           total={displayedItems.length}
           onClose={() => setSelectedId(null)}
           onFavorite={() => void toggleFavorite(selected)}
-          onDelete={() => void deleteItems([selected.id])}
+          onDelete={() => requestDeleteItems([selected])}
+          deleteDialogOpen={Boolean(pendingDeletion)}
           onPrev={selectedIndex > 0 ? () => setSelectedId(displayedItems[selectedIndex - 1].id) : null}
           onNext={selectedIndex < displayedItems.length - 1 ? () => setSelectedId(displayedItems[selectedIndex + 1].id) : null}
+        />
+      ) : null}
+      {pendingDeletion ? (
+        <GalleryDeletionDialog
+          deletion={pendingDeletion}
+          onCancel={() => setPendingDeletion(null)}
+          onConfirm={() => void confirmDeleteItems()}
         />
       ) : null}
     </AppLayout>
@@ -299,20 +336,19 @@ function CardVisual({ item }: { item: GalleryItem }) {
   );
 }
 
-function MediaDetail({ item, index, total, onClose, onFavorite, onDelete, onPrev, onNext }: { item: GalleryItem; index: number; total: number; onClose: () => void; onFavorite: () => void; onDelete: () => void; onPrev: (() => void) | null; onNext: (() => void) | null }) {
-  const [confirmDelete, setConfirmDelete] = useState(false);
+function MediaDetail({ item, index, total, onClose, onFavorite, onDelete, deleteDialogOpen, onPrev, onNext }: { item: GalleryItem; index: number; total: number; onClose: () => void; onFavorite: () => void; onDelete: () => void; deleteDialogOpen: boolean; onPrev: (() => void) | null; onNext: (() => void) | null }) {
   const contentUrl = galleryContentUrl(item);
   const isMissing = item.fileState === "missing";
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
+      if (deleteDialogOpen) return;
       if (event.key === "Escape") onClose();
       if (event.key === "ArrowLeft") onPrev?.();
       if (event.key === "ArrowRight") onNext?.();
     }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [onClose, onNext, onPrev]);
-  useEffect(() => { setConfirmDelete(false); }, [item.id]);
+  }, [deleteDialogOpen, onClose, onNext, onPrev]);
 
   return (
     <div className="img-modal-backdrop" role="dialog" aria-modal="true" aria-label={`${kindLabel(item.kind)} details`} onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
@@ -339,12 +375,73 @@ function MediaDetail({ item, index, total, onClose, onFavorite, onDelete, onPrev
               <button className="primary-button primary-button--compact" type="button" disabled={isMissing} onClick={() => directDownload(item)}><Download size={15} />Download</button>
               <button className="secondary-button" type="button" disabled={isMissing} onClick={() => window.open(contentUrl, "_blank", "noopener,noreferrer")}><ExternalLink size={14} />Open</button>
             </div>
-            {!confirmDelete ? <button className="secondary-button secondary-button--danger" type="button" onClick={() => setConfirmDelete(true)}><Trash2 size={14} />Delete item</button> : (
-              <div className="img-modal__delete-confirm"><span>Delete this Gallery item permanently?</span><div className="img-modal__delete-confirm-btns"><button className="secondary-button secondary-button--danger" type="button" onClick={onDelete}>Yes, delete</button><button className="ghost-button" type="button" onClick={() => setConfirmDelete(false)}>Cancel</button></div></div>
-            )}
+            <button className="secondary-button secondary-button--danger" type="button" onClick={onDelete}><Trash2 size={14} />Delete item</button>
           </div>
         </aside>
       </div>
+    </div>
+  );
+}
+
+function GalleryDeletionDialog({
+  deletion,
+  onCancel,
+  onConfirm,
+}: {
+  deletion: PendingGalleryDeletion;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const count = deletion.ids.length;
+  const title = count === 1 ? "Delete Gallery item?" : `Delete ${count} Gallery items?`;
+
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape" && !deletion.busy) onCancel();
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [deletion.busy, onCancel]);
+
+  return (
+    <div
+      className="modal-backdrop gallery-delete-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="gallery-delete-title"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !deletion.busy) onCancel();
+      }}
+    >
+      <section className="workflow-close-modal" aria-busy={deletion.busy}>
+        <header className="workflow-close-modal__header">
+          <h2 id="gallery-delete-title">{title}</h2>
+          <p>
+            {count === 1 && deletion.label ? (
+              <>Delete <strong>{deletion.label}</strong> permanently? This cannot be undone.</>
+            ) : (
+              <>Delete these {count} selected Gallery items permanently? This cannot be undone.</>
+            )}
+          </p>
+        </header>
+        {deletion.error ? (
+          <div className="notice notice--error" role="status">
+            <AlertCircle size={18} aria-hidden="true" />
+            <div>
+              <strong>Gallery deletion failed</strong>
+              <span>{deletion.error}</span>
+            </div>
+          </div>
+        ) : null}
+        <footer className="workflow-close-modal__footer">
+          <button className="secondary-button" type="button" autoFocus disabled={deletion.busy} onClick={onCancel}>
+            Cancel
+          </button>
+          <button className="danger-button" type="button" disabled={deletion.busy} onClick={onConfirm}>
+            {deletion.busy ? "Deleting..." : count === 1 ? "Delete item" : "Delete items"}
+          </button>
+        </footer>
+      </section>
     </div>
   );
 }

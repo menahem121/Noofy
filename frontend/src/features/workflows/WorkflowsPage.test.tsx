@@ -819,7 +819,6 @@ describe("WorkflowsPage", () => {
   });
 
   it("clears the imported setup reminder when an imported workflow is removed", async () => {
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     window.localStorage.setItem(dashboardDraftKey("imported_cleanup"), "stale draft");
     window.localStorage.setItem(
       PENDING_IMPORTED_SETUP_STORAGE_KEY,
@@ -830,6 +829,19 @@ describe("WorkflowsPage", () => {
     await screen.findByText("Cleanup Flow");
     fireEvent.click(screen.getByRole("button", { name: "Actions for Cleanup Flow" }));
     fireEvent.click(screen.getByRole("menuitem", { name: "Remove workflow" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Remove workflow?" });
+    expect(dialog).toHaveTextContent("Cleanup Flow");
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      "/api/workflows/imported_cleanup",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog", { name: "Remove workflow?" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Actions for Cleanup Flow" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Remove workflow" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove workflow" }));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
@@ -842,20 +854,21 @@ describe("WorkflowsPage", () => {
   });
 
   it("shows a warning and keeps the workflow visible when removal fails", async () => {
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     renderPage();
 
     await screen.findByText("Cleanup Flow");
     fetchMock.mockRejectedValueOnce(new Error("Workflow removal failed."));
     fireEvent.click(screen.getByRole("button", { name: "Actions for Cleanup Flow" }));
     fireEvent.click(screen.getByRole("menuitem", { name: "Remove workflow" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove workflow" }));
 
-    expect(await screen.findByText("Workflow removal failed.")).toBeInTheDocument();
-    expect(screen.getByText("Cleanup Flow")).toBeInTheDocument();
+    const dialog = screen.getByRole("dialog", { name: "Remove workflow?" });
+    expect(await within(dialog).findByText("Workflow removal failed.")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Retry removal" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Actions for Cleanup Flow" })).toBeInTheDocument();
   });
 
   it("removes selected imported workflows and skips native workflows", async () => {
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     window.localStorage.setItem(
       PENDING_IMPORTED_SETUP_STORAGE_KEY,
       JSON.stringify([{ workflowId: "imported_cleanup", workflowName: "Cleanup Flow", dismissed: false }]),
@@ -865,6 +878,14 @@ describe("WorkflowsPage", () => {
     fireEvent.click(await screen.findByRole("checkbox", { name: "Select all workflows" }));
     expect(screen.getByText("2 selected, 1 can be removed")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Remove selected" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Remove selected workflows?" });
+    expect(dialog).toHaveTextContent("1 selected workflow cannot be removed and will be skipped.");
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      "/api/workflows/imported_cleanup",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: "Remove selected" }));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(

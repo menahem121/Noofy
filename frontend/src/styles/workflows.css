@@ -813,6 +813,12 @@
   color: #fca5a5 !important;
 }
 
+.workflow-remove-modal__note {
+  margin-top: 10px !important;
+  color: var(--text-muted) !important;
+  font-size: 13px;
+}
+
 .workflow-detail-drawer {
   position: fixed;
   top: 0;
