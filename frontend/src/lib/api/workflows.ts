@@ -705,8 +705,8 @@ function readFileAsArrayBuffer(file: File): Promise<ArrayBuffer> {
   });
 }
 
-export function fetchWorkflows() {
-  return getJson<WorkflowSummary[]>("/workflows");
+export function fetchWorkflows(init: RequestInit = {}) {
+  return getJson<WorkflowSummary[]>("/workflows", init);
 }
 
 export function fetchWorkflowDetails(workflowId: string) {

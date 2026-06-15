@@ -28,6 +28,7 @@ const initialState: WorkflowLibraryState = {
 
 const REFRESH_RETRY_DELAYS_MS = [1_000, 3_000, 10_000, 30_000];
 const VISIBLE_FAILURE_THRESHOLD = 2;
+const WORKFLOW_REFRESH_TIMEOUT_MS = 8_000;
 
 export function WorkflowLibraryProvider({
   children,
@@ -46,6 +47,7 @@ export function WorkflowLibraryProvider({
   const retryAttemptRef = useRef(0);
   const consecutiveFailureRef = useRef(0);
   const retryTimerRef = useRef<number | null>(null);
+  const requestControllerRef = useRef<AbortController | null>(null);
   const refreshWorkflowsRef = useRef<() => Promise<WorkflowSummary[] | null>>(async () => null);
   const mountedRef = useRef(true);
 
@@ -70,6 +72,7 @@ export function WorkflowLibraryProvider({
     return () => {
       mountedRef.current = false;
       clearScheduledRetry();
+      requestControllerRef.current?.abort();
     };
   }, [clearScheduledRetry]);
 
@@ -116,7 +119,10 @@ export function WorkflowLibraryProvider({
     latestRequestSeqRef.current = requestSeq;
     setState((current) => ({ ...current, refreshing: true }));
 
-    const request = fetchWorkflows()
+    const controller = new AbortController();
+    requestControllerRef.current = controller;
+    const timeout = window.setTimeout(() => controller.abort(), WORKFLOW_REFRESH_TIMEOUT_MS);
+    const request = fetchWorkflows({ signal: controller.signal })
       .then((workflows) => {
         if (requestSeq !== latestRequestSeqRef.current) return workflows;
         retryAttemptRef.current = 0;
@@ -134,20 +140,23 @@ export function WorkflowLibraryProvider({
       .catch((error) => {
         if (requestSeq !== latestRequestSeqRef.current) return null;
         consecutiveFailureRef.current += 1;
+        const refreshError = workflowRefreshError(error);
         setState((current) => ({
           ...current,
           refreshing: false,
           error:
             current.hasLoaded || consecutiveFailureRef.current < VISIBLE_FAILURE_THRESHOLD
               ? null
-              : error instanceof Error
-                ? error.message
-                : String(error),
+              : refreshError.message,
         }));
         scheduleRetry();
         return null;
       })
       .finally(() => {
+        window.clearTimeout(timeout);
+        if (requestControllerRef.current === controller) {
+          requestControllerRef.current = null;
+        }
         if (inFlightRef.current === request) {
           inFlightRef.current = null;
         }
@@ -178,4 +187,11 @@ export function useWorkflowLibrary() {
     throw new Error("useWorkflowLibrary must be used within WorkflowLibraryProvider");
   }
   return context;
+}
+
+function workflowRefreshError(error: unknown) {
+  if (error instanceof DOMException && error.name === "AbortError") {
+    return new Error("Noofy's local app service did not answer the workflow library request in time.");
+  }
+  return error instanceof Error ? error : new Error(String(error));
 }

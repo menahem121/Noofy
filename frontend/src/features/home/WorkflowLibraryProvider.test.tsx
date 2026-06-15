@@ -108,4 +108,32 @@ describe("WorkflowLibraryProvider", () => {
     expect(result.current.workflows).toEqual([refreshedWorkflow]);
     expect(result.current.error).toBeNull();
   });
+
+  it("times out a hung workflow request and releases the loading state", async () => {
+    fetchMock.mockImplementation((_url, init?: RequestInit) => {
+      return new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          reject(new DOMException("Aborted", "AbortError"));
+        });
+      });
+    });
+
+    const { result, unmount } = renderHook(() => useWorkflowLibrary(), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <WorkflowLibraryProvider>{children}</WorkflowLibraryProvider>
+      ),
+    });
+
+    let refresh!: Promise<unknown>;
+    await act(async () => {
+      refresh = result.current.refreshWorkflows();
+      await vi.advanceTimersByTimeAsync(8_000);
+      await refresh;
+    });
+
+    expect(result.current.refreshing).toBe(false);
+    expect(result.current.error).toBeNull();
+
+    unmount();
+  });
 });
