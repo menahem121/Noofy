@@ -15,6 +15,7 @@ import {
 } from "../../lib/api/noofyApi";
 import { isModelDownloadActive } from "../../lib/modelDownloadProgress";
 import { workflowDisplayName } from "../../lib/workflowNames";
+import { addPendingImportedSetupReminder } from "../home/pendingSetupBanners";
 import { useWorkflowLibrary } from "../home/WorkflowLibraryProvider";
 import { importNeedsConfiguration } from "./workflowImportUtils";
 
@@ -37,6 +38,14 @@ const initialWorkflowImportFlowState: WorkflowImportFlowState = {
   importResult: null,
   importError: null,
 };
+
+function rememberImportedSetup(importResult: WorkflowImportResponse) {
+  if (!importNeedsConfiguration(importResult)) return;
+  addPendingImportedSetupReminder(
+    importResult.workflow.id,
+    workflowDisplayName(importResult.workflow),
+  );
+}
 
 export function useWorkflowImportFlow({
   onOpenWorkflow,
@@ -100,6 +109,7 @@ export function useWorkflowImportFlow({
       }
       const workflows = await fetchWorkflows();
       workflowLibrary.setWorkflowsFromResponse(workflows);
+      rememberImportedSetup(importResult);
       setState((current) => ({
         ...current,
         importing: false,
@@ -175,6 +185,7 @@ export function useWorkflowImportFlow({
   const finishImport = useCallback(async (importResult: WorkflowImportResponse, openAfterImport: boolean) => {
     const workflows = await fetchWorkflows();
     workflowLibrary.setWorkflowsFromResponse(workflows);
+    rememberImportedSetup(importResult);
     setState((current) => ({
       ...current,
       importing: false,

@@ -292,10 +292,12 @@ describe("WorkflowsPage", () => {
   const fetchMock = vi.fn();
   const onNavigate = vi.fn();
   const onOpenWorkflow = vi.fn();
+  const onConfigureDashboard = vi.fn();
   const onEditWidgets = vi.fn();
   const onEditDashboard = vi.fn();
 
   beforeEach(() => {
+    window.localStorage.clear();
     vi.stubGlobal("fetch", fetchMock);
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -367,6 +369,7 @@ describe("WorkflowsPage", () => {
             <WorkflowsPage
               onNavigate={onNavigate}
               onOpenWorkflow={onOpenWorkflow}
+              onConfigureDashboard={onConfigureDashboard}
               onEditWidgets={onEditWidgets}
               onEditDashboard={onEditDashboard}
               initialSearchQuery={options.initialSearchQuery}
@@ -963,5 +966,82 @@ describe("WorkflowsPage", () => {
     });
     expect(await screen.findByText("Missing Model Flow was added to your local workflows.")).toBeInTheDocument();
     expect(screen.getByText("Missing Model Flow")).toBeInTheDocument();
+  });
+
+  it("persists setup imports and exposes configure and dismiss actions", async () => {
+    const setupWorkflow = {
+      ...missingModelImportPreview.workflow,
+      id: "remove_background",
+      name: "Remove_background",
+      missing_model_count: 0,
+      needs_setup: true,
+      status_label: "Needs input setup",
+    };
+    const setupImport = {
+      ...missingModelImportPreview,
+      import_session_id: null,
+      workflow_id: setupWorkflow.id,
+      status: "needs_input_setup",
+      user_facing_message: "Needs input setup",
+      workflow: setupWorkflow,
+      required_model_count: 0,
+      unresolved_input_count: 1,
+      model_summary: null,
+    };
+
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) {
+        return Promise.resolve(jsonResponse({
+          mode: "managed",
+          reachable: true,
+          base_url: "http://127.0.0.1:8188",
+          repo_dir: "",
+          managed_process_running: true,
+          sidecar_starting: false,
+          pid: 1,
+          error: null,
+          environment: null,
+          crash_count: 0,
+          restart_attempt: 0,
+          max_restart_attempts: 3,
+          uptime_seconds: 1,
+          last_crash_at: null,
+        }));
+      }
+      if (url.endsWith("/api/resources")) {
+        return Promise.resolve(jsonResponse({ cpu: null, memory: null, vram: null }));
+      }
+      if (url.endsWith("/api/workflows")) {
+        return Promise.resolve(jsonResponse([...workflows, setupWorkflow]));
+      }
+      if (url.includes("/api/workflows/import/preview") && init?.method === "POST") {
+        return Promise.resolve(jsonResponse(setupImport));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    const view = renderPage();
+    await screen.findByRole("heading", { name: "Workflows" });
+    const input = view.container.querySelector('input[type="file"][accept=".noofy"]') as HTMLInputElement;
+    fireEvent.change(input, {
+      target: { files: [new File(["noofy"], "remove-background.noofy", { type: "application/octet-stream" })] },
+    });
+
+    expect(await screen.findByText("Remove_background was added to your local workflows.")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(JSON.parse(window.localStorage.getItem(PENDING_IMPORTED_SETUP_STORAGE_KEY) ?? "[]")).toEqual([
+        { workflowId: "remove_background", workflowName: "Remove_background", dismissed: false },
+      ]);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Configure dashboard" }));
+    expect(onConfigureDashboard).toHaveBeenCalledWith("remove_background", "Remove_background");
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss setup for Remove_background" }));
+    expect(screen.queryByText("Remove_background was added to your local workflows.")).not.toBeInTheDocument();
+    expect(JSON.parse(window.localStorage.getItem(PENDING_IMPORTED_SETUP_STORAGE_KEY) ?? "[]")).toEqual([
+      { workflowId: "remove_background", workflowName: "Remove_background", dismissed: true },
+    ]);
   });
 });

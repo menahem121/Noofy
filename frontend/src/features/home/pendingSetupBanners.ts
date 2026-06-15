@@ -40,6 +40,24 @@ export function removePendingImportedSetupReminder(workflowId: string) {
   savePendingImportedSetups(next);
 }
 
+export function addPendingImportedSetupReminder(workflowId: string, workflowName: string) {
+  const pendingSetup = { workflowId, workflowName, dismissed: false };
+  const current = loadPendingImportedSetups();
+  savePendingImportedSetups([
+    pendingSetup,
+    ...current.filter((item) => item.workflowId !== workflowId),
+  ]);
+}
+
+export function dismissPendingImportedSetupReminder(workflowId: string) {
+  const current = loadPendingImportedSetups();
+  savePendingImportedSetups(
+    current.map((item) => (
+      item.workflowId === workflowId ? { ...item, dismissed: true } : item
+    )),
+  );
+}
+
 export function savePendingImportedSetups(setups: PendingImportedSetup[]) {
   try {
     if (setups.length === 0) {

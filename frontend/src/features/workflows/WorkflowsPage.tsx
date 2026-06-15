@@ -7,6 +7,7 @@ import {
   FileUp,
   Loader2,
   PackageOpen,
+  PackagePlus,
   Play,
   Search,
   Sparkles,
@@ -39,12 +40,14 @@ import { useRuntimeStatus } from "../app/RuntimeStatusProvider";
 import { useOptionalWorkflowTabs } from "../app/WorkflowTabs";
 import { type DashboardSchema } from "../dashboard-builder/dashboardBuilderContent";
 import { useWorkflowLibrary } from "../home/WorkflowLibraryProvider";
+import { dismissPendingImportedSetupReminder } from "../home/pendingSetupBanners";
 import { buildDashboardSchemaForEditing } from "./dashboardEditing";
 import { WorkflowActionMenu } from "./WorkflowActionMenu";
 import { WorkflowExportDialog } from "./WorkflowExportDialog";
 import { DuplicateWorkflowModal, RequiredModelsModal } from "./WorkflowImportModals";
 import { useWorkflowImportFlow } from "./useWorkflowImportFlow";
 import { cleanupRemovedWorkflowFrontendState } from "./workflowRemoval";
+import { importNeedsConfiguration } from "./workflowImportUtils";
 import {
   hardwareWarningBasis,
   hardwareWarningDeveloperDetailsText,
@@ -142,6 +145,7 @@ export function WorkflowsPage({
     duplicateImport,
     readyImportAction,
     cancelImport,
+    dismissImportResult,
   } = useWorkflowImportFlow({ onOpenWorkflow, onConfigureDashboard });
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
@@ -224,6 +228,8 @@ export function WorkflowsPage({
   const readyCount = workflows.filter((workflow) => workflowStatus(workflow) === "ready").length;
   const needSetupCount = workflows.filter((workflow) => workflowStatus(workflow) === "need_setup").length;
   const missingModelsCount = workflows.reduce((total, workflow) => total + (workflow.missing_model_count ?? 0), 0);
+  const importResultNeedsConfiguration =
+    importFlow.importResult !== null && importNeedsConfiguration(importFlow.importResult);
 
   useEffect(() => {
     const workflowIds = new Set(workflows.map((workflow) => workflow.id));
@@ -277,6 +283,20 @@ export function WorkflowsPage({
     event.target.value = "";
     if (!file) return;
     await startWorkflowImport(file);
+  }
+
+  function dismissSetupImportResult() {
+    const result = importFlow.importResult;
+    if (result) {
+      dismissPendingImportedSetupReminder(result.workflow.id);
+    }
+    dismissImportResult();
+  }
+
+  function configureSetupImportResult() {
+    const result = importFlow.importResult;
+    if (!result || !onConfigureDashboard) return;
+    onConfigureDashboard(result.workflow.id, workflowDisplayName(result.workflow));
   }
 
   async function handleRemove(workflow: WorkflowSummary) {
@@ -504,6 +524,29 @@ Noofy hides the technical complexity, manages the workflow experience, and lets 
                 <strong>{importFlow.importResult.user_facing_message}</strong>
                 <span>{workflowDisplayName(importFlow.importResult.workflow)} was added to your local workflows.</span>
               </div>
+              {importResultNeedsConfiguration && onConfigureDashboard ? (
+                <button
+                  className="primary-button primary-button--compact"
+                  style={{ marginLeft: "auto" }}
+                  type="button"
+                  onClick={configureSetupImportResult}
+                >
+                  <PackagePlus size={14} aria-hidden="true" />
+                  Configure dashboard
+                </button>
+              ) : null}
+              {importResultNeedsConfiguration ? (
+                <button
+                  className="icon-button"
+                  style={onConfigureDashboard ? undefined : { marginLeft: "auto" }}
+                  type="button"
+                  aria-label={`Dismiss setup for ${workflowDisplayName(importFlow.importResult.workflow)}`}
+                  title="Dismiss"
+                  onClick={dismissSetupImportResult}
+                >
+                  <X size={16} aria-hidden="true" />
+                </button>
+              ) : null}
             </div>
           ) : null}
           {importFlow.importError ? <div className="notice notice--warning">{importFlow.importError}</div> : null}
