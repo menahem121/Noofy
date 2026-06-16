@@ -2255,6 +2255,231 @@ async def test_hugging_face_inspects_repo_file_metadata_when_repo_name_differs(
     assert (noofy_root / "checkpoints" / filename).read_bytes() == payload
 
 
+def test_filename_only_specific_model_can_be_searched_by_provider(tmp_path: Path) -> None:
+    noofy_root = tmp_path / "Noofy Models"
+    service = _service(noofy_root=noofy_root)
+
+    summary = service.summarize(
+        _package(
+            [
+                RequiredModel(
+                    folder="clip",
+                    filename="qwen_2.5_vl_7b_fp8_scaled.safetensors",
+                    verification_level="filename_only",
+                )
+            ]
+        )
+    )
+
+    assert summary.models[0].status == "missing"
+    assert summary.models[0].source_availability == "resolvable"
+
+
+@pytest.mark.anyio
+async def test_filename_only_provider_identity_downloads_and_adopts_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"provider-seeded-identity"
+    sha = hashlib.sha256(payload).hexdigest()
+    noofy_root = tmp_path / "Noofy Models"
+    filename = "qwen_2.5_vl_7b_fp8_scaled.safetensors"
+    streamed_urls: list[str] = []
+
+    async def fake_fetch_json(
+        method: str,
+        url: str,
+        params: dict[str, str],
+        headers: dict[str, str],
+    ) -> object:
+        if url == "https://huggingface.co/api/models":
+            if params["search"] == filename:
+                return [{"modelId": "Qwen/qwen-model"}]
+            return []
+        if url.endswith("/Qwen/qwen-model"):
+            return {
+                "siblings": [
+                    {
+                        "rfilename": filename,
+                        "lfs": {"oid": sha, "size": len(payload)},
+                    }
+                ]
+            }
+        return {"files": []} if "/by-hash/" in url else {"items": []}
+
+    async def fake_stream(url: str, part_path: Path) -> None:
+        streamed_urls.append(url)
+        part_path.parent.mkdir(parents=True, exist_ok=True)
+        part_path.write_bytes(payload)
+
+    model = RequiredModel(
+        folder="clip",
+        filename=filename,
+        verification_level="filename_only",
+    )
+    service = _service(
+        noofy_root=noofy_root,
+        provider_resolver=ProviderModelResolver(
+            api_key_resolver=lambda provider: None,
+            fetch_json=fake_fetch_json,
+        ),
+    )
+    monkeypatch.setattr(availability_module, "_stream_url", fake_stream)
+
+    result = await service.download_missing(_package([model]))
+
+    assert result.downloaded_count == 1
+    assert result.failed_count == 0
+    assert streamed_urls == [
+        f"https://huggingface.co/Qwen/qwen-model/resolve/main/{filename}"
+    ]
+    assert model.size_bytes == len(payload)
+    assert model.checksum == f"sha256:{sha}"
+    assert model.verification_level is ModelVerificationLevel.SHA256_SIZE
+    assert model.source_urls == []
+    assert result.model_summary.models[0].status == "available"
+
+
+@pytest.mark.anyio
+async def test_filename_only_provider_identity_conflict_is_not_downloaded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    noofy_root = tmp_path / "Noofy Models"
+    filename = "qwen_2.5_vl_7b_fp8_scaled.safetensors"
+    streamed = False
+
+    async def fake_fetch_json(
+        method: str,
+        url: str,
+        params: dict[str, str],
+        headers: dict[str, str],
+    ) -> object:
+        if url == "https://huggingface.co/api/models":
+            if params["search"] == filename:
+                return [
+                    {"modelId": "Qwen/first"},
+                    {"modelId": "Qwen/second"},
+                ]
+            return []
+        if url.endswith("/Qwen/first"):
+            return {
+                "siblings": [
+                    {
+                        "rfilename": filename,
+                        "lfs": {"oid": "1" * 64, "size": 10},
+                    }
+                ]
+            }
+        if url.endswith("/Qwen/second"):
+            return {
+                "siblings": [
+                    {
+                        "rfilename": filename,
+                        "lfs": {"oid": "2" * 64, "size": 10},
+                    }
+                ]
+            }
+        return {"files": []} if "/by-hash/" in url else {"items": []}
+
+    async def fake_stream(url: str, part_path: Path) -> None:
+        nonlocal streamed
+        streamed = True
+
+    service = _service(
+        noofy_root=noofy_root,
+        provider_resolver=ProviderModelResolver(
+            api_key_resolver=lambda provider: None,
+            fetch_json=fake_fetch_json,
+        ),
+    )
+    monkeypatch.setattr(availability_module, "_stream_url", fake_stream)
+
+    result = await service.download_missing(
+        _package(
+            [
+                RequiredModel(
+                    folder="clip",
+                    filename=filename,
+                    verification_level="filename_only",
+                )
+            ]
+        )
+    )
+
+    assert streamed is False
+    assert result.downloaded_count == 0
+    assert result.failed_count == 1
+    assert result.model_summary.models[0].status == "needs_manual_download"
+
+
+@pytest.mark.anyio
+async def test_filename_only_possible_match_rechecks_exact_local_file_with_provider_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"already-downloaded-provider-model"
+    sha = hashlib.sha256(payload).hexdigest()
+    noofy_root = tmp_path / "Noofy Models"
+    filename = "qwen_2.5_vl_7b_fp8_scaled.safetensors"
+    model_path = noofy_root / "clip" / filename
+    model_path.parent.mkdir(parents=True)
+    model_path.write_bytes(payload)
+    streamed = False
+
+    async def fake_fetch_json(
+        method: str,
+        url: str,
+        params: dict[str, str],
+        headers: dict[str, str],
+    ) -> object:
+        if url == "https://huggingface.co/api/models":
+            if params["search"] == filename:
+                return [{"modelId": "Qwen/qwen-model"}]
+            return []
+        if url.endswith("/Qwen/qwen-model"):
+            return {
+                "siblings": [
+                    {
+                        "rfilename": filename,
+                        "lfs": {"oid": sha, "size": len(payload)},
+                    }
+                ]
+            }
+        return {"files": []} if "/by-hash/" in url else {"items": []}
+
+    async def fake_stream(url: str, part_path: Path) -> None:
+        nonlocal streamed
+        streamed = True
+
+    model = RequiredModel(
+        folder="clip",
+        filename=filename,
+        verification_level="filename_only",
+    )
+    service = _service(
+        noofy_root=noofy_root,
+        provider_resolver=ProviderModelResolver(
+            api_key_resolver=lambda provider: None,
+            fetch_json=fake_fetch_json,
+        ),
+    )
+    monkeypatch.setattr(availability_module, "_stream_url", fake_stream)
+
+    before = service.summarize(_package([model]))
+    result = await service.download_missing(_package([model]))
+
+    assert before.models[0].status == "possible_match"
+    assert before.models[0].source_availability == "resolvable"
+    assert streamed is False
+    assert result.downloaded_count == 0
+    assert result.failed_count == 0
+    assert result.model_summary.models[0].status == "available"
+    assert result.model_summary.models[0].matched_sha256 == sha
+    assert model.size_bytes == len(payload)
+    assert model.checksum == f"sha256:{sha}"
+
+
 @pytest.mark.anyio
 async def test_hugging_face_provider_sha_mismatch_is_rejected_even_when_size_matches(
     tmp_path: Path,

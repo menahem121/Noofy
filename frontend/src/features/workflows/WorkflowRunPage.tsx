@@ -4230,7 +4230,7 @@ function requiredModelDownloadSelections(
 ): ModelDownloadSelection[] {
   if (!summary) return [];
   return summary.models
-    .filter((model) => retryableRequiredModelStatuses.has(model.status))
+    .filter(isRequiredModelDownloadRetryable)
     .map((model) => ({ workflow_id: workflowId, requirement_id: model.requirement_id }));
 }
 
@@ -4262,7 +4262,7 @@ function WorkflowRequiredModelsModal({
   const effectiveSummary = verificationJob?.model_summary ?? summary;
   const activeDownload = Boolean(downloadJob && isModelDownloadActive(downloadJob.status));
   const activeVerification = Boolean(verificationJob && ["queued", "running"].includes(verificationJob.status));
-  const downloadable = effectiveSummary.models.some((model) => retryableRequiredModelStatuses.has(model.status));
+  const downloadable = effectiveSummary.models.some(isRequiredModelDownloadRetryable);
   const progressByRequirement = new Map(downloadJob?.models.map((model) => [model.requirement_id, model]) ?? []);
   const readyToRun = effectiveSummary.ready_to_run;
 
@@ -4495,6 +4495,13 @@ function requiredModelSourceLabel(model: RequiredModelAvailability) {
   if (model.source_urls.length > 0) return "Download source known";
   if (model.source_availability === "resolvable") return "Can search known sources";
   return "No download source";
+}
+
+function isRequiredModelDownloadRetryable(model: RequiredModelAvailability) {
+  return (
+    retryableRequiredModelStatuses.has(model.status) ||
+    (model.status === "possible_match" && model.source_availability === "resolvable")
+  );
 }
 
 function extractImageUrls(result: JobResult | null) {

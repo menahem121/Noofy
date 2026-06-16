@@ -176,7 +176,7 @@ export function RequiredModelsModal({
     "verification_failed",
     "not_enough_disk_space",
   ]);
-  const hasDownloadable = summary.models.some((model) => retryableStatuses.has(model.status));
+  const hasDownloadable = summary.models.some((model) => isRequiredModelDownloadRetryable(model, retryableStatuses));
   const activeDownload = isModelDownloadActive(downloadJob?.status);
   const terminalVerification = verificationJob?.status === "completed" || verificationJob?.status === "failed";
   const activeVerification =
@@ -454,4 +454,11 @@ function modelSourceLabel(model: RequiredModelAvailability) {
   if (model.source_urls.length > 0) return "Ready to download";
   if (model.source_availability === "resolvable") return "Can search for a download";
   return "No download found";
+}
+
+function isRequiredModelDownloadRetryable(model: RequiredModelAvailability, retryableStatuses: Set<string>) {
+  return (
+    retryableStatuses.has(model.status) ||
+    (model.status === "possible_match" && model.source_availability === "resolvable")
+  );
 }

@@ -70,6 +70,17 @@ PROVIDER_AUTH_REQUIRED_MESSAGE = (
     "This model source requires an API key for the provider account that can access it."
 )
 ACTIVE_DOWNLOAD_TRANSACTION_STATUSES = {"downloading", "verifying", "placing"}
+PROVIDER_FILENAME_ONLY_EXTENSIONS = frozenset(
+    {
+        ".bin",
+        ".ckpt",
+        ".gguf",
+        ".onnx",
+        ".pt",
+        ".pth",
+        ".safetensors",
+    }
+)
 
 
 @dataclass
@@ -250,8 +261,9 @@ class ProviderModelResolver:
         try:
             hf = await self._search_hugging_face(model)
         except (ProviderAuthenticationRequired, ProviderRateLimited):
-            selected = _reliable_candidates(model, candidates)
+            selected = _select_reliable_candidates(model, candidates)
             if selected:
+                self._adopt_provider_identity(model, selected[0])
                 return [candidate.download_url for candidate in selected]
             raise
         self._record_provider_step(
@@ -261,8 +273,9 @@ class ProviderModelResolver:
             candidates=hf,
         )
         candidates.extend(hf)
-        selected = _reliable_candidates(model, candidates)
+        selected = _select_reliable_candidates(model, candidates)
         if selected:
+            self._adopt_provider_identity(model, selected[0])
             return [candidate.download_url for candidate in selected]
 
         civitai_query = await self._search_civitai_query(model)
@@ -274,11 +287,37 @@ class ProviderModelResolver:
         )
         candidates.extend(civitai_query)
 
-        selected = _reliable_candidates(model, candidates)
+        selected = _select_reliable_candidates(model, candidates)
         if selected:
+            self._adopt_provider_identity(model, selected[0])
             return [candidate.download_url for candidate in selected]
         self._record_unresolved(model, candidates)
         return []
+
+    def _adopt_provider_identity(
+        self,
+        model: RequiredModel,
+        candidate: ProviderModelCandidate,
+    ) -> None:
+        if not _provider_candidate_can_seed_identity(model, candidate):
+            return
+        model.size_bytes = candidate.size_bytes
+        model.checksum = f"sha256:{candidate.sha256}"
+        model.verification_level = ModelVerificationLevel.SHA256_SIZE
+        model.identity_verified_by_exporter = False
+        if self.log_store is not None:
+            self.log_store.add(
+                "info",
+                "Adopted provider model identity for required model download",
+                "workflow.models",
+                details={
+                    "provider": candidate.provider,
+                    "folder": model.folder,
+                    "filename": model.filename,
+                    "size_bytes": candidate.size_bytes,
+                    "sha256": model.checksum,
+                },
+            )
 
     async def _search_hugging_face(
         self, model: RequiredModel
@@ -515,7 +554,7 @@ class ProviderModelResolver:
     ) -> None:
         if self.log_store is None:
             return
-        reliable = _reliable_candidates(model, candidates)
+        reliable = _select_reliable_candidates(model, candidates)
         self.log_store.add(
             "info",
             "Provider model resolver step completed",
@@ -696,7 +735,7 @@ class ModelAvailabilityService:
         missing_groups = [
             group
             for group, availability in zip(groups, before.models, strict=True)
-            if availability.status == "missing"
+            if _availability_can_attempt_download(availability)
         ]
         downloadable_models = _download_plan_for_missing_groups(
             missing_groups,
@@ -722,7 +761,9 @@ class ModelAvailabilityService:
                 downloaded_count += 1
 
         successful_model_indices = {
-            outcome.model_index for outcome in outcomes if outcome.downloaded
+            outcome.model_index
+            for outcome in outcomes
+            if outcome.downloaded or (outcome.failure is None and not outcome.canceled)
         }
         if explicit_source_urls_authoritative:
             _propagate_downloaded_model_identities(
@@ -1403,13 +1444,9 @@ class ModelAvailabilityService:
         if (
             model.verification_level is ModelVerificationLevel.FILENAME_ONLY
             and not explicit_authoritative_download
+            and not _provider_resolvable(model)
         ):
             return False
-        if (
-            (model.size_bytes is None or model.size_bytes <= 0)
-            and not explicit_authoritative_download
-        ):
-            raise ModelAvailabilityError("Noofy needs a known file size before downloading this model.")
         if not urls:
             self.log_store.add(
                 "info",
@@ -1437,6 +1474,11 @@ class ModelAvailabilityService:
                 },
             )
             return False
+        if (
+            (model.size_bytes is None or model.size_bytes <= 0)
+            and not explicit_authoritative_download
+        ):
+            raise ModelAvailabilityError("Noofy needs a known file size before downloading this model.")
         self._validate_owned_model_root()
         if model.size_bytes is not None and model.size_bytes > 0:
             self._ensure_disk_space(model.size_bytes)
@@ -2153,10 +2195,102 @@ def _default_api_key_resolver(provider: ApiKeyProvider) -> str | None:
 
 def _provider_resolvable(model: RequiredModel) -> bool:
     return (
-        model.verification_level is not ModelVerificationLevel.FILENAME_ONLY
-        and bool(model.filename)
-        and model.size_bytes is not None
-        and model.size_bytes > 0
+        (
+            model.verification_level is not ModelVerificationLevel.FILENAME_ONLY
+            and bool(model.filename)
+            and model.size_bytes is not None
+            and model.size_bytes > 0
+        )
+        or _provider_identity_resolution_required(model)
+    )
+
+
+def _provider_identity_resolution_required(model: RequiredModel) -> bool:
+    if model.verification_level is not ModelVerificationLevel.FILENAME_ONLY:
+        return False
+    if model.size_bytes is not None or _model_sha256(model) is not None:
+        return False
+    if _source_urls(model):
+        return False
+    return _filename_only_model_searchable_by_provider(model)
+
+
+def _filename_only_model_searchable_by_provider(model: RequiredModel) -> bool:
+    filename = model.filename.strip()
+    if not filename or "/" in filename or "\\" in filename:
+        return False
+    path = Path(filename)
+    if path.name != filename:
+        return False
+    if path.suffix.casefold() not in PROVIDER_FILENAME_ONLY_EXTENSIONS:
+        return False
+    stem = path.stem
+    tokens = [
+        token
+        for token in re.split(r"[^a-zA-Z0-9]+", stem.casefold())
+        if token
+    ]
+    if _looks_like_generic_provider_filename(filename, tokens):
+        return False
+    useful = [
+        token
+        for token in tokens
+        if token
+        not in {
+            "bin",
+            "ckpt",
+            "fp8",
+            "fp16",
+            "fp32",
+            "model",
+            "pt",
+            "pth",
+            "safetensors",
+            "scaled",
+        }
+    ]
+    return any(ch.isdigit() for ch in stem) or len(useful) >= 3
+
+
+def _provider_candidate_can_seed_identity(
+    model: RequiredModel,
+    candidate: ProviderModelCandidate,
+) -> bool:
+    return (
+        _provider_identity_resolution_required(model)
+        and candidate.filename.casefold() == model.filename.casefold()
+        and isinstance(candidate.size_bytes, int)
+        and candidate.size_bytes > 0
+        and isinstance(candidate.sha256, str)
+        and len(candidate.sha256) == 64
+    )
+
+
+def _select_reliable_candidates(
+    model: RequiredModel,
+    candidates: list[ProviderModelCandidate],
+) -> list[ProviderModelCandidate]:
+    if not _provider_identity_resolution_required(model):
+        return _reliable_candidates(model, candidates)
+    identity_candidates = [
+        candidate
+        for candidate in candidates
+        if _provider_candidate_can_seed_identity(model, candidate)
+    ]
+    if not identity_candidates:
+        return []
+    identities = {
+        (candidate.sha256, candidate.size_bytes)
+        for candidate in identity_candidates
+    }
+    if len(identities) != 1:
+        return []
+    return sorted(
+        identity_candidates,
+        key=lambda candidate: (
+            0 if candidate.provider == "hugging_face" else 1,
+            candidate.download_url,
+        ),
     )
 
 
@@ -2444,7 +2578,7 @@ def _propagate_downloaded_model_identities(
     identities_by_target = {
         _model_download_target_key(item.model): item.model
         for item in downloaded_models
-        if item.model.checksum is not None and _source_urls(item.model)
+        if item.model.checksum is not None
     }
     for model in models:
         downloaded = identities_by_target.get(_model_download_target_key(model))
@@ -2488,6 +2622,15 @@ def _download_plan_for_missing_groups(
             )
         )
     return items
+
+
+def _availability_can_attempt_download(
+    availability: RequiredModelAvailability,
+) -> bool:
+    return availability.status == "missing" or (
+        availability.status == "possible_match"
+        and availability.source_availability == "resolvable"
+    )
 
 
 def _model_needs_download_disk_preflight(model: RequiredModel) -> bool:

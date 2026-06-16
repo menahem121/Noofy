@@ -129,6 +129,50 @@ describe("RequiredModelsModal", () => {
     expect(screen.getByRole("button", { name: "Replace Existing Workflow" })).toHaveClass("primary-button");
   });
 
+  it("allows provider search for a possible local match when a download can be resolved", () => {
+    const onDownload = vi.fn();
+    render(
+      <RequiredModelsModal
+        importResult={{
+          ...importResult,
+          model_summary: {
+            ...importResult.model_summary,
+            missing_count: 0,
+            possible_match_count: 1,
+            models: [
+              {
+                ...missingModel,
+                source_urls: [],
+                source_availability: "resolvable",
+                status: "possible_match",
+                status_label: "Possible match",
+                verification_level: "filename_only",
+              },
+            ],
+          },
+        }}
+        busy={false}
+        importing={false}
+        downloadJob={null}
+        verificationJob={null}
+        onDownload={onDownload}
+        onCancelDownload={vi.fn()}
+        onContinue={vi.fn()}
+        onReplace={vi.fn()}
+        onCopy={vi.fn()}
+        onReadyAction={vi.fn()}
+        onCancel={vi.fn()}
+        onViewModels={vi.fn()}
+      />,
+    );
+
+    const download = screen.getByRole("button", { name: "Download Missing Models" });
+    expect(download).toBeEnabled();
+    fireEvent.click(download);
+    expect(onDownload).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Can search for a download")).toBeInTheDocument();
+  });
+
   it("keeps variable import content inside one scrollable modal body and wires the X button to cancel", () => {
     const onCancel = vi.fn();
     render(
