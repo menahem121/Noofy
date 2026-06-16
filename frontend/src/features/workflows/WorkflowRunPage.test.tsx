@@ -17,6 +17,7 @@ vi.mock("../three-d/threeDScene", () => ({
 }));
 
 const canvasCss = readFileSync(resolve(process.cwd(), "src/styles/canvas.css"), "utf8");
+const componentsCss = readFileSync(resolve(process.cwd(), "src/styles/components.css"), "utf8");
 
 function jsonResponse(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -4782,16 +4783,17 @@ describe("WorkflowRunPage", () => {
       return Promise.reject(new Error(`Unexpected request: ${url}`));
     });
 
+    const onWorkflowNameChange = vi.fn();
     const page = (workflowId: string) => (
       <RuntimeStatusProvider initialRuntimeState={readyRuntimeState} skipInitialRefresh>
-        <WorkflowRunPage workflowId={workflowId} onBack={vi.fn()} onNavigate={vi.fn()} />
+        <WorkflowRunPage workflowId={workflowId} onBack={vi.fn()} onNavigate={vi.fn()} onWorkflowNameChange={onWorkflowNameChange} />
       </RuntimeStatusProvider>
     );
     const { rerender } = render(page("slow-workflow"));
     rerender(page("fast-workflow"));
 
     expect(await screen.findByDisplayValue("fast saved value")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Fast Workflow" })).toBeInTheDocument();
+    expect(onWorkflowNameChange).toHaveBeenCalledWith("Fast Workflow");
 
     await act(async () => {
       slowPackageResponse.resolve(
@@ -4801,7 +4803,7 @@ describe("WorkflowRunPage", () => {
 
     await waitFor(() => {
       expect(screen.getByDisplayValue("fast saved value")).toBeInTheDocument();
-      expect(screen.queryByRole("heading", { name: "Slow Workflow" })).not.toBeInTheDocument();
+      expect(onWorkflowNameChange).not.toHaveBeenCalledWith("Slow Workflow");
       expect(screen.queryByDisplayValue("slow default")).not.toBeInTheDocument();
     });
   });
@@ -5258,12 +5260,76 @@ describe("WorkflowRunPage", () => {
 
     expect(await screen.findByRole("heading", { name: "Inputs" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Preview" })).toBeInTheDocument();
+    expect(document.querySelector(".main-workspace--workflow-run-classic")).toBeInTheDocument();
+    expect(document.querySelector(".workspace-content--workflow-run-classic")).toBeInTheDocument();
+    expect(document.querySelector(".run-workspace--classic")).toBeInTheDocument();
+    expect(document.querySelector(".preview-panel--pinned")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /back to home/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Text to Image" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Describe the image you want, then let Noofy run the local workflow in the background."),
+    ).not.toBeInTheDocument();
     expect(screen.getByLabelText("Workflow actions")).toHaveClass("workflow-action-bar--inline");
+    expect(screen.getByLabelText("Workflow actions")).toHaveClass("workflow-action-bar--preview-compact");
     expect(screen.getAllByRole("button", { name: /run workflow/i })).toHaveLength(1);
     expect(screen.getByRole("button", { name: /workflow options/i })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Share / Save as .noofy" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Export JSON" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Check Again" })).not.toBeInTheDocument();
+  });
+
+  it("keeps classic pinned preview and loaded media sizing scoped to classic layout", async () => {
+    window.localStorage.setItem("noofy.prefs", JSON.stringify({ viewMode: "classic" }));
+    const dashboardVersion = dashboardUserStateVersionForTest(allEditableWidgetTypesPackageData);
+    const loadedMediaValues = {
+      source_image: { source: "package_asset", kind: "image", asset_id: "package-image.png", filename: "package-image.png" },
+      mask_image: { source: "package_asset", kind: "image", asset_id: "package-mask.png", filename: "package-mask.png" },
+      source_audio: { source: "package_asset", kind: "audio", asset_id: "package-audio.wav", filename: "package-audio.wav" },
+      source_video: { source: "package_asset", kind: "video", asset_id: "package-video.mp4", filename: "package-video.mp4" },
+      source_file: { source: "package_asset", kind: "file", asset_id: "package-file.json", filename: "package-file.json" },
+      source_3d: { source: "package_asset", kind: "3d", asset_id: "package-model.glb", filename: "package-model.glb" },
+    };
+    mockConfiguredDashboardFetch(fetchMock, readyRuntime, allEditableWidgetTypesPackageData, null, (url, init) => {
+      if (url.endsWith("/api/workflows/text_to_image_v0/user-state") && (!init?.method || init.method === "GET")) {
+        return jsonResponse({
+          schema_version: "1",
+          workflow_id: "text_to_image_v0",
+          dashboard_version: dashboardVersion,
+          values: loadedMediaValues,
+          layout_overrides: {},
+          presentation_overrides: {},
+          output_preferences: {},
+        });
+      }
+      return undefined;
+    });
+
+    renderRunPage();
+
+    expect(await screen.findByAltText("Selected image: package-image.png")).toBeInTheDocument();
+    expect(screen.getByAltText("Selected image: package-mask.png")).toBeInTheDocument();
+    expect(document.querySelector(".dashboard-image-input--classic.dashboard-image-input--preview")).toBeInTheDocument();
+    expect(document.querySelector(".dashboard-audio-input--classic.dashboard-audio-input--selected")).toBeInTheDocument();
+    expect(document.querySelector(".dashboard-video-input--classic.dashboard-video-input--selected")).toBeInTheDocument();
+    expect(document.querySelector(".dashboard-file-input--classic.dashboard-file-input--selected")).toBeInTheDocument();
+    expect(document.querySelector(".dashboard-three-d-input--classic.dashboard-three-d-input--selected")).toBeInTheDocument();
+    expect(document.querySelector(".main-workspace--canvas-run")).not.toBeInTheDocument();
+  });
+
+  it("defines the classic pinned preview, input scrolling, and media bounds without changing canvas media sizing", () => {
+    expect(componentsCss).toMatch(/\.workspace-content--workflow-run-classic\s*{[^}]*width:\s*min\(1500px, 100%\);[^}]*padding:\s*14px 24px 32px;/);
+    expect(componentsCss).toMatch(/\.run-workspace--classic\s*{[^}]*gap:\s*26px;[^}]*grid-template-columns:\s*minmax\(360px, 0\.92fr\) minmax\(440px, 1\.08fr\);/);
+    expect(componentsCss).toMatch(/\.main-workspace--workflow-run-classic\s*{[^}]*overflow:\s*hidden;/);
+    expect(componentsCss).toMatch(/\.workspace-content--workflow-run-classic\s*{[^}]*height:\s*calc\(100dvh - var\(--topbar-height\)\);[^}]*overflow:\s*hidden;/);
+    expect(componentsCss).toMatch(/\.run-workspace--classic > \.run-panel\s*{[^}]*height:\s*100%;[^}]*overflow-y:\s*auto;/);
+    expect(componentsCss).toMatch(/\.preview-panel--pinned\s*{[^}]*height:\s*100%;[^}]*overflow:\s*hidden;/);
+    expect(componentsCss).toMatch(/\.preview-panel--pinned \.preview-stage\s*{[^}]*min-height:\s*0;[^}]*aspect-ratio:\s*auto;/);
+    expect(componentsCss).not.toContain(".preview-panel--sticky");
+    expect(componentsCss).toMatch(/\.preview-panel__actions\s*{[^}]*justify-content:\s*flex-end;[^}]*flex-wrap:\s*wrap;/);
+    expect(componentsCss).toMatch(/\.dashboard-image-input--classic\.dashboard-image-input--preview \.dashboard-image-input__surface\s*{[^}]*max-height:\s*320px;[^}]*aspect-ratio:\s*16 \/ 10;/);
+    expect(componentsCss).toMatch(/\.dashboard-video-input--classic\.dashboard-video-input--selected \.dashboard-video-input__player\s*{[^}]*aspect-ratio:\s*16 \/ 9;[^}]*object-fit:\s*contain;/);
+    expect(componentsCss).toMatch(/\.dashboard-three-d-input--classic\.dashboard-three-d-input--selected \.three-d-viewer\s*{[^}]*grid-template-rows:\s*220px auto auto;/);
+    expect(componentsCss).toMatch(/\.dashboard-image-input--canvas \.dashboard-image-input__preview\s*{[^}]*max-height:\s*none;/);
   });
 
   it("switches immediately between Canvas and Classic views and persists the preference", async () => {

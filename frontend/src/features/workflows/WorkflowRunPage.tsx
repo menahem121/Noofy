@@ -1558,7 +1558,6 @@ export function WorkflowRunPage({
   const dashboardSetupRequired = Boolean(
     packageDataForWorkflow && packageNeedsDashboardSetup(packageDataForWorkflow, workflowSummary),
   );
-  const trust = workflowSummary?.trust;
 
   useEffect(() => {
     if (!workflowNameSource) return;
@@ -1868,57 +1867,35 @@ export function WorkflowRunPage({
     developerDetails: showUserFacingMemoryNotice ? memoryDiagnostics : null,
   };
 
-  const pageHeader = (
-    <section className="page-heading page-heading--compact" aria-labelledby="workflow-title">
-      <div>
-        <button className="ghost-button ghost-button--back" type="button" onClick={onBack}>
-          <ArrowLeft size={16} aria-hidden="true" />
-          Back to Home
-        </button>
-        <div className="detail-eyebrow-row">
-          <p className="eyebrow">{workflowSummary?.source_label ?? "Workflow"}</p>
-          {trust ? (
-            <span className={`trust-badge trust-badge--${trust.badge_tone}`} title={trust.summary}>
-              {trust.label}
-            </span>
-          ) : null}
-        </div>
-        <h1 id="workflow-title">{workflowDisplayName(workflowNameSource)}</h1>
-        <p>
-          {workflowSummary?.description
-            ? workflowSummary.description.replace(/^Milestone \d+\s*/i, "")
-            : "Describe the image you want, then let Noofy run the local workflow in the background."}
-        </p>
-      </div>
-      <WorkflowActionBar
-        className="workflow-action-bar--inline"
-        runState={{
-          ...workflowActionBarRunState,
-          memoryLoaded: false,
-          showStatusNotice: false,
-          disabledReason: null,
-          disabledActionLabel: null,
-          developerDetails: null,
-        }}
-        batchCount={batchCount}
-        switchViewLabel="Switch to Canvas view"
-        onRun={() => void handleRun()}
-        onBatchCountChange={setBatchCount}
-        onCancel={() => void handleCancel()}
-        onSwitchView={() => setViewMode("canvas")}
-        onExportNoofy={() => setExportDialog({ extension: ".noofy", url: exportWorkflowUrl(workflowId) })}
-        onExportComfyJson={() => setExportDialog({ extension: ".json", url: exportWorkflowComfyJsonUrl(workflowId) })}
-        onDisabledRunAction={hasRequiredModelFixAction ? () => setRequiredModelsModalOpen(true) : undefined}
-        onRestoreDefaults={() => void handleRestoreDefaults()}
-        onEnterEditLayout={() => {
-          handleEnterEditLayout();
-          setViewMode("canvas");
-        }}
-        onSaveLayout={() => void handleSaveLayout()}
-        onCancelLayoutEdit={handleCancelLayoutEdit}
-        onEditWidgets={onEditWidgets ? handleEditWidgets : undefined}
-      />
-    </section>
+  const classicWorkflowActions = (
+    <WorkflowActionBar
+      className="workflow-action-bar--inline workflow-action-bar--preview-compact"
+      runState={{
+        ...workflowActionBarRunState,
+        memoryLoaded: false,
+        showStatusNotice: false,
+        disabledReason: null,
+        disabledActionLabel: null,
+        developerDetails: null,
+      }}
+      batchCount={batchCount}
+      switchViewLabel="Switch to Canvas view"
+      onRun={() => void handleRun()}
+      onBatchCountChange={setBatchCount}
+      onCancel={() => void handleCancel()}
+      onSwitchView={() => setViewMode("canvas")}
+      onExportNoofy={() => setExportDialog({ extension: ".noofy", url: exportWorkflowUrl(workflowId) })}
+      onExportComfyJson={() => setExportDialog({ extension: ".json", url: exportWorkflowComfyJsonUrl(workflowId) })}
+      onDisabledRunAction={hasRequiredModelFixAction ? () => setRequiredModelsModalOpen(true) : undefined}
+      onRestoreDefaults={() => void handleRestoreDefaults()}
+      onEnterEditLayout={() => {
+        handleEnterEditLayout();
+        setViewMode("canvas");
+      }}
+      onSaveLayout={() => void handleSaveLayout()}
+      onCancelLayoutEdit={handleCancelLayoutEdit}
+      onEditWidgets={onEditWidgets ? handleEditWidgets : undefined}
+    />
   );
 
   const recoveryNoticeElement = workflowTabs?.recoveryNoticeByWorkflowId[workflowId] ? (
@@ -2244,12 +2221,17 @@ export function WorkflowRunPage({
   }
 
   return (
-    <AppLayout activeRoute="workflows" onNavigate={onNavigate} progress={topBarProgress}>
-      {pageHeader}
+    <AppLayout
+      activeRoute="workflows"
+      onNavigate={onNavigate}
+      mainClassName="main-workspace--workflow-run-classic"
+      contentClassName="workspace-content--workflow-run-classic"
+      progress={topBarProgress}
+    >
       {notices}
       {failedRunSummaryElement}
 
-      <section className="run-workspace">
+      <section className="run-workspace run-workspace--classic">
         <form className="run-panel" onSubmit={(event) => event.preventDefault()}>
           <div className="panel-heading">
             <div>
@@ -2299,18 +2281,21 @@ export function WorkflowRunPage({
 
         </form>
 
-        <aside className="preview-panel">
+        <aside className="preview-panel preview-panel--pinned">
           <div className="panel-heading">
             <div>
               <h2>Preview</h2>
               {previewProgressMessage ? <p>{previewProgressMessage}</p> : null}
             </div>
-            {activeValidation?.valid ? (
-              <span className="mini-status">
-                <CheckCircle2 size={13} aria-hidden="true" />
-                Ready
-              </span>
-            ) : null}
+            <div className="preview-panel__actions">
+              {activeValidation?.valid ? (
+                <span className="mini-status">
+                  <CheckCircle2 size={13} aria-hidden="true" />
+                  Ready
+                </span>
+              ) : null}
+              {classicWorkflowActions}
+            </div>
           </div>
 
           <div className={`preview-stage${activeLivePreview ? " preview-stage--live" : ""}`}>

@@ -380,7 +380,7 @@ function renderControl(
       );
 
     case "load_3d":
-      return <AssetThreeDInput inputId={input.id} value={value} validation={validation} disabled={disabled} onChange={onChange} onThreeDUpload={onThreeDUpload} />;
+      return <AssetThreeDInput inputId={input.id} value={value} validation={validation} disabled={disabled} variant={variant} onChange={onChange} onThreeDUpload={onThreeDUpload} />;
 
     case "select":
       return (
@@ -2180,6 +2180,7 @@ function AssetThreeDInput({
   value,
   validation,
   disabled,
+  variant,
   onChange,
   onThreeDUpload,
 }: {
@@ -2187,6 +2188,7 @@ function AssetThreeDInput({
   value: unknown;
   validation: Record<string, unknown>;
   disabled: boolean;
+  variant: DashboardInputControlVariant;
   onChange: (value: unknown) => void;
   onThreeDUpload: (file: File, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal) => Promise<void>;
 }) {
@@ -2261,7 +2263,7 @@ function AssetThreeDInput({
   const mimeType = galleryReference?.mime_type ?? packageReference?.content_type ?? metadata?.content_type;
   const size = galleryReference?.size_bytes ?? packageReference?.size_bytes ?? metadata?.size;
   return (
-    <div className="dashboard-three-d-input">
+    <div className={`dashboard-three-d-input dashboard-three-d-input--${variant}${hasSelection ? " dashboard-three-d-input--selected" : ""}`}>
       <input ref={inputRef} className="dashboard-image-input__file" type="file" accept=".glb,.gltf,.obj,.stl,.fbx,.ply" disabled={disabled || Boolean(progress)} onChange={(event) => void choose(event)} />
       {galleryOpen ? (
         <GalleryPickerModal
