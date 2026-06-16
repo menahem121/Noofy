@@ -22,6 +22,7 @@ import {
   exportWorkflowComfyJsonUrl,
   exportWorkflowUrl,
   fetchAssetBlobUrl,
+  fetchAssetMetadata,
   fetchModelDownloadStatus,
   fetchApiKeySettings,
   fetchJobLogs,
@@ -35,6 +36,8 @@ import {
   fetchWorkflowPackage,
   fetchWorkflowInstallDeveloperDetails,
   fetchWorkflowStatus,
+  galleryContentUrlById,
+  workflowDefaultAssetMediaUrl,
   isEngineJob,
   saveJobOutputToGallery,
   cancelJobOutputGallerySave,
@@ -94,7 +97,18 @@ import {
 import { useAppPreferences } from "../../lib/useAppPreferences";
 import { useWorkflowUserState } from "../../lib/useWorkflowUserState";
 import { workflowDisplayName } from "../../lib/workflowNames";
-import { audioMetadataLabel, fileMetadataLabel, videoMetadataLabel, type OutputAudioMedia, type OutputFileMedia, type OutputThreeDMedia, type OutputVideoMedia } from "./media";
+import {
+  audioMetadataLabel,
+  fileMetadataLabel,
+  isGalleryMediaReference,
+  isPackageAssetReference,
+  isUploadedAssetValue,
+  videoMetadataLabel,
+  type OutputAudioMedia,
+  type OutputFileMedia,
+  type OutputThreeDMedia,
+  type OutputVideoMedia,
+} from "./media";
 import { ThreeDViewer } from "../three-d/ThreeDViewer";
 import {
   failedModelMessage,
@@ -265,6 +279,12 @@ const comparisonImageInputControlTypes = new Set(["load_image", "load_image_mask
 const optimisticJobId = "__pending_workflow_run__";
 const logLimit = 200;
 
+type ComparisonImageSource =
+  | { kind: "uploaded_asset"; workflowId: string; inputId: string; assetId: string }
+  | { kind: "masked_source_asset"; workflowId: string; inputId: string; maskedAssetId: string; sourceAssetId: string }
+  | { kind: "package_asset"; workflowId: string; inputId: string; assetId: string }
+  | { kind: "gallery_reference"; workflowId: string; inputId: string; galleryItemId: string };
+
 export function WorkflowRunPage({
   workflowId,
   onBack,
@@ -295,7 +315,7 @@ export function WorkflowRunPage({
   const [draftLayoutOverrides, setDraftLayoutOverrides] = useState<Record<string, GridItemLayout> | null>(null);
   const [draftActionBarPosition, setDraftActionBarPosition] = useState<CanvasActionBarPosition | null>(null);
   const [draftActionBarTouched, setDraftActionBarTouched] = useState(false);
-  const [runComparisonInputAssetId, setRunComparisonInputAssetId] = useState<string | null>(null);
+  const [runComparisonInputSource, setRunComparisonInputSource] = useState<ComparisonImageSource | null>(null);
   const [gallerySaveByControlId, setGallerySaveByControlId] = useState<Record<string, GallerySaveRequest>>({});
   const [comparisonInputImageUrl, setComparisonInputImageUrl] = useState<string | null>(null);
   const [livePreview, setLivePreview] = useState<StoredLivePreview | null>(null);
@@ -355,11 +375,31 @@ export function WorkflowRunPage({
 
   useEffect(() => {
     setComparisonInputImageUrl(null);
-    if (!runComparisonInputAssetId) return undefined;
+    if (!runComparisonInputSource) return undefined;
+
+    if (runComparisonInputSource.kind === "package_asset") {
+      setComparisonInputImageUrl(
+        workflowDefaultAssetMediaUrl(
+          runComparisonInputSource.workflowId,
+          runComparisonInputSource.inputId,
+          runComparisonInputSource.assetId,
+        ),
+      );
+      return undefined;
+    }
+
+    if (runComparisonInputSource.kind === "gallery_reference") {
+      setComparisonInputImageUrl(galleryContentUrlById(runComparisonInputSource.galleryItemId));
+      return undefined;
+    }
 
     let canceled = false;
     let objectUrl: string | null = null;
-    fetchAssetBlobUrl(runComparisonInputAssetId)
+    const assetId =
+      runComparisonInputSource.kind === "masked_source_asset"
+        ? runComparisonInputSource.sourceAssetId
+        : runComparisonInputSource.assetId;
+    fetchAssetBlobUrl(assetId)
       .then((url) => {
         if (canceled) {
           URL.revokeObjectURL(url);
@@ -376,7 +416,7 @@ export function WorkflowRunPage({
       canceled = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [runComparisonInputAssetId]);
+  }, [runComparisonInputSource]);
 
   // A workflow prop change renders before the reset effect below runs. Keep
   // the previous workflow's requirements out of reconciliation and UI.
@@ -692,7 +732,7 @@ export function WorkflowRunPage({
     setModelDownloadStarting(false);
     setModelVerificationJob(null);
     setModelVerificationError(null);
-    setRunComparisonInputAssetId(null);
+    setRunComparisonInputSource(null);
     clearLivePreview();
     trackedRunsRef.current = [];
     setTrackedRuns([]);
@@ -855,20 +895,23 @@ export function WorkflowRunPage({
       setInputValue(id, seedCursor[id]);
     }
     const outputPreferencesSnapshot = getOutputPreferencesSnapshot();
-    const submittedComparisonInputAssetId = comparisonImageAssetIdForRun(
-      packageDataForWorkflow,
-      allControls,
-      submittedValuesSnapshot,
-    );
     // Pressing Run while this workflow already has an active run queues more
     // runs behind it: keep the active run's progress, live preview, and
     // comparison on screen instead of flashing back to a starting state.
     const queueingBehindActiveRun =
       trackedRunsRef.current.some(isTrackedRunActive) || isActiveWorkflowProgress(displayedProgress);
+    const submittedComparisonInputSourcePromise = queueingBehindActiveRun
+      ? Promise.resolve(null)
+      : comparisonImageSourceForRun(
+        workflowId,
+        packageDataForWorkflow,
+        allControls,
+        submittedValuesSnapshot,
+      );
     beginRunSubmission();
     if (!queueingBehindActiveRun) {
       clearLivePreview();
-      setRunComparisonInputAssetId(submittedComparisonInputAssetId);
+      setRunComparisonInputSource(null);
     }
     setFailureDialog(null);
     setInputErrorDialog(null);
@@ -893,6 +936,10 @@ export function WorkflowRunPage({
     }
 
     try {
+      if (!queueingBehindActiveRun) {
+        const submittedComparisonInputSource = await submittedComparisonInputSourcePromise;
+        setRunComparisonInputSource(submittedComparisonInputSource);
+      }
       for (let index = 0; index < runCount; index += 1) {
         const response = await runWorkflow(workflowId, {
           inputs: { ...generationInputs[index] },
@@ -903,7 +950,7 @@ export function WorkflowRunPage({
         if (!isEngineJob(response)) {
           stopPreparationTracking();
           finishRunSubmission();
-          setRunComparisonInputAssetId(null);
+          setRunComparisonInputSource(null);
           const userError = firstRunUserFixableError(response);
           const message = workflowValidationErrorMessage(response);
           const preparationFailure = response.error_category === "workflow_preparation";
@@ -958,7 +1005,7 @@ export function WorkflowRunPage({
       finishRunSubmission();
       setRunPreparationDialog(null);
       void refreshWorkflowStatusAfterRun();
-      setRunComparisonInputAssetId(null);
+      setRunComparisonInputSource(null);
       setState((current) => ({
         ...current,
         job: null,
@@ -4614,34 +4661,59 @@ function extensionFromFilename(filename: string): string | null {
   return parts.length > 1 ? `.${parts[parts.length - 1].toLowerCase()}` : null;
 }
 
-function comparisonImageAssetIdForRun(
+async function comparisonImageSourceForRun(
+  workflowId: string,
   packageData: WorkflowPackageResponse | null,
   controls: DashboardControlDef[],
   inputValues: Record<string, unknown>,
-): string | null {
+): Promise<ComparisonImageSource | null> {
   for (const control of controls) {
     if (!comparisonImageInputControlTypes.has(control.type) || !control.input_id) continue;
     const value = inputValues[control.input_id];
-    if (isDashboardImageAssetReference(value)) return value;
+    const source = await comparisonImageSourceFromValue(workflowId, control.input_id, value);
+    if (source) return source;
   }
 
   for (const input of packageData?.inputs ?? []) {
     if (!comparisonImageInputControlTypes.has(input.control)) continue;
     const value = inputValues[input.id];
-    if (isDashboardImageAssetReference(value)) return value;
+    const source = await comparisonImageSourceFromValue(workflowId, input.id, value);
+    if (source) return source;
   }
 
   return null;
 }
 
-function isDashboardImageAssetReference(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    value.trim().length > 0 &&
-    !value.includes("/") &&
-    !value.includes("\\") &&
-    /\.(?:png|jpg|jpeg|webp|gif)$/i.test(value)
-  );
+async function comparisonImageSourceFromValue(
+  workflowId: string,
+  inputId: string,
+  value: unknown,
+): Promise<ComparisonImageSource | null> {
+  if (isUploadedAssetValue(value)) {
+    try {
+      const metadata = await fetchAssetMetadata(value);
+      if (metadata.has_mask && metadata.source_asset_id && isUploadedAssetValue(metadata.source_asset_id)) {
+        return {
+          kind: "masked_source_asset",
+          workflowId,
+          inputId,
+          maskedAssetId: value,
+          sourceAssetId: metadata.source_asset_id,
+        };
+      }
+    } catch {
+      // If metadata is unavailable, fall back to the selected asset. The image
+      // fetch below still decides whether comparison can be shown.
+    }
+    return { kind: "uploaded_asset", workflowId, inputId, assetId: value };
+  }
+  if (isPackageAssetReference(value) && value.kind === "image") {
+    return { kind: "package_asset", workflowId, inputId, assetId: value.asset_id };
+  }
+  if (isGalleryMediaReference(value) && value.kind === "image") {
+    return { kind: "gallery_reference", workflowId, inputId, galleryItemId: value.gallery_item_id };
+  }
+  return null;
 }
 
 function dashboardUserStateVersion(packageData: WorkflowPackageResponse | null): string {

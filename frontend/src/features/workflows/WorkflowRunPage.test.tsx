@@ -6371,6 +6371,378 @@ describe("WorkflowRunPage", () => {
     });
   });
 
+  it("uses a packaged default image as the before source for output comparison", async () => {
+    const packagedDefault = {
+      source: "package_asset",
+      asset_id: "input-defaults/starter.png",
+      kind: "image",
+      filename: "starter.png",
+      content_type: "image/png",
+      size_bytes: 123,
+      sha256: `sha256:${"a".repeat(64)}`,
+    };
+    const packageData = {
+      ...imageInputPackageData,
+      inputs: imageInputPackageData.inputs.map((input) => ({
+        ...input,
+        default: packagedDefault,
+        default_pinned: true,
+      })),
+      outputs: [{ id: "image", label: "Image", node_id: "9", type: "image" }],
+      dashboard: {
+        version: "0.1.0",
+        status: "configured",
+        sections: [
+          {
+            id: "main",
+            title: "Main",
+            controls: [
+              {
+                id: "ctrl-source-image",
+                type: "load_image",
+                label: "Source image",
+                input_id: "source_image",
+                required: true,
+                layout: { x: 0, y: 0, w: 12, h: 6 },
+              },
+              {
+                id: "result",
+                type: "display_image",
+                label: "Result",
+                output_id: "image",
+                layout: { x: 12, y: 0, w: 12, h: 8 },
+              },
+            ],
+          },
+        ],
+      },
+    };
+    let runBody: { inputs?: Record<string, unknown> } | null = null;
+    mockConfiguredDashboardFetch(
+      fetchMock,
+      readyRuntime,
+      packageData,
+      (init?: RequestInit) => {
+        runBody = JSON.parse(String(init?.body ?? "{}"));
+        return {
+          job_id: "job-package-edit",
+          workflow_id: "text_to_image_v0",
+          engine: "comfyui",
+          status: "queued",
+        };
+      },
+      (url) => {
+        if (url.endsWith("/api/jobs/job-package-edit/progress")) {
+          return jsonResponse({
+            job_id: "job-package-edit",
+            status: "completed",
+            value: 1,
+            max: 1,
+            current_node: null,
+            message: "Execution completed",
+          });
+        }
+        if (url.endsWith("/api/jobs/job-package-edit/result")) {
+          return jsonResponse({
+            job_id: "job-package-edit",
+            status: "completed",
+            outputs: [
+              {
+                node_id: "9",
+                output: {
+                  images: [
+                    {
+                      view_url:
+                        "/api/jobs/job-package-edit/outputs/view?filename=edited.png&subfolder=&type=output",
+                    },
+                  ],
+                },
+              },
+            ],
+            error: null,
+          });
+        }
+        return undefined;
+      },
+    );
+
+    const { container } = renderRunPage();
+    const packageAssetUrl =
+      "/api/workflows/text_to_image_v0/inputs/source_image/default-asset?asset_id=input-defaults%2Fstarter.png";
+
+    expect(await screen.findByAltText("Selected image: starter.png")).toHaveAttribute("src", packageAssetUrl);
+    fireEvent.click(await screen.findByRole("button", { name: /run workflow/i }));
+
+    const slider = await screen.findByRole("slider", { name: /compare original image/i });
+    expect(slider).toBeInTheDocument();
+    await waitFor(() => {
+      expect(runBody).toEqual(
+        expect.objectContaining({
+          inputs: expect.objectContaining({ source_image: packagedDefault }),
+        }),
+      );
+    });
+    expect(screen.getByAltText("Generated workflow output")).toHaveAttribute(
+      "src",
+      "/api/jobs/job-package-edit/outputs/view?filename=edited.png&subfolder=&type=output",
+    );
+    const beforeImage = container.querySelector(".image-comparison-slider__image--before");
+    expect(beforeImage).toHaveAttribute("src", packageAssetUrl);
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes("/api/assets/input-defaults"))).toBe(false);
+  });
+
+  it("uses the source asset behind a masked dashboard image for output comparison", async () => {
+    const maskedAssetId = "065c50a0-623b-471f-96a7-075cd7bf25c6.png";
+    const sourceAssetId = "2694e2a5-66d8-4998-aca1-48f25503dfe8.png";
+    let objectUrlIndex = 0;
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: vi.fn(() => {
+        objectUrlIndex += 1;
+        return `blob:asset-${objectUrlIndex}`;
+      }),
+    });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
+
+    const packageData = {
+      ...imageInputPackageData,
+      outputs: [{ id: "image", label: "Image", node_id: "9", type: "image" }],
+      dashboard: {
+        version: "0.1.0",
+        status: "configured",
+        sections: [
+          {
+            id: "main",
+            title: "Main",
+            controls: [
+              {
+                id: "ctrl-source-image",
+                type: "load_image",
+                label: "Source image",
+                input_id: "source_image",
+                required: true,
+                layout: { x: 0, y: 0, w: 12, h: 6 },
+              },
+              {
+                id: "result",
+                type: "display_image",
+                label: "Result",
+                output_id: "image",
+                layout: { x: 12, y: 0, w: 12, h: 8 },
+              },
+            ],
+          },
+        ],
+      },
+    };
+    const dashboardVersion = dashboardUserStateVersionForTest(packageData);
+    let runBody: { inputs?: Record<string, unknown> } | null = null;
+    mockConfiguredDashboardFetch(
+      fetchMock,
+      readyRuntime,
+      packageData,
+      (init?: RequestInit) => {
+        runBody = JSON.parse(String(init?.body ?? "{}"));
+        return {
+          job_id: "job-masked-edit",
+          workflow_id: "text_to_image_v0",
+          engine: "comfyui",
+          status: "queued",
+        };
+      },
+      (url) => {
+        if (url.endsWith(`/api/assets/${maskedAssetId}/metadata`)) {
+          return jsonResponse({
+            asset_id: maskedAssetId,
+            original_filename: "Flux2-Klein_00002_-mask.png",
+            content_type: "image/png",
+            kind: "image",
+            has_mask: true,
+            source_asset_id: sourceAssetId,
+          });
+        }
+        if (url.endsWith(`/api/assets/${sourceAssetId}/metadata`)) {
+          return jsonResponse({
+            asset_id: sourceAssetId,
+            original_filename: "Flux2-Klein_00002_.png",
+            content_type: "image/png",
+            kind: "image",
+          });
+        }
+        if (url.endsWith(`/api/assets/${maskedAssetId}`)) {
+          return new Response(new Blob(["masked"], { type: "image/png" }), { status: 200 });
+        }
+        if (url.endsWith(`/api/assets/${sourceAssetId}`)) {
+          return new Response(new Blob(["source"], { type: "image/png" }), { status: 200 });
+        }
+        if (url.endsWith("/api/workflows/text_to_image_v0/user-state")) {
+          return jsonResponse({
+            schema_version: "1",
+            workflow_id: "text_to_image_v0",
+            dashboard_version: dashboardVersion,
+            values: { source_image: maskedAssetId },
+            layout_overrides: {},
+          });
+        }
+        if (url.endsWith("/api/jobs/job-masked-edit/progress")) {
+          return jsonResponse({
+            job_id: "job-masked-edit",
+            status: "completed",
+            value: 1,
+            max: 1,
+            current_node: null,
+            message: "Execution completed",
+          });
+        }
+        if (url.endsWith("/api/jobs/job-masked-edit/result")) {
+          return jsonResponse({
+            job_id: "job-masked-edit",
+            status: "completed",
+            outputs: [
+              {
+                node_id: "9",
+                output: {
+                  images: [
+                    {
+                      view_url:
+                        "/api/jobs/job-masked-edit/outputs/view?filename=edited.png&subfolder=&type=output",
+                    },
+                  ],
+                },
+              },
+            ],
+            error: null,
+          });
+        }
+        return undefined;
+      },
+    );
+
+    const { container } = renderRunPage();
+
+    await waitFor(() => {
+      expect(screen.getByAltText("Selected image: Flux2-Klein_00002_-mask.png")).toHaveAttribute("src", "blob:asset-1");
+    });
+    fireEvent.click(await screen.findByRole("button", { name: /run workflow/i }));
+
+    const slider = await screen.findByRole("slider", { name: /compare original image/i });
+    expect(slider).toBeInTheDocument();
+    await waitFor(() => {
+      expect(runBody).toEqual(
+        expect.objectContaining({
+          inputs: expect.objectContaining({ source_image: maskedAssetId }),
+        }),
+      );
+    });
+    const beforeImage = container.querySelector(".image-comparison-slider__image--before");
+    await waitFor(() => {
+      expect(beforeImage).toHaveAttribute("src", "blob:asset-2");
+    });
+    expect(
+      fetchMock.mock.calls.some(([input]) => String(input).endsWith(`/api/assets/${sourceAssetId}`)),
+    ).toBe(true);
+  });
+
+  it("uses a gallery image reference as the before source for output comparison", async () => {
+    const galleryReference = {
+      source: "gallery",
+      gallery_item_id: "gallery-image-1",
+      kind: "image",
+      filename: "gallery-source.png",
+    };
+    const packageData = {
+      ...imageInputPackageData,
+      inputs: imageInputPackageData.inputs.map((input) => ({
+        ...input,
+        default: galleryReference,
+      })),
+      outputs: [{ id: "image", label: "Image", node_id: "9", type: "image" }],
+      dashboard: {
+        version: "0.1.0",
+        status: "configured",
+        sections: [
+          {
+            id: "main",
+            title: "Main",
+            controls: [
+              {
+                id: "ctrl-source-image",
+                type: "load_image",
+                label: "Source image",
+                input_id: "source_image",
+                required: true,
+                layout: { x: 0, y: 0, w: 12, h: 6 },
+              },
+              {
+                id: "result",
+                type: "display_image",
+                label: "Result",
+                output_id: "image",
+                layout: { x: 12, y: 0, w: 12, h: 8 },
+              },
+            ],
+          },
+        ],
+      },
+    };
+    mockConfiguredDashboardFetch(
+      fetchMock,
+      readyRuntime,
+      packageData,
+      {
+        job_id: "job-gallery-edit",
+        workflow_id: "text_to_image_v0",
+        engine: "comfyui",
+        status: "queued",
+      },
+      (url) => {
+        if (url.endsWith("/api/jobs/job-gallery-edit/progress")) {
+          return jsonResponse({
+            job_id: "job-gallery-edit",
+            status: "completed",
+            value: 1,
+            max: 1,
+            current_node: null,
+            message: "Execution completed",
+          });
+        }
+        if (url.endsWith("/api/jobs/job-gallery-edit/result")) {
+          return jsonResponse({
+            job_id: "job-gallery-edit",
+            status: "completed",
+            outputs: [
+              {
+                node_id: "9",
+                output: {
+                  images: [
+                    {
+                      view_url:
+                        "/api/jobs/job-gallery-edit/outputs/view?filename=edited.png&subfolder=&type=output",
+                    },
+                  ],
+                },
+              },
+            ],
+            error: null,
+          });
+        }
+        return undefined;
+      },
+    );
+
+    const { container } = renderRunPage();
+
+    expect(await screen.findByAltText("Selected image: gallery-source.png")).toHaveAttribute(
+      "src",
+      "/api/gallery/gallery-image-1/content",
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /run workflow/i }));
+
+    expect(await screen.findByRole("slider", { name: /compare original image/i })).toBeInTheDocument();
+    const beforeImage = container.querySelector(".image-comparison-slider__image--before");
+    expect(beforeImage).toHaveAttribute("src", "/api/gallery/gallery-image-1/content");
+  });
+
   it("renders each canvas output widget from its bound result node", async () => {
     const createObjectUrl = vi.fn(() => "blob:noofy-output");
     const revokeObjectUrl = vi.fn();
