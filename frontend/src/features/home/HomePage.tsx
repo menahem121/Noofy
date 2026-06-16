@@ -791,8 +791,8 @@ export function HomePage({
                 <FileUp size={26} aria-hidden="true" />
               </div>
               <div>
-                <h2>Import Workflow Package</h2>
-                <p>Import a .noofy workflow package and run it through Noofy.</p>
+                <h2>Import any ComfyUI Workflow</h2>
+                <p>Import a .json or .noofy ComfyUI workflow to run it through Noofy.</p>
               </div>
               <label
                 className={`secondary-button action-card__button${homeData.importing ? " is-disabled" : ""}`}

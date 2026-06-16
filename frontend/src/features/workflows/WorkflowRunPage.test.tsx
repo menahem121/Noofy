@@ -1083,10 +1083,10 @@ describe("WorkflowRunPage", () => {
       </RuntimeStatusProvider>,
     );
 
-    const dialog = await screen.findByRole("dialog", { name: "Refresh Noofy to reload this workflow" });
-    expect(within(dialog).getByText("The workflow data did not load. Refresh the page before continuing.")).toBeInTheDocument();
+    const dialog = await screen.findByRole("dialog", { name: "Reload this workflow" });
+    expect(within(dialog).getByText("Noofy could not load this workflow. Reload it before continuing.")).toBeInTheDocument();
 
-    fireEvent.click(within(dialog).getByRole("button", { name: "Refresh Noofy" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Reload workflow" }));
 
     expect(reloadPage).toHaveBeenCalledTimes(1);
   });
@@ -1111,11 +1111,11 @@ describe("WorkflowRunPage", () => {
     );
 
     expect(await screen.findByRole("main", { name: /workflow dashboard canvas/i })).toBeInTheDocument();
-    const dialog = await screen.findByRole("dialog", { name: "Refresh Noofy to reload this workflow" });
-    expect(within(dialog).getByText("Noofy restarted, but this page still has data from the previous app session.")).toBeInTheDocument();
+    const dialog = await screen.findByRole("dialog", { name: "Reload this workflow" });
+    expect(within(dialog).getByText("Noofy restarted in the background. Reload this workflow to reconnect it to the current session.")).toBeInTheDocument();
     expect(reloadPage).not.toHaveBeenCalled();
 
-    fireEvent.click(within(dialog).getByRole("button", { name: "Refresh Noofy" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Reload workflow" }));
 
     expect(reloadPage).toHaveBeenCalledTimes(1);
   });

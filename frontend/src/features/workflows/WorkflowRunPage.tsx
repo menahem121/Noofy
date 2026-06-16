@@ -2055,8 +2055,8 @@ export function WorkflowRunPage({
   ) : null;
   const workflowRefreshRequired = runtimeStatus.pageRefreshRequired || Boolean(state.packageLoadError);
   const workflowRefreshMessage = runtimeStatus.pageRefreshRequired
-    ? "Noofy restarted, but this page still has data from the previous app session."
-    : "The workflow data did not load. Refresh the page before continuing.";
+    ? "Noofy restarted in the background. Reload this workflow to reconnect it to the current session."
+    : "Noofy could not load this workflow. Reload it before continuing.";
 
   const notices = (
     <>
@@ -2605,13 +2605,14 @@ function WorkflowRefreshRequiredDialog({
           </div>
           <div>
             <p className="eyebrow">Workflow session</p>
-            <h2 id="workflow-refresh-required-title">Refresh Noofy to reload this workflow</h2>
+            <h2 id="workflow-refresh-required-title">Reload this workflow</h2>
             <p>{message}</p>
           </div>
         </header>
         <footer className="workflow-refresh-required-modal__footer">
-          <button className="primary-button" type="button" onClick={onRefresh}>
-            Refresh Noofy
+          <button className="primary-button primary-button--compact" type="button" onClick={onRefresh}>
+            <RotateCcw size={15} aria-hidden="true" />
+            Reload workflow
           </button>
         </footer>
       </section>
