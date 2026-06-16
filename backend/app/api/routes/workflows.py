@@ -99,7 +99,7 @@ async def get_workflow_default_asset(
 @router.get("/workflows/{workflow_id}/details")
 async def get_workflow_details(workflow_id: str, library: WorkflowLibraryServiceDep):
     try:
-        return library.workflow_details(workflow_id)
+        return await asyncio.to_thread(library.workflow_details, workflow_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -139,7 +139,7 @@ async def remove_workflow(workflow_id: str, engine_service: EngineServiceDep):
 @router.get("/workflows/{workflow_id}/model-summary")
 async def get_workflow_model_summary(workflow_id: str, library: WorkflowLibraryServiceDep):
     try:
-        return library.model_availability_summary(workflow_id)
+        return await asyncio.to_thread(library.model_availability_summary, workflow_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
