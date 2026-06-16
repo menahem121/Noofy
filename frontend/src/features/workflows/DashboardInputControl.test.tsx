@@ -169,6 +169,10 @@ function renderEditableImageWithMask({
   return { ...renderResult, canvasMock };
 }
 
+async function waitForMaskEditorOpen() {
+  return screen.findByLabelText("Mask drawing area");
+}
+
 describe("DashboardInputControl", () => {
   const fetchMock = vi.fn();
   const createObjectUrlMock = vi.fn(() => "blob:noofy-upload-preview");
@@ -563,7 +567,7 @@ describe("DashboardInputControl", () => {
 
     await waitFor(() => {
       expect(prepareGalleryMask).toHaveBeenCalledWith("image", "gallery-image-1");
-      expect(screen.getByRole("dialog", { name: "Mask" })).toBeInTheDocument();
+      expect(screen.getByLabelText("Mask drawing area")).toBeInTheDocument();
     });
   });
 
@@ -628,7 +632,7 @@ describe("DashboardInputControl", () => {
     });
 
     fireEvent.click(await screen.findByRole("button", { name: "Mask" }));
-    await screen.findByRole("dialog", { name: "Mask" });
+    await waitForMaskEditorOpen();
     fireEvent.change(screen.getByLabelText("Mask strength"), { target: { value: "0.5" } });
     const maskCanvas = container.ownerDocument.querySelector(".mask-editor__canvas--mask") as HTMLCanvasElement;
     fireEvent.pointerDown(maskCanvas, { clientX: 10, clientY: 10, pointerId: 1 });
@@ -638,7 +642,7 @@ describe("DashboardInputControl", () => {
     await waitFor(() => {
       expect(onImageMaskApply).toHaveBeenCalledWith("12345678-1234-1234-1234-123456789abc.png", expect.any(Blob));
       expect(onChange).toHaveBeenCalledWith("33333333-3333-3333-3333-333333333333.png");
-      expect(screen.queryByRole("dialog", { name: "Mask" })).not.toBeInTheDocument();
+      expect(screen.queryByLabelText("Mask drawing area")).not.toBeInTheDocument();
     });
   });
 
@@ -678,7 +682,7 @@ describe("DashboardInputControl", () => {
     );
 
     fireEvent.click(await screen.findByRole("button", { name: "Mask" }));
-    await screen.findByRole("dialog", { name: "Mask" });
+    await waitForMaskEditorOpen();
     fireEvent.click(screen.getByRole("button", { name: "Clear mask" }));
     fireEvent.click(screen.getByRole("button", { name: "Reset mask" }));
 
@@ -741,7 +745,7 @@ describe("DashboardInputControl", () => {
     });
 
     fireEvent.click(await screen.findByRole("button", { name: "Mask" }));
-    await screen.findByRole("dialog", { name: "Mask" });
+    await waitForMaskEditorOpen();
     await waitFor(() => expect(screen.getByLabelText("Mask strength")).not.toBeDisabled());
     const maskCanvas = document.querySelector(".mask-editor__canvas--mask") as HTMLCanvasElement;
 

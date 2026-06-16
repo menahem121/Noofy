@@ -93,6 +93,7 @@ from app.workflows.import_normalization import (
     detect_unresolved_runtime_inputs,
     filter_resolved_runtime_inputs,
     has_nonempty_launch_option,
+    model_source_urls_from_comfyui_workflow,
     normalize_asset_ownership,
     normalize_custom_nodes,
     normalize_dashboard,
@@ -654,7 +655,14 @@ class NoofyArchiveImporter:
         display_name = _normalized_display_name(package_json, fallback=package_id)
         metadata_fields = _normalized_metadata_fields(package_json)
 
-        models = _normalize_models(capsule_json)
+        models = _with_comfyui_workflow_model_source_urls(
+            _normalize_models(capsule_json),
+            (
+                self._read_json("comfyui_workflow.json")
+                if "comfyui_workflow.json" in self.members
+                else None
+            ),
+        )
         custom_nodes = _normalize_custom_nodes(capsule_json, package_json)
         dashboard = _normalize_dashboard(dashboard_json)
         dashboard_inputs = [
@@ -1114,6 +1122,32 @@ def _normalize_signed_registry_metadata(value: Any) -> SignedRegistryMetadata | 
 
 def _normalize_models(capsule_json: dict[str, Any]) -> list[RequiredModel]:
     return normalize_models(capsule_json)
+
+
+def _with_comfyui_workflow_model_source_urls(
+    models: list[RequiredModel],
+    comfyui_workflow: dict[str, Any] | None,
+) -> list[RequiredModel]:
+    if not models or not isinstance(comfyui_workflow, dict):
+        return models
+    urls_by_model = _comfyui_workflow_model_source_urls(comfyui_workflow)
+    if not urls_by_model:
+        return models
+    for model in models:
+        if model.source_urls or model.source_url:
+            continue
+        source_urls = urls_by_model.get((model.folder, model.filename))
+        if not source_urls:
+            continue
+        model.source_urls = source_urls
+        model.source_url = source_urls[0]
+    return models
+
+
+def _comfyui_workflow_model_source_urls(
+    comfyui_workflow: dict[str, Any],
+) -> dict[tuple[str, str], list[str]]:
+    return model_source_urls_from_comfyui_workflow(comfyui_workflow)
 
 
 def _normalize_model_verification_level(

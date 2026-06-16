@@ -5,6 +5,7 @@ from typing import Any, Literal
 from app.artifacts import ModelVerificationLevel
 from app.workflows.import_normalization import (
     filter_resolved_runtime_inputs,
+    model_source_urls_from_comfyui_workflow,
     normalize_custom_nodes,
 )
 from app.workflows.package import (
@@ -225,6 +226,7 @@ class WorkflowPackageLoader:
         # Strip inputs/outputs from data before model_validate to avoid conflicts
         data_clean = {k: v for k, v in data.items() if k not in ("inputs", "outputs", "dashboard")}
         _enrich_required_models_from_capsule_lock(data_clean, package_dir / _CAPSULE_LOCK_FILENAME)
+        _repair_required_model_source_urls_from_source_files(data_clean, package_dir)
         _repair_imported_custom_nodes_from_source_files(data_clean, package_dir)
         raw_unresolved_inputs = data_clean.get("unresolved_runtime_inputs")
         if isinstance(raw_unresolved_inputs, list):
@@ -302,6 +304,41 @@ def _enrich_required_models_from_capsule_lock(package_data: dict[str, Any], caps
         if locked is None:
             continue
         _fill_required_model_identity_from_lock(model, locked)
+
+
+def _repair_required_model_source_urls_from_source_files(
+    package_data: dict[str, Any],
+    package_dir: Path,
+) -> None:
+    raw_models = package_data.get("required_models")
+    if not isinstance(raw_models, list):
+        return
+    source_workflow_path = package_dir / "source-files" / "comfyui_workflow.json"
+    if not source_workflow_path.exists():
+        return
+    try:
+        source_workflow = json.loads(source_workflow_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if not isinstance(source_workflow, dict):
+        return
+    urls_by_model = model_source_urls_from_comfyui_workflow(source_workflow)
+    if not urls_by_model:
+        return
+    for model in raw_models:
+        if not isinstance(model, dict):
+            continue
+        if model.get("source_urls") or model.get("source_url"):
+            continue
+        folder = model.get("folder") or model.get("comfyui_folder")
+        filename = model.get("filename")
+        if not isinstance(folder, str) or not isinstance(filename, str):
+            continue
+        source_urls = urls_by_model.get((folder, filename))
+        if not source_urls:
+            continue
+        model["source_urls"] = source_urls
+        model["source_url"] = source_urls[0]
 
 
 def _repair_imported_custom_nodes_from_source_files(

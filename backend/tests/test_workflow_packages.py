@@ -112,6 +112,67 @@ def test_loader_enriches_weak_package_model_identity_from_capsule_lock(tmp_path:
     assert model.verification_level is ModelVerificationLevel.SHA256_SIZE
 
 
+def test_loader_repairs_missing_model_source_url_from_source_workflow(tmp_path: Path) -> None:
+    source_url = (
+        "https://huggingface.co/example/repo/resolve/main/"
+        "checkpoints/demo.safetensors"
+    )
+    package_dir = tmp_path / "packages" / "missing_source_url"
+    package_dir.mkdir(parents=True)
+    (package_dir / "package.json").write_text(
+        json.dumps(
+            {
+                "metadata": {
+                    "id": "missing_source_url",
+                    "name": "Missing Source URL",
+                    "version": "0.1.0",
+                },
+                "engine": "comfyui",
+                "required_models": [
+                    {
+                        "folder": "checkpoints",
+                        "filename": "demo.safetensors",
+                        "checksum": "sha256:" + ("a" * 64),
+                        "size_bytes": 123,
+                    }
+                ],
+                "comfyui_graph": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    source_files = package_dir / "source-files"
+    source_files.mkdir()
+    (source_files / "comfyui_workflow.json").write_text(
+        json.dumps(
+            {
+                "nodes": [
+                    {
+                        "id": 1,
+                        "type": "CheckpointLoaderSimple",
+                        "properties": {
+                            "models": [
+                                {
+                                    "directory": "checkpoints",
+                                    "name": "demo.safetensors",
+                                    "url": source_url,
+                                }
+                            ]
+                        },
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    package = WorkflowPackageLoader(tmp_path / "packages").get_package("missing_source_url")
+
+    model = package.required_models[0]
+    assert model.source_url == source_url
+    assert model.source_urls == [source_url]
+
+
 def test_loader_filters_unresolved_inputs_resolved_by_dashboard_override(tmp_path: Path) -> None:
     package_dir = tmp_path / "packages" / "image_workflow"
     package_dir.mkdir(parents=True)

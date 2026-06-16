@@ -3,7 +3,7 @@ from __future__ import annotations
 import mimetypes
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from app.artifacts import AssetOwnership, ModelVerificationLevel
 from app.workflows.package import (
@@ -249,6 +249,55 @@ def normalize_models(capsule_json: dict[str, Any]) -> list[RequiredModel]:
             )
         )
     return normalized
+
+
+def model_source_urls_from_comfyui_workflow(
+    comfyui_workflow: dict[str, Any],
+) -> dict[tuple[str, str], list[str]]:
+    urls_by_model: dict[tuple[str, str], list[str]] = {}
+    for node in _iter_comfyui_workflow_nodes(comfyui_workflow):
+        properties = node.get("properties")
+        if not isinstance(properties, dict):
+            continue
+        model_entries = properties.get("models")
+        if not isinstance(model_entries, list):
+            continue
+        for entry in model_entries:
+            if not isinstance(entry, dict):
+                continue
+            folder = optional_string_field(entry, "directory")
+            filename = optional_string_field(entry, "name")
+            if not folder or not filename:
+                continue
+            source_urls = normalize_source_urls(
+                entry.get("source_urls"),
+                fallback=entry.get("url"),
+            )
+            if not source_urls:
+                continue
+            key = (folder, filename)
+            merged = urls_by_model.setdefault(key, [])
+            for url in source_urls:
+                if url not in merged:
+                    merged.append(url)
+    return urls_by_model
+
+
+def _iter_comfyui_workflow_nodes(value: Any) -> Iterator[dict[str, Any]]:
+    if isinstance(value, dict):
+        nodes = value.get("nodes")
+        if isinstance(nodes, list):
+            for node in nodes:
+                if isinstance(node, dict):
+                    yield node
+        definitions = value.get("definitions")
+        if isinstance(definitions, dict):
+            for definition in definitions.values():
+                yield from _iter_comfyui_workflow_nodes(definition)
+        return
+    if isinstance(value, list):
+        for item in value:
+            yield from _iter_comfyui_workflow_nodes(item)
 
 
 def normalize_model_verification_level(

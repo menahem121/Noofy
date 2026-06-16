@@ -326,6 +326,54 @@ def test_noofy_importer_normalizes_single_model_source_url_string() -> None:
     assert model.source_urls == [source_url]
 
 
+def test_noofy_importer_backfills_model_source_url_from_editable_workflow() -> None:
+    source_url = (
+        "https://huggingface.co/example/repo/resolve/main/"
+        "upscale_models/upscale.safetensors"
+    )
+    archive = _archive_bytes_with_comfyui_workflow_update(
+        {
+            "nodes": [
+                {
+                    "id": 12,
+                    "type": "UpscaleModelLoader",
+                    "widgets_values": ["upscale.safetensors"],
+                    "properties": {
+                        "models": [
+                            {
+                                "directory": "upscale_models",
+                                "name": "upscale.safetensors",
+                                "url": source_url,
+                            }
+                        ]
+                    },
+                }
+            ]
+        },
+        archive_bytes=_archive_bytes_with_capsule_update(
+            {
+                "models": [
+                    {
+                        "comfyui_folder": "upscale_models",
+                        "filename": "upscale.safetensors",
+                        "source_urls": [],
+                        "sha256": "a" * 64,
+                        "size_bytes": 123,
+                        "verification_level": "sha256_size",
+                    }
+                ]
+            },
+            archive_bytes=_small_archive_bytes(),
+        ),
+    )
+
+    package = NoofyArchiveImporter(archive).normalize()
+
+    model = package.required_models[0]
+    assert model.source_url == source_url
+    assert model.source_urls == [source_url]
+
+
 def test_noofy_importer_preserves_phase6_signature_metadata() -> None:
     archive = _archive_bytes_with_package_update(
         {
@@ -1884,6 +1932,29 @@ def _archive_bytes_with_capsule_update(
                 capsule.update(update)
                 contents = json.dumps(capsule).encode("utf-8")
             rewritten.writestr(info, contents)
+    return payload.getvalue()
+
+
+def _archive_bytes_with_comfyui_workflow_update(
+    comfyui_workflow: dict, *, archive_bytes: bytes | None = None
+) -> bytes:
+    source = io.BytesIO(archive_bytes or _archive_bytes())
+    payload = io.BytesIO()
+    wrote_workflow = False
+    with zipfile.ZipFile(source, "r") as original, zipfile.ZipFile(
+        payload, "w"
+    ) as rewritten:
+        for info in original.infolist():
+            contents = original.read(info)
+            if info.filename == "comfyui_workflow.json":
+                contents = json.dumps(comfyui_workflow).encode("utf-8")
+                wrote_workflow = True
+            rewritten.writestr(info, contents)
+        if not wrote_workflow:
+            rewritten.writestr(
+                "comfyui_workflow.json",
+                json.dumps(comfyui_workflow).encode("utf-8"),
+            )
     return payload.getvalue()
 
 

@@ -180,6 +180,7 @@ export function DashboardBuilderPage({
   const [search, setSearch] = useState("");
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(() => new Set());
   const [savedFlash, setSavedFlash] = useState<"saved" | "draft" | null>(null);
+  const [widgetSaveStatus, setWidgetSaveStatus] = useState<WidgetScopedStatus | null>(null);
   const [pendingWidgetRemoval, setPendingWidgetRemoval] = useState<PendingWidgetRemoval>(null);
   const [hoveredValuePreview, setHoveredValuePreview] = useState<HoveredValuePreview>(null);
 
@@ -231,6 +232,7 @@ export function DashboardBuilderPage({
     setSearch("");
     setExpandedNodes(new Set());
     setSavedFlash(null);
+    setWidgetSaveStatus(null);
     setHoveredValuePreview(null);
   }, [activeWorkflowId]);
 
@@ -350,6 +352,7 @@ export function DashboardBuilderPage({
       setSelectedValueId(valueId);
       setSelectedWidgetId(existing.id);
       setSelectedGroupId(null);
+      setWidgetSaveStatus(null);
       return;
     }
 
@@ -358,6 +361,7 @@ export function DashboardBuilderPage({
     setSelectedValueId(valueId);
     setSelectedWidgetId(newWidget.id);
     setSelectedGroupId(null);
+    setWidgetSaveStatus(null);
   }
 
   function handleShowValuePreview(node: WorkflowNode, value: WorkflowNodeValue, event: { currentTarget: HTMLButtonElement }) {
@@ -383,6 +387,7 @@ export function DashboardBuilderPage({
     setSelectedValueId(note.valueId);
     setSelectedWidgetId(note.id);
     setSelectedGroupId(null);
+    setWidgetSaveStatus(null);
   }
 
   function handleSelectWidget(widgetId: string) {
@@ -391,6 +396,7 @@ export function DashboardBuilderPage({
     setSelectedWidgetId(widgetId);
     setSelectedValueId(widget.valueId);
     setSelectedGroupId(null);
+    setWidgetSaveStatus(null);
   }
 
   function handleSelectGroup(groupId: string) {
@@ -399,6 +405,7 @@ export function DashboardBuilderPage({
     setSelectedGroupId(groupId);
     setSelectedWidgetId(null);
     setSelectedValueId(null);
+    setWidgetSaveStatus(null);
   }
 
   function patchWidget(widgetId: string, patch: Partial<DashboardWidget>) {
@@ -695,6 +702,8 @@ export function DashboardBuilderPage({
             ) : selectedWidget?.widgetType === "note" ? (
               <NoteWidgetEditor
                 widget={selectedWidget}
+                statusMessage={widgetSaveStatus?.widgetId === selectedWidget.id ? widgetSaveStatus.message : null}
+                onStatusChange={(message) => setWidgetSaveStatus(message ? { widgetId: selectedWidget.id, message } : null)}
                 onPatch={(patch) => patchWidget(selectedWidget.id, patch)}
                 onRemove={() => removeWidget(selectedWidget.id)}
                 onSaveDefault={() => patchWidget(selectedWidget.id, { defaultPinned: true })}
@@ -705,6 +714,8 @@ export function DashboardBuilderPage({
                 value={selectedValueRecord.value}
                 node={selectedValueRecord.node}
                 workflowId={activeWorkflowId}
+                statusMessage={widgetSaveStatus?.widgetId === selectedWidget.id ? widgetSaveStatus.message : null}
+                onStatusChange={(message) => setWidgetSaveStatus(message ? { widgetId: selectedWidget.id, message } : null)}
                 onPatch={(patch) => patchWidget(selectedWidget.id, patch)}
                 onRemove={() => removeWidget(selectedWidget.id)}
                 onSaveDefault={() => patchWidget(selectedWidget.id, { defaultPinned: true })}
@@ -1615,6 +1626,8 @@ function WidgetEditor({
   value,
   node,
   workflowId,
+  statusMessage,
+  onStatusChange,
   onPatch,
   onRemove,
   onSaveDefault,
@@ -1623,20 +1636,15 @@ function WidgetEditor({
   value: WorkflowNodeValue;
   node: WorkflowNode;
   workflowId: string;
+  statusMessage: string | null;
+  onStatusChange: (message: string | null) => void;
   onPatch: (patch: Partial<DashboardWidget>) => void;
   onRemove: () => void;
   onSaveDefault: () => void;
 }) {
-  const [saveStatus, setSaveStatus] = useState<WidgetScopedStatus | null>(null);
-  const saveStatusMessage = saveStatus?.widgetId === widget.id ? saveStatus.message : null;
-
-  useEffect(() => {
-    setSaveStatus(null);
-  }, [widget.id]);
-
   function handleSaveDefault() {
     onSaveDefault();
-    setSaveStatus({ widgetId: widget.id, message: "Default saved." });
+    onStatusChange("Default saved.");
   }
 
   return (
@@ -1664,7 +1672,7 @@ function WidgetEditor({
         </div>
       </div>
 
-      {saveStatusMessage ? <p className="builder-config__hint">{saveStatusMessage}</p> : null}
+      {statusMessage ? <p className="builder-config__hint">{statusMessage}</p> : null}
       <WidgetDetailsCard widget={widget} onPatch={onPatch} />
       <WidgetBehaviorCard widget={widget} value={value} workflowId={workflowId} onPatch={onPatch} />
       <WidgetBinding widget={widget} />
@@ -1674,25 +1682,22 @@ function WidgetEditor({
 
 function NoteWidgetEditor({
   widget,
+  statusMessage,
+  onStatusChange,
   onPatch,
   onRemove,
   onSaveDefault,
 }: {
   widget: DashboardWidget;
+  statusMessage: string | null;
+  onStatusChange: (message: string | null) => void;
   onPatch: (patch: Partial<DashboardWidget>) => void;
   onRemove: () => void;
   onSaveDefault: () => void;
 }) {
-  const [saveStatus, setSaveStatus] = useState<WidgetScopedStatus | null>(null);
-  const saveStatusMessage = saveStatus?.widgetId === widget.id ? saveStatus.message : null;
-
-  useEffect(() => {
-    setSaveStatus(null);
-  }, [widget.id]);
-
   function handleSaveDefault() {
     onSaveDefault();
-    setSaveStatus({ widgetId: widget.id, message: "Default saved." });
+    onStatusChange("Default saved.");
   }
 
   return (
@@ -1718,7 +1723,7 @@ function NoteWidgetEditor({
         </div>
       </div>
 
-      {saveStatusMessage ? <p className="builder-config__hint">{saveStatusMessage}</p> : null}
+      {statusMessage ? <p className="builder-config__hint">{statusMessage}</p> : null}
       <WidgetDetailsCard widget={widget} onPatch={onPatch} />
       <WidgetBinding widget={widget} />
     </div>
