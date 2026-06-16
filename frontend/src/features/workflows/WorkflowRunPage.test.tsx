@@ -5260,6 +5260,9 @@ describe("WorkflowRunPage", () => {
 
     expect(await screen.findByRole("heading", { name: "Inputs" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Preview" })).toBeInTheDocument();
+    const previewPanel = document.querySelector(".preview-panel");
+    expect(previewPanel).toBeInTheDocument();
+    expect(previewPanel?.querySelector(".mini-status")).not.toBeInTheDocument();
     expect(document.querySelector(".main-workspace--workflow-run-classic")).toBeInTheDocument();
     expect(document.querySelector(".workspace-content--workflow-run-classic")).toBeInTheDocument();
     expect(document.querySelector(".run-workspace--classic")).toBeInTheDocument();

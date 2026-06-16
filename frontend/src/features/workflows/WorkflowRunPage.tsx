@@ -2288,12 +2288,6 @@ export function WorkflowRunPage({
               {previewProgressMessage ? <p>{previewProgressMessage}</p> : null}
             </div>
             <div className="preview-panel__actions">
-              {activeValidation?.valid ? (
-                <span className="mini-status">
-                  <CheckCircle2 size={13} aria-hidden="true" />
-                  Ready
-                </span>
-              ) : null}
               {classicWorkflowActions}
             </div>
           </div>
