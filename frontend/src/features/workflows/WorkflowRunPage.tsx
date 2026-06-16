@@ -2767,21 +2767,27 @@ function WorkflowFailureDialog({
               Developer details
             </button>
             {dialog.detailsOpen ? (
-              <pre className="workflow-log-section__content workflow-input-error-details__content">
-                {JSON.stringify(
-                  {
-                    workflow: workflowName,
-                    workflow_id: workflowId,
-                    job_id: dialog.jobId,
-                    user_message: dialog.userMessage,
-                    technical_error: dialog.errorMessage,
-                    error_code: dialog.errorCode,
-                    developer_details: dialog.developerDetails,
-                  },
-                  null,
-                  2,
-                )}
-              </pre>
+              <>
+                <pre className="workflow-log-section__content workflow-input-error-details__content">
+                  {JSON.stringify(
+                    {
+                      workflow: workflowName,
+                      workflow_id: workflowId,
+                      job_id: dialog.jobId,
+                      user_message: dialog.userMessage,
+                      technical_error: dialog.errorMessage,
+                      error_code: dialog.errorCode,
+                      developer_details: dialog.developerDetails,
+                    },
+                    null,
+                    2,
+                  )}
+                </pre>
+                <button className="secondary-button secondary-button--small" type="button" onClick={onCopy}>
+                  <Clipboard size={16} aria-hidden="true" />
+                  {dialog.copied ? "Developer report copied" : "Copy developer report"}
+                </button>
+              </>
             ) : null}
           </section>
           {dialog.logError ? (
@@ -2822,10 +2828,6 @@ function WorkflowFailureDialog({
             <button className="secondary-button" type="button" onClick={onCopyLogs}>
               <Clipboard size={16} aria-hidden="true" />
               {dialog.logsCopied ? "Logs copied" : "Copy logs"}
-            </button>
-            <button className={memoryFailure ? "secondary-button" : "primary-button"} type="button" onClick={onCopy}>
-              <Clipboard size={16} aria-hidden="true" />
-              {dialog.copied ? "Copied" : "Copy details"}
             </button>
           </div>
         </footer>

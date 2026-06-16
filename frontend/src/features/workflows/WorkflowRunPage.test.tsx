@@ -2709,7 +2709,7 @@ describe("WorkflowRunPage", () => {
     expect(await within(dialog).findByRole("heading", { name: "ComfyUI engine logs" })).toBeInTheDocument();
     expect(within(dialog).getByRole("heading", { name: "Noofy logs" })).toBeInTheDocument();
 
-    fireEvent.click(within(dialog).getByRole("button", { name: "Copy details" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Copy developer report" }));
     await waitFor(() => expect(writeText).toHaveBeenCalled());
     expect(writeText.mock.calls[0][0]).toContain("CUDA out of memory");
   });
@@ -5252,12 +5252,16 @@ describe("WorkflowRunPage", () => {
     expect(within(dialog).getByText(/CUDA out of memory/)).toBeInTheDocument();
     expect(within(dialog).getByText(/Submitting workflow run/)).toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: "Logs copied" })).toBeInTheDocument();
+    expect(within(dialog).queryByRole("button", { name: /copy details/i })).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole("button", { name: /copy developer report/i })).not.toBeInTheDocument();
 
-    fireEvent.click(within(dialog).getByRole("button", { name: /copy details/i }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Developer details" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: /copy developer report/i }));
     await waitFor(() => expect(writeText).toHaveBeenCalledTimes(2));
     const detailedCopy = writeText.mock.calls[1][0] as string;
     expect(detailedCopy).toContain("Workflow failure report");
     expect(detailedCopy).toContain("ComfyUI engine logs");
+    expect(within(dialog).getByRole("button", { name: "Developer report copied" })).toBeInTheDocument();
   });
 
   it("keeps an imported workflow with no runtime capsule openable but not runnable", async () => {
