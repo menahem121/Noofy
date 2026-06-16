@@ -85,6 +85,12 @@ function mockMaskEditorCanvas({
         height,
         colorSpace: "srgb",
       })),
+      createImageData: vi.fn((width: number, height: number) => ({
+        data: new Uint8ClampedArray(width * height * 4),
+        width,
+        height,
+        colorSpace: "srgb",
+      })),
       putImageData: vi.fn(() => calls.push("reset")),
       save: vi.fn(),
       restore: vi.fn(),
@@ -673,6 +679,54 @@ describe("DashboardInputControl", () => {
 
     expect(canvasMock.calls).toContain("clear");
     expect(canvasMock.calls).toContain("reset");
+  });
+
+  it("previews saved masks as a translucent editor-color overlay on the source image", async () => {
+    mockMaskEditorCanvas();
+    createObjectUrlMock
+      .mockReturnValueOnce("blob:masked-asset")
+      .mockReturnValueOnce("blob:source-asset")
+      .mockReturnValueOnce("blob:mask-preview");
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/metadata")) {
+        return Promise.resolve(jsonResponse({
+          asset_id: "12345678-1234-1234-1234-123456789abc.png",
+          original_filename: "reference.png",
+          content_type: "image/png",
+          kind: "image",
+          has_mask: true,
+          source_asset_id: "11111111-1111-1111-1111-111111111111.png",
+        }));
+      }
+      return Promise.resolve(new Response(new Blob(["image"], { type: "image/png" })));
+    });
+
+    render(
+      <DashboardInputControl
+        control={{ id: "image", type: "load_image", label: "Input image", input_id: "image" }}
+        input={{
+          id: "image",
+          label: "Input image",
+          control: "load_image",
+          binding: { node_id: "10", input_name: "image" },
+          default: null,
+          validation: {},
+        }}
+        value="12345678-1234-1234-1234-123456789abc.png"
+        onChange={vi.fn()}
+        onImageUpload={vi.fn()}
+        onImageMaskApply={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByAltText("Selected image: reference.png")).toHaveAttribute("src", "blob:mask-preview");
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("11111111-1111-1111-1111-111111111111.png"),
+      expect.anything(),
+    );
   });
 
   it("shows brush and eraser hover previews before drawing", async () => {

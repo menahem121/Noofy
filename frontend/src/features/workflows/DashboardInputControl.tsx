@@ -42,6 +42,9 @@ import { SEED_MODE_ICONS } from "../../lib/seedModeIcon";
 type DashboardInputControlVariant = "classic" | "canvas";
 
 const WorkflowDefaultAssetContext = createContext<string | null>(null);
+const MASK_COLOR = { r: 139, g: 92, b: 246 };
+const MASK_COLOR_RGB = `${MASK_COLOR.r}, ${MASK_COLOR.g}, ${MASK_COLOR.b}`;
+const MASK_INPUT_PREVIEW_ALPHA = 0.6;
 
 export function WorkflowDefaultAssetProvider({
   workflowId,
@@ -891,6 +894,7 @@ function AssetImageInput({
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [replaceChoiceOpen, setReplaceChoiceOpen] = useState(false);
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const [maskPreviewUrl, setMaskPreviewUrl] = useState<string | null>(null);
   const [assetMetadata, setAssetMetadata] = useState<DashboardAssetMetadata | null>(null);
   const [maskEditor, setMaskEditor] = useState<ImageMaskEditorState | null>(null);
   const [maskOpening, setMaskOpening] = useState(false);
@@ -952,6 +956,52 @@ function AssetImageInput({
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [assetId, galleryReference, packageReference]);
+
+  useEffect(() => {
+    setMaskPreviewUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
+
+    const sourceAssetId = typeof assetMetadata?.source_asset_id === "string" ? assetMetadata.source_asset_id : null;
+    if (!assetId || !blobUrl || !assetMetadata?.has_mask || !sourceAssetId) return undefined;
+
+    let canceled = false;
+    let sourceUrl: string | null = null;
+    let previewUrl: string | null = null;
+
+    async function buildPreview(srcId: string, maskedUrl: string) {
+      const fetchedSourceUrl = await fetchAssetBlobUrl(srcId);
+      sourceUrl = fetchedSourceUrl;
+      if (canceled) {
+        URL.revokeObjectURL(fetchedSourceUrl);
+        sourceUrl = null;
+        return;
+      }
+      const blob = await createMaskedInputPreviewBlob(fetchedSourceUrl, maskedUrl);
+      previewUrl = URL.createObjectURL(blob);
+      if (canceled) {
+        if (sourceUrl) {
+          URL.revokeObjectURL(sourceUrl);
+          sourceUrl = null;
+        }
+        URL.revokeObjectURL(previewUrl);
+        previewUrl = null;
+        return;
+      }
+      setMaskPreviewUrl(previewUrl);
+    }
+
+    buildPreview(sourceAssetId, blobUrl).catch(() => {
+      if (!canceled) setMaskPreviewUrl(null);
+    });
+
+    return () => {
+      canceled = true;
+      if (sourceUrl) URL.revokeObjectURL(sourceUrl);
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+    };
+  }, [assetId, assetMetadata, blobUrl]);
 
   useEffect(() => {
     if (!assetId) {
@@ -1078,12 +1128,13 @@ function AssetImageInput({
 
   const stateClass = missing
     ? "dashboard-image-input--missing"
-    : blobUrl || galleryReference || packageImageUrl
+    : maskPreviewUrl || blobUrl || galleryReference || packageImageUrl
       ? "dashboard-image-input--preview"
       : hasSelection
         ? "dashboard-image-input--loading"
         : "dashboard-image-input--empty";
   const galleryImageUrl = galleryReference ? galleryContentUrlById(galleryReference.gallery_item_id) : null;
+  const selectedImageUrl = maskPreviewUrl ?? blobUrl ?? galleryImageUrl ?? packageImageUrl;
   const selectedFilename = galleryReference?.filename ?? packageReference?.filename ?? assetMetadata?.original_filename ?? assetId;
   const assetMaskAvailable = Boolean(assetId && !missing && (blobUrl || assetMetadata));
   const galleryMaskAvailable = Boolean(galleryReference && onGalleryImageMaskPrepare);
@@ -1131,9 +1182,9 @@ function AssetImageInput({
                 <span className="dashboard-image-input__title">Image could not be loaded</span>
                 <span className="dashboard-image-input__hint">Upload from computer</span>
               </>
-            ) : blobUrl || galleryImageUrl || packageImageUrl ? (
+            ) : selectedImageUrl ? (
               <img
-                src={blobUrl ?? galleryImageUrl ?? packageImageUrl ?? ""}
+                src={selectedImageUrl}
                 alt={selectedFilename ? `Selected image: ${selectedFilename}` : "Selected image"}
                 className="dashboard-image-input__preview"
                 onError={() => setMissing(true)}
@@ -1314,9 +1365,9 @@ function ImageMaskEditorModal({
         const imageData = tempContext.getImageData(0, 0, width, height);
         for (let index = 0; index < imageData.data.length; index += 4) {
           const storedAlpha = imageData.data[index + 3];
-          imageData.data[index] = 139;
-          imageData.data[index + 1] = 92;
-          imageData.data[index + 2] = 246;
+          imageData.data[index] = MASK_COLOR.r;
+          imageData.data[index + 1] = MASK_COLOR.g;
+          imageData.data[index + 2] = MASK_COLOR.b;
           imageData.data[index + 3] = 255 - storedAlpha;
         }
         maskContext.putImageData(imageData, 0, 0);
@@ -1379,8 +1430,8 @@ function ImageMaskEditorModal({
       context.fillStyle = `rgba(0, 0, 0, ${opacity})`;
     } else {
       context.globalCompositeOperation = "source-over";
-      context.strokeStyle = `rgba(139, 92, 246, ${opacity})`;
-      context.fillStyle = `rgba(139, 92, 246, ${opacity})`;
+      context.strokeStyle = `rgba(${MASK_COLOR_RGB}, ${opacity})`;
+      context.fillStyle = `rgba(${MASK_COLOR_RGB}, ${opacity})`;
     }
     context.beginPath();
     context.moveTo(from.x, from.y);
@@ -1414,8 +1465,8 @@ function ImageMaskEditorModal({
       context.setLineDash?.([Math.max(3, strokeSize / 7), Math.max(3, strokeSize / 9)]);
     } else {
       const previewOpacity = Math.max(0.18, Math.min(0.34, opacity * 0.34));
-      context.fillStyle = `rgba(139, 92, 246, ${previewOpacity})`;
-      context.shadowColor = "rgba(139, 92, 246, 0.42)";
+      context.fillStyle = `rgba(${MASK_COLOR_RGB}, ${previewOpacity})`;
+      context.shadowColor = `rgba(${MASK_COLOR_RGB}, 0.42)`;
       context.setLineDash?.([]);
     }
     context.beginPath();
@@ -1599,6 +1650,48 @@ function loadCanvasImage(url: string): Promise<HTMLImageElement> {
     image.onerror = () => reject(new Error("Image could not be loaded."));
     image.src = url;
   });
+}
+
+async function createMaskedInputPreviewBlob(sourceUrl: string, maskedUrl: string): Promise<Blob> {
+  const [sourceImage, maskedImage] = await Promise.all([
+    loadCanvasImage(sourceUrl),
+    loadCanvasImage(maskedUrl),
+  ]);
+  const width = sourceImage.naturalWidth || sourceImage.width;
+  const height = sourceImage.naturalHeight || sourceImage.height;
+  if (width <= 0 || height <= 0) throw new Error("Masked image preview could not be created.");
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Masked image preview could not be created.");
+  context.drawImage(sourceImage, 0, 0, width, height);
+
+  const maskCanvas = document.createElement("canvas");
+  maskCanvas.width = width;
+  maskCanvas.height = height;
+  const maskContext = maskCanvas.getContext("2d", { willReadFrequently: true });
+  if (!maskContext) throw new Error("Masked image preview could not be created.");
+  maskContext.drawImage(maskedImage, 0, 0, width, height);
+  const maskedData = maskContext.getImageData(0, 0, width, height);
+  const overlayCanvas = document.createElement("canvas");
+  overlayCanvas.width = width;
+  overlayCanvas.height = height;
+  const overlayContext = overlayCanvas.getContext("2d");
+  if (!overlayContext) throw new Error("Masked image preview could not be created.");
+  const overlayData = overlayContext.createImageData(width, height);
+  for (let index = 0; index < maskedData.data.length; index += 4) {
+    const maskAlpha = 255 - maskedData.data[index + 3];
+    if (maskAlpha <= 0) continue;
+    overlayData.data[index] = MASK_COLOR.r;
+    overlayData.data[index + 1] = MASK_COLOR.g;
+    overlayData.data[index + 2] = MASK_COLOR.b;
+    overlayData.data[index + 3] = Math.round(maskAlpha * MASK_INPUT_PREVIEW_ALPHA);
+  }
+  overlayContext.putImageData(overlayData, 0, 0);
+  context.drawImage(overlayCanvas, 0, 0, width, height);
+  return canvasToPngBlob(canvas);
 }
 
 function canvasToPngBlob(canvas: HTMLCanvasElement): Promise<Blob> {
