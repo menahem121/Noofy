@@ -1069,10 +1069,10 @@ describe("WorkflowRunPage", () => {
       </RuntimeStatusProvider>,
     );
 
-    expect(await screen.findByText("Refresh Noofy to reload this workflow")).toBeInTheDocument();
-    expect(screen.getByText("The workflow data did not load. Refresh the page before continuing.")).toBeInTheDocument();
+    const dialog = await screen.findByRole("dialog", { name: "Refresh Noofy to reload this workflow" });
+    expect(within(dialog).getByText("The workflow data did not load. Refresh the page before continuing.")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Refresh Noofy" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Refresh Noofy" }));
 
     expect(reloadPage).toHaveBeenCalledTimes(1);
   });
@@ -1097,16 +1097,13 @@ describe("WorkflowRunPage", () => {
     );
 
     expect(await screen.findByRole("main", { name: /workflow dashboard canvas/i })).toBeInTheDocument();
-    expect(await screen.findByText("Refresh Noofy to reload this workflow")).toBeInTheDocument();
-    expect(screen.getByText("Noofy restarted, but this page still has data from the previous app session.")).toBeInTheDocument();
+    const dialog = await screen.findByRole("dialog", { name: "Refresh Noofy to reload this workflow" });
+    expect(within(dialog).getByText("Noofy restarted, but this page still has data from the previous app session.")).toBeInTheDocument();
     expect(reloadPage).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "Refresh Noofy" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Refresh Noofy" }));
 
     expect(reloadPage).toHaveBeenCalledTimes(1);
-    expect(canvasCss).toMatch(
-      /\.canvas-run-floating-notices \.notice\s*,\s*\.canvas-run-floating-notices \.batch-failure-summary\s*{[^}]*pointer-events:\s*auto;/,
-    );
   });
 
   it("opens the CivitAI LoRA modal and searches through the Noofy backend only", async () => {

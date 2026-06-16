@@ -1938,31 +1938,13 @@ export function WorkflowRunPage({
     </div>
   ) : null;
   const workflowRefreshRequired = runtimeStatus.pageRefreshRequired || Boolean(state.packageLoadError);
-  const workflowRefreshNoticeElement = workflowRefreshRequired ? (
-    <div className="notice notice--warning" role="status">
-      <RotateCcw size={18} aria-hidden="true" />
-      <div>
-        <strong>Refresh Noofy to reload this workflow</strong>
-        <span>
-          {runtimeStatus.pageRefreshRequired
-            ? "Noofy restarted, but this page still has data from the previous app session."
-            : "The workflow data did not load. Refresh the page before continuing."}
-        </span>
-      </div>
-      <button
-        className="secondary-button secondary-button--small"
-        type="button"
-        onClick={runtimeStatus.refreshPage}
-      >
-        Refresh Noofy
-      </button>
-    </div>
-  ) : null;
+  const workflowRefreshMessage = runtimeStatus.pageRefreshRequired
+    ? "Noofy restarted, but this page still has data from the previous app session."
+    : "The workflow data did not load. Refresh the page before continuing.";
 
   const notices = (
     <>
       {recoveryNoticeElement}
-      {workflowRefreshNoticeElement}
       {!workflowRefreshRequired && state.error ? (
         <div className="notice notice--error" role="status">
           <AlertCircle size={18} aria-hidden="true" />
@@ -2142,6 +2124,12 @@ export function WorkflowRunPage({
       onClose={() => setRequiredModelsModalOpen(false)}
     />
   ) : null;
+  const workflowRefreshDialogElement = workflowRefreshRequired ? (
+    <WorkflowRefreshRequiredDialog
+      message={workflowRefreshMessage}
+      onRefresh={runtimeStatus.refreshPage}
+    />
+  ) : null;
 
   if (dashboardSetupRequired) {
     return (
@@ -2155,6 +2143,7 @@ export function WorkflowRunPage({
               : undefined
           }
         />
+        {workflowRefreshDialogElement}
       </AppLayout>
     );
   }
@@ -2236,13 +2225,13 @@ export function WorkflowRunPage({
             }}
           />
         </WorkflowDefaultAssetProvider>
-        {workflowRefreshNoticeElement || recoveryNoticeElement || failedRunSummaryElement ? (
+        {recoveryNoticeElement || failedRunSummaryElement ? (
           <div className="canvas-run-floating-notices">
-            {workflowRefreshNoticeElement}
             {recoveryNoticeElement}
             {failedRunSummaryElement}
           </div>
         ) : null}
+        {workflowRefreshDialogElement}
         {workflowCancelConfirmationElement}
         {inputErrorDialogElement}
         {failureDialogElement}
@@ -2412,6 +2401,7 @@ export function WorkflowRunPage({
       {loraBrowserElement}
       {exportDialogElement}
       {requiredModelsModalElement}
+      {workflowRefreshDialogElement}
     </AppLayout>
   );
 }
@@ -2472,6 +2462,36 @@ function packageNeedsDashboardSetup(
   return (
     packageData.dashboard.status !== "configured" ||
     !packageData.dashboard.sections.some((section) => section.controls.length > 0)
+  );
+}
+
+function WorkflowRefreshRequiredDialog({
+  message,
+  onRefresh,
+}: {
+  message: string;
+  onRefresh: () => void;
+}) {
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="workflow-refresh-required-title">
+      <section className="workflow-refresh-required-modal">
+        <header className="workflow-refresh-required-modal__header">
+          <div className="workflow-refresh-required-modal__icon" aria-hidden="true">
+            <RotateCcw size={22} />
+          </div>
+          <div>
+            <p className="eyebrow">Workflow session</p>
+            <h2 id="workflow-refresh-required-title">Refresh Noofy to reload this workflow</h2>
+            <p>{message}</p>
+          </div>
+        </header>
+        <footer className="workflow-refresh-required-modal__footer">
+          <button className="primary-button" type="button" onClick={onRefresh}>
+            Refresh Noofy
+          </button>
+        </footer>
+      </section>
+    </div>
   );
 }
 
