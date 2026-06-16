@@ -15,9 +15,16 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+from app.artifacts import ModelVerificationLevel
 from app.gallery import GalleryStore
 from app.workflows.assets import workflow_icon_asset_id
 from app.workflows.bindings import apply_input_bindings
+from app.workflows.import_capsule_lock import (
+    ImportCapsuleLockError,
+    imported_package_capsule_lock,
+    model_locks_from_package,
+)
+from app.workflows.import_policy import trust_level_from_string
 from app.workflows.library import (
     WorkflowLibraryMetadata,
     WorkflowLibraryStore,
@@ -34,7 +41,12 @@ from app.workflows.media_values import (
     target_media_kind_for_input,
 )
 from app.workflows.metadata_inference import infer_workflow_category
-from app.workflows.package import WorkflowInput, WorkflowPackage
+from app.workflows.package import (
+    RequiredModel,
+    WorkflowCustomNodeRecord,
+    WorkflowInput,
+    WorkflowPackage,
+)
 from app.workflows.package_assets import (
     PackageAssetError,
     make_package_asset_reference,
@@ -90,6 +102,7 @@ class WorkflowExporter:
         """
         package = self._get_package(workflow_id)
         package_dir = self._find_package_dir(workflow_id)
+        export_package = _portable_export_package(package, package_dir)
 
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -101,7 +114,7 @@ class WorkflowExporter:
             )
             package_json = _build_export_package_json(
                 package_dir,
-                package,
+                export_package,
                 metadata,
                 export_metadata=export_metadata,
             )
@@ -111,7 +124,7 @@ class WorkflowExporter:
             # comfyui_graph.json — the stored opaque execution graph. Current
             # export defaults are written to dashboard.json so media values can
             # remain safe package assets instead of graph-local paths.
-            bound_graph = self._portable_comfyui_graph(package, package_dir=package_dir)
+            bound_graph = self._portable_comfyui_graph(export_package, package_dir=package_dir)
             zf.writestr(
                 "comfyui_graph.json",
                 json.dumps(bound_graph, indent=2, sort_keys=True),
@@ -129,30 +142,37 @@ class WorkflowExporter:
                 )
 
             # dashboard.json — the configured dashboard (inputs, outputs, sections, status).
-            dashboard_data: dict[str, Any] = package.dashboard.model_dump(
+            dashboard_data: dict[str, Any] = export_package.dashboard.model_dump(
                 mode="json",
                 exclude_none=True,
             )
-            dashboard_data["inputs"] = [i.model_dump(mode="json") for i in package.inputs]
-            dashboard_data["outputs"] = [o.model_dump(mode="json") for o in package.outputs]
+            dashboard_data["inputs"] = [i.model_dump(mode="json") for i in export_package.inputs]
+            dashboard_data["outputs"] = [o.model_dump(mode="json") for o in export_package.outputs]
             dashboard_data = self._dashboard_with_export_defaults(
                 dashboard_data,
-                package,
+                export_package,
                 input_values=input_values,
             )
             dashboard_data = self._portable_dashboard(dashboard_data)
             self._write_dashboard_package_assets(
                 zf,
                 dashboard_data,
-                package=package,
+                package=export_package,
                 package_dir=package_dir,
             )
             zf.writestr("dashboard.json", json.dumps(dashboard_data, indent=2, sort_keys=True))
 
-            # capsule.lock.json — if present.
-            capsule_file = package_dir / "capsule.lock.json" if package_dir is not None else None
-            if capsule_file is not None and capsule_file.exists():
-                zf.write(capsule_file, "capsule.lock.json")
+            # capsule.lock.json — rebuilt/sanitized so local cache refs never
+            # become part of a portable workflow archive.
+            capsule_json = _build_export_capsule_lock_json(
+                export_package,
+                package_dir,
+            )
+            if capsule_json is not None:
+                zf.writestr(
+                    "capsule.lock.json",
+                    json.dumps(capsule_json, indent=2, sort_keys=True),
+                )
 
             # export-report.json — stub so importers that require it don't fail.
             export_report_file = package_dir / "export-report.json" if package_dir is not None else None
@@ -658,6 +678,241 @@ def _build_export_package_json(
     return base
 
 
+def _portable_export_package(
+    package: WorkflowPackage,
+    package_dir: Path | None,
+) -> WorkflowPackage:
+    package = _package_with_capsule_model_facts(package, package_dir)
+    return package.model_copy(
+        update={
+            "required_models": [
+                _portable_required_model(model)
+                for model in package.required_models
+            ],
+            "custom_nodes": [_portable_custom_node(node) for node in package.custom_nodes],
+        }
+    )
+
+
+def _package_with_capsule_model_facts(
+    package: WorkflowPackage,
+    package_dir: Path | None,
+) -> WorkflowPackage:
+    capsule_models = _stored_capsule_model_facts(package_dir)
+    if not capsule_models:
+        return package
+    updated_models: list[RequiredModel] = []
+    changed = False
+    for model in package.required_models:
+        facts = capsule_models.get((model.folder, model.filename))
+        if facts is None:
+            updated_models.append(model)
+            continue
+        source_urls = model.source_urls or [
+            url for url in facts.get("source_urls", []) if isinstance(url, str)
+        ]
+        source_url = model.source_url
+        if source_url is None and source_urls:
+            source_url = source_urls[0]
+        update: dict[str, Any] = {
+            "source_url": source_url,
+            "source_urls": source_urls,
+        }
+        checksum = model.checksum
+        fact_checksum = facts.get("sha256")
+        if checksum is None and isinstance(fact_checksum, str):
+            checksum = fact_checksum
+            update["checksum"] = checksum
+        size_bytes = model.size_bytes
+        fact_size = facts.get("size_bytes")
+        if size_bytes is None and isinstance(fact_size, int) and fact_size > 0:
+            size_bytes = fact_size
+            update["size_bytes"] = size_bytes
+        if checksum is not None and size_bytes is not None:
+            update["verification_level"] = ModelVerificationLevel.SHA256_SIZE
+        updated = model.model_copy(update=update)
+        changed = changed or updated != model
+        updated_models.append(updated)
+    if not changed:
+        return package
+    return package.model_copy(update={"required_models": updated_models})
+
+
+def _stored_capsule_model_facts(
+    package_dir: Path | None,
+) -> dict[tuple[str, str], dict[str, Any]]:
+    capsule = _read_optional_json_object(
+        package_dir / "capsule.lock.json" if package_dir is not None else None
+    )
+    if not isinstance(capsule, dict):
+        return {}
+    models = capsule.get("models")
+    if not isinstance(models, list):
+        return {}
+    facts: dict[tuple[str, str], dict[str, Any]] = {}
+    for model in models:
+        if not isinstance(model, dict):
+            continue
+        folder = model.get("comfyui_folder")
+        filename = model.get("filename")
+        if isinstance(folder, str) and isinstance(filename, str):
+            facts[(folder, filename)] = model
+    return facts
+
+
+def _portable_required_model(model: RequiredModel) -> RequiredModel:
+    source_url = _portable_source_url(model.source_url)
+    source_urls = [
+        url
+        for url in (_portable_source_url(url) for url in model.source_urls)
+        if url is not None
+    ]
+    if source_url is None and source_urls:
+        source_url = source_urls[0]
+    return model.model_copy(
+        update={
+            "source_url": source_url,
+            "source_urls": source_urls,
+            "identity_verified_by_exporter": None,
+            "local_file_available_at_export": None,
+            "identity_warnings": [],
+        }
+    )
+
+
+def _portable_custom_node(node: WorkflowCustomNodeRecord) -> WorkflowCustomNodeRecord:
+    return node.model_copy(update={"source_cache_ref": None})
+
+
+def _build_export_capsule_lock_json(
+    package: WorkflowPackage,
+    package_dir: Path | None,
+) -> dict[str, Any] | None:
+    _validate_portable_custom_node_sources(package)
+    try:
+        capsule = imported_package_capsule_lock(package)
+        payload = capsule.model_dump(mode="json", exclude_none=True)
+    except ImportCapsuleLockError as exc:
+        capsule_file = package_dir / "capsule.lock.json" if package_dir is not None else None
+        if capsule_file is None or not capsule_file.exists():
+            if any(node.included for node in package.custom_nodes) or any(
+                model.checksum and model.size_bytes for model in package.required_models
+            ):
+                raise WorkflowExportError(
+                    "This workflow cannot be exported because Noofy could not "
+                    "rebuild its portable preparation lock."
+                ) from exc
+            return None
+        payload = _read_optional_json_object(capsule_file)
+        if not isinstance(payload, dict):
+            raise WorkflowExportError(
+                "This workflow cannot be exported because its preparation lock is invalid."
+            ) from exc
+        payload = dict(payload)
+        payload["custom_nodes"] = _portable_custom_node_locks(package)
+        model_locks = _portable_model_locks(package)
+        if model_locks:
+            payload["models"] = model_locks
+    return _sanitize_export_capsule_lock_payload(payload, package)
+
+
+def _sanitize_export_capsule_lock_payload(
+    payload: dict[str, Any],
+    package: WorkflowPackage,
+) -> dict[str, Any]:
+    exported = json.loads(json.dumps(payload))
+    if any(node.included for node in package.custom_nodes):
+        exported["custom_nodes"] = _portable_custom_node_locks(package)
+    else:
+        custom_nodes = exported.get("custom_nodes")
+        if isinstance(custom_nodes, list):
+            for item in custom_nodes:
+                if isinstance(item, dict):
+                    item.pop("source_cache_ref", None)
+    model_locks = _portable_model_locks(package)
+    exported["models"] = (
+        model_locks
+        if model_locks
+        else _sanitize_existing_capsule_model_locks(exported.get("models"))
+    )
+    return exported
+
+
+def _portable_model_locks(package: WorkflowPackage) -> list[dict[str, Any]]:
+    return [
+        model.model_dump(mode="json", exclude_none=True)
+        for model in model_locks_from_package(package)
+    ]
+
+
+def _sanitize_existing_capsule_model_locks(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    models: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        exported = dict(item)
+        source_urls = exported.get("source_urls")
+        if isinstance(source_urls, list):
+            exported["source_urls"] = [
+                sanitized
+                for url in source_urls
+                if isinstance(url, str)
+                for sanitized in [_portable_source_url(url)]
+                if sanitized is not None
+            ]
+        models.append(exported)
+    return models
+
+
+def _portable_custom_node_locks(package: WorkflowPackage) -> list[dict[str, Any]]:
+    trust_level = (
+        trust_level_from_string(package.identity.trust_level).value
+        if package.identity is not None
+        else "quarantined_community"
+    )
+    nodes: list[dict[str, Any]] = []
+    for node in package.custom_nodes:
+        if not node.included:
+            continue
+        item: dict[str, Any] = {
+            "package_id": node.id,
+            "source": node.source,
+            "trust_level": trust_level,
+            "node_types": node.node_types,
+        }
+        if node.source_ref:
+            item["source_ref"] = node.source_ref
+        if node.source_content_hash:
+            item["source_content_hash"] = node.source_content_hash
+        if node.source_archive_subdir:
+            item["source_archive_subdir"] = node.source_archive_subdir
+        nodes.append(item)
+    return nodes
+
+
+def _validate_portable_custom_node_sources(package: WorkflowPackage) -> None:
+    missing: list[str] = []
+    for node in package.custom_nodes:
+        if not node.included:
+            continue
+        if (
+            not node.source.startswith("https://")
+            or not node.source_ref
+            or not node.source_content_hash
+        ):
+            missing.append(
+                f"{node.id} ({', '.join(node.node_types) or 'unknown node types'})"
+            )
+    if missing:
+        raise WorkflowExportError(
+            "This workflow cannot be exported because these custom nodes do not "
+            "have portable pinned source facts: "
+            + "; ".join(missing)
+        )
+
+
 def _read_stored_package_json(path: Path | None) -> dict[str, Any]:
     if path is None or not path.exists():
         return {}
@@ -911,14 +1166,24 @@ def _export_safe_required_models(value: Any) -> list[dict[str, Any]]:
             continue
         exported = dict(item)
         exported.pop("local_file_available_at_export", None)
+        exported.pop("identity_verified_by_exporter", None)
         exported.pop("asset_ownership", None)
+        exported.pop("identity_warnings", None)
         source_url = exported.get("source_url")
         if isinstance(source_url, str):
-            exported["source_url"] = _redact_url_secret(source_url)
+            sanitized = _portable_source_url(source_url)
+            if sanitized is not None:
+                exported["source_url"] = sanitized
+            else:
+                exported.pop("source_url", None)
         source_urls = exported.get("source_urls")
         if isinstance(source_urls, list):
             exported["source_urls"] = [
-                _redact_url_secret(url) for url in source_urls if isinstance(url, str)
+                sanitized
+                for url in source_urls
+                if isinstance(url, str)
+                for sanitized in [_portable_source_url(url)]
+                if sanitized is not None
             ]
         models.append(exported)
     return models
@@ -953,6 +1218,20 @@ def _redact_url_secret(url: str) -> str:
             parts.fragment,
         )
     )
+
+
+def _portable_source_url(url: str | None) -> str | None:
+    if not isinstance(url, str) or not url.strip():
+        return None
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return None
+    if parts.scheme not in {"http", "https"} or not parts.netloc:
+        return None
+    if parts.username or parts.password:
+        return None
+    return _redact_url_secret(url)
 
 
 def _is_secret_query_key(key: str) -> bool:

@@ -147,7 +147,9 @@ def non_bundled_required_custom_node_records(
     graph_types.update(_import_executable_node_types(package))
     required: list[WorkflowCustomNodeRecord] = []
     for record in package.custom_nodes:
-        if record.included:
+        if record.included and (
+            record.source_cache_ref is not None or not record.source.startswith("https://")
+        ):
             continue
         if record.node_types and not any(
             node_type in graph_types for node_type in record.node_types

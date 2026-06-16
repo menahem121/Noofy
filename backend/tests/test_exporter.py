@@ -20,9 +20,20 @@ from typing import Any
 
 import pytest
 
+from app.artifacts import ModelVerificationLevel
 from app.diagnostics import LogStore
 from app.gallery import CapturedGalleryOutput, GalleryStore
+from app.runtime.dependencies.custom_nodes import CoreNodeManifest, CoreNodeManifestCatalog
+from app.runtime.node_registry import (
+    CustomNodeSourceCache,
+    NodeRegistryResolver,
+    NodeRegistrySource,
+    NodeRegistrySourceKind,
+    NoofyNodeRegistry,
+)
+from app.runtime.profiles import load_runtime_profile_catalog
 from app.workflows.assets import DashboardAssetService
+from app.workflows import importer as importer_module
 from app.workflows.exporter import WorkflowExportError, WorkflowExporter, stored_comfyui_graph_file
 from app.workflows.importer import ImportedWorkflowPackageStore
 from app.workflows.loader import WorkflowPackageLoader
@@ -130,6 +141,34 @@ def _gallery_item(
             generation_settings={},
         )
     )
+
+
+class _FakeSourceFetcher:
+    def __init__(self, payload: bytes) -> None:
+        self.payload = payload
+        self.urls: list[str] = []
+
+    def fetch(self, url: str) -> bytes:
+        self.urls.append(url)
+        return self.payload
+
+
+class _FakeGitHubCustomNodeUrlResolver:
+    def __init__(self, source: NodeRegistrySource) -> None:
+        self.source = source
+        self.calls: list[tuple[str, str]] = []
+
+    def resolve(self, url: str, *, node_type: str) -> tuple[str, NodeRegistrySource]:
+        self.calls.append((node_type, url))
+        return "github-roundtrip-node", self.source
+
+
+def _custom_node_source_archive(root: str) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(f"{root}/__init__.py", "# test custom node archive\n")
+        zf.writestr(f"{root}/requirements.txt", "")
+    return buf.getvalue()
 
 
 def _make_archive(
@@ -1017,6 +1056,8 @@ def test_exported_package_json_excludes_internal_import_state(tmp_path: Path) ->
                     "source": "https://example.test/example-node.zip",
                     "included": True,
                     "node_types": ["ExampleNode"],
+                    "source_ref": "a" * 40,
+                    "source_content_hash": "sha256:" + ("b" * 64),
                     "source_cache_ref": "local-cache/source",
                 }
             ],
@@ -1739,6 +1780,196 @@ def test_exported_archive_strips_local_model_state_and_source_url_secrets(tmp_pa
     assert model["source_urls"][0].endswith("token=%5Bredacted%5D")
     assert model["source_urls"][1].endswith("api_key=%5Bredacted%5D")
     assert model["source_urls"][2] == "https://example.test/public.safetensors"
+
+
+def test_raw_json_round_trip_exports_portable_resolved_models_and_custom_nodes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime_catalog = load_runtime_profile_catalog(Path("app/runtime/profile_catalog.json"))
+    core_catalog = CoreNodeManifestCatalog(
+        manifests=[
+            CoreNodeManifest(
+                runtime_profile_id=profile.runtime_profile_id,
+                runtime_profile_variant_id=variant.runtime_profile_variant_id,
+                runtime_profile_manifest_hash=profile.runtime_profile_manifest_hash,
+                node_types=["VAELoader"],
+            )
+            for profile in runtime_catalog.profiles
+            for variant in profile.variants
+        ]
+    )
+    monkeypatch.setattr(
+        importer_module,
+        "load_core_node_manifest_catalog",
+        lambda: core_catalog,
+    )
+    source_root = "custom-node-" + ("a" * 40)
+    source_archive = _custom_node_source_archive(source_root)
+    source_hash = hashlib.sha256(source_archive).hexdigest()
+    source = NodeRegistrySource(
+        source_kind=NodeRegistrySourceKind.GIT_ZIP_ARCHIVE,
+        source_url="https://codeload.github.com/example/custom-node/zip/" + ("a" * 40),
+        source_ref="a" * 40,
+        source_content_hash=f"sha256:{source_hash}",
+        archive_subdir=source_root,
+    )
+    first_fetcher = _FakeSourceFetcher(source_archive)
+    first_github_resolver = _FakeGitHubCustomNodeUrlResolver(source)
+    first_store = ImportedWorkflowPackageStore(
+        tmp_path / "packages",
+        log_store=LogStore(),
+        runtime_profile_catalog_provider=lambda: runtime_catalog,
+        node_registry_resolver=NodeRegistryResolver(
+            registry=NoofyNodeRegistry(registry_id="empty-test-registry"),
+            log_store=LogStore(),
+        ),
+        custom_node_source_cache=CustomNodeSourceCache(
+            cache_dir=tmp_path / "custom-node-cache",
+            fetcher=first_fetcher,
+            log_store=LogStore(),
+        ),
+        custom_node_github_resolver=first_github_resolver,
+    )
+    raw_graph = {
+        "1": {"class_type": "RoundTripCustomNode", "inputs": {}},
+        "2": {
+            "class_type": "VAELoader",
+            "inputs": {"vae_name": "roundtrip_vae.safetensors"},
+        },
+    }
+    raw_bytes = json.dumps(raw_graph).encode("utf-8")
+    preview = first_store.preview_archive(
+        raw_bytes,
+        original_filename="roundtrip.json",
+        allow_unverified_community_preparation=True,
+    )
+    resolved_custom_nodes = first_store.resolve_custom_nodes_from_github_urls(
+        preview,
+        urls_by_node_type={
+            "RoundTripCustomNode": "https://github.com/example/custom-node"
+        },
+        allow_unverified_community_preparation=True,
+    )
+    assert first_github_resolver.calls == [
+        ("RoundTripCustomNode", "https://github.com/example/custom-node")
+    ]
+
+    learned_model_url = (
+        "https://huggingface.co/example/roundtrip/resolve/main/"
+        "roundtrip_vae.safetensors?token=creator-secret"
+    )
+    learned_models = [
+        model.model_copy(
+            update={
+                "checksum": "sha256:" + ("b" * 64),
+                "size_bytes": 123456,
+                "source_url": learned_model_url,
+                "source_urls": [learned_model_url],
+                "verification_level": ModelVerificationLevel.SHA256_SIZE,
+                "identity_verified_by_exporter": True,
+                "local_file_available_at_export": True,
+            }
+        )
+        if model.filename == "roundtrip_vae.safetensors"
+        else model
+        for model in resolved_custom_nodes.required_models
+    ]
+    prepared_package = resolved_custom_nodes.model_copy(
+        update={"required_models": learned_models}
+    )
+    imported = first_store.import_prepared_archive(
+        raw_bytes,
+        package=prepared_package,
+        original_filename="roundtrip.json",
+        allow_unverified_community_preparation=True,
+    )
+
+    exporter = WorkflowExporter(
+        workflow_store_dir=tmp_path / "packages",
+        workflow_loader=WorkflowPackageLoader(
+            Path("missing-bundled"),
+            imported_packages_dir=tmp_path / "packages",
+        ),
+    )
+    exported_bytes, _ = exporter.export_archive(imported.metadata.id)
+
+    with zipfile.ZipFile(io.BytesIO(exported_bytes)) as zf:
+        exported_package = json.loads(zf.read("package.json"))
+        exported_capsule = json.loads(zf.read("capsule.lock.json"))
+    exported_text = json.dumps(
+        {"package": exported_package, "capsule": exported_capsule},
+        sort_keys=True,
+    )
+    assert "source_cache_ref" not in exported_text
+    assert str(tmp_path) not in exported_text
+    assert "creator-secret" not in exported_text
+    assert "local_file_available_at_export" not in exported_text
+    assert "identity_verified_by_exporter" not in exported_text
+    assert "asset_ownership" not in exported_text
+
+    exported_node = exported_package["custom_nodes"][0]
+    assert exported_node["source"] == source.source_url
+    assert exported_node["source_ref"] == source.source_ref
+    assert exported_node["source_content_hash"] == source.source_content_hash
+    assert exported_node["source_archive_subdir"] == source_root
+    assert exported_node["node_types"] == ["RoundTripCustomNode"]
+    exported_capsule_node = exported_capsule["custom_nodes"][0]
+    assert exported_capsule_node["source"] == source.source_url
+    assert exported_capsule_node["source_ref"] == source.source_ref
+    assert exported_capsule_node["source_content_hash"] == source.source_content_hash
+    assert exported_capsule_node["source_archive_subdir"] == source_root
+    assert exported_capsule_node["node_types"] == ["RoundTripCustomNode"]
+
+    exported_model = exported_package["required_models"][0]
+    assert exported_model["folder"] == "vae"
+    assert exported_model["filename"] == "roundtrip_vae.safetensors"
+    assert exported_model["checksum"] == "sha256:" + ("b" * 64)
+    assert exported_model["size_bytes"] == 123456
+    assert exported_model["source_url"].endswith("token=%5Bredacted%5D")
+    exported_capsule_model = exported_capsule["models"][0]
+    assert exported_capsule_model["comfyui_folder"] == "vae"
+    assert exported_capsule_model["filename"] == "roundtrip_vae.safetensors"
+    assert exported_capsule_model["sha256"] == "sha256:" + ("b" * 64)
+    assert exported_capsule_model["size_bytes"] == 123456
+    assert exported_capsule_model["source_urls"][0].endswith("token=%5Bredacted%5D")
+
+    second_fetcher = _FakeSourceFetcher(source_archive)
+    second_github_resolver = _FakeGitHubCustomNodeUrlResolver(source)
+    second_store = ImportedWorkflowPackageStore(
+        tmp_path / "clean-packages",
+        log_store=LogStore(),
+        runtime_profile_catalog_provider=lambda: runtime_catalog,
+        node_registry_resolver=NodeRegistryResolver(
+            registry=NoofyNodeRegistry(registry_id="empty-test-registry"),
+            log_store=LogStore(),
+        ),
+        custom_node_source_cache=CustomNodeSourceCache(
+            cache_dir=tmp_path / "clean-custom-node-cache",
+            fetcher=second_fetcher,
+            log_store=LogStore(),
+        ),
+        custom_node_github_resolver=second_github_resolver,
+    )
+    reimported = second_store.import_archive(
+        exported_bytes,
+        original_filename="roundtrip.noofy",
+        allow_unverified_community_preparation=True,
+    )
+
+    assert second_github_resolver.calls == []
+    assert second_fetcher.urls == [source.source_url]
+    reimported_node = reimported.custom_nodes[0]
+    assert reimported_node.source == source.source_url
+    assert reimported_node.source_ref == source.source_ref
+    assert reimported_node.source_content_hash == source.source_content_hash
+    assert reimported_node.source_archive_subdir == source_root
+    assert reimported_node.node_types == ["RoundTripCustomNode"]
+    assert reimported_node.source_cache_ref is not None
+    reimported_model = reimported.required_models[0]
+    assert reimported_model.checksum == "sha256:" + ("b" * 64)
+    assert reimported_model.size_bytes == 123456
+    assert reimported_model.source_urls[0].endswith("token=%5Bredacted%5D")
 
 
 def test_export_supports_bundled_workflow_without_user_preferences(tmp_path: Path) -> None:

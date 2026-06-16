@@ -142,6 +142,7 @@ class CustomNodeLock(BaseModel):
     source_ref: str | None = None
     source_content_hash: str | None = Field(default=None, pattern=SHA256_PATTERN)
     source_cache_ref: str | None = None
+    source_archive_subdir: str | None = None
     commit: str | None = None
     version: str | None = None
     trust_level: TrustLevel
@@ -153,6 +154,17 @@ class CustomNodeLock(BaseModel):
         if value is None:
             return value
         return _validate_relative_path(value, field_name="source_cache_ref", allow_nested=True)
+
+    @field_validator("source_archive_subdir")
+    @classmethod
+    def _validate_source_archive_subdir(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        return _validate_relative_path(
+            value.rstrip("/"),
+            field_name="source_archive_subdir",
+            allow_nested=True,
+        )
 
 
 class DependencyLock(BaseModel):
