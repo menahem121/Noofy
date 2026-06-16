@@ -170,7 +170,7 @@ function renderEditableImageWithMask({
 }
 
 async function waitForMaskEditorOpen() {
-  return screen.findByLabelText("Mask drawing area");
+  return screen.findByLabelText("Mask drawing area", { selector: "canvas" }, { timeout: 5000 });
 }
 
 describe("DashboardInputControl", () => {
@@ -610,6 +610,8 @@ describe("DashboardInputControl", () => {
     );
 
     fireEvent.click(await screen.findByRole("button", { name: "Mask" }));
+    await waitForMaskEditorOpen();
+
     await waitFor(() => {
       const canvases = document.querySelectorAll<HTMLCanvasElement>(".mask-editor__canvas");
       expect(canvases).toHaveLength(3);

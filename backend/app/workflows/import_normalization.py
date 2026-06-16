@@ -50,6 +50,34 @@ UNSUPPORTED_EXPORTED_LAUNCH_OPTION_KEYS = {
     "launch_options",
     "runner_launch_options",
 }
+MODEL_SELECTOR_EXTENSIONS = frozenset(
+    {
+        ".bin",
+        ".ckpt",
+        ".gguf",
+        ".onnx",
+        ".pt",
+        ".pth",
+        ".safetensors",
+        ".sft",
+    }
+)
+KNOWN_GRAPH_MODEL_SELECTOR_INPUTS: dict[tuple[str, str], tuple[str, str]] = {
+    ("CheckpointLoader", "ckpt_name"): ("checkpoints", "checkpoint"),
+    ("CheckpointLoaderSimple", "ckpt_name"): ("checkpoints", "checkpoint"),
+    ("CLIPLoader", "clip_name"): ("clip", "clip"),
+    ("CLIPVisionLoader", "clip_name"): ("clip_vision", "clip_vision"),
+    ("ControlNetLoader", "control_net_name"): ("controlnet", "controlnet"),
+    ("LoraLoader", "lora_name"): ("loras", "lora"),
+    ("LoraLoaderModelOnly", "lora_name"): ("loras", "lora"),
+    ("LoadBackgroundRemovalModel", "bg_removal_name"): (
+        "background_removal",
+        "background_removal",
+    ),
+    ("UNETLoader", "unet_name"): ("diffusion_models", "diffusion_model"),
+    ("UpscaleModelLoader", "model_name"): ("upscale_models", "upscale_model"),
+    ("VAELoader", "vae_name"): ("vae", "vae"),
+}
 
 
 class ImportNormalizationError(RuntimeError):
@@ -269,6 +297,7 @@ def required_models_from_comfyui_workflow(
     graph_bindings = _comfyui_graph_model_bindings(comfyui_graph or {})
     models: list[RequiredModel] = []
     seen: set[tuple[str | None, str | None, str, str]] = set()
+    source_urls_by_target: dict[tuple[str, str], list[str]] = {}
     for node in _iter_comfyui_workflow_nodes(comfyui_workflow):
         node_id = _node_id_string(node.get("id"))
         node_type = optional_string_field(node, "type")
@@ -289,6 +318,8 @@ def required_models_from_comfyui_workflow(
                 entry.get("source_urls"),
                 fallback=entry.get("url"),
             )
+            if source_urls and (folder, filename) not in source_urls_by_target:
+                source_urls_by_target[(folder, filename)] = list(source_urls)
             graph_node_id, input_name = _matching_graph_model_binding(
                 graph_bindings,
                 node_id=node_id,
@@ -316,6 +347,29 @@ def required_models_from_comfyui_workflow(
                     asset_ownership=AssetOwnership.EXTERNAL_REFERENCE,
                 )
             )
+    for selector in _iter_comfyui_graph_model_selectors(comfyui_graph or {}):
+        node_id, node_type, input_name, folder, model_type, filename = selector
+        key = (node_id, input_name, folder, filename)
+        if key in seen:
+            continue
+        seen.add(key)
+        source_urls = source_urls_by_target.get((folder, filename), [])
+        models.append(
+            RequiredModel(
+                folder=folder,
+                filename=filename,
+                node_id=node_id,
+                node_type=node_type,
+                input_name=input_name,
+                source_url=source_urls[0] if source_urls else None,
+                source_urls=list(source_urls),
+                model_type=model_type,
+                verification_level=ModelVerificationLevel.FILENAME_ONLY,
+                identity_verified_by_exporter=False,
+                bundled=False,
+                asset_ownership=AssetOwnership.EXTERNAL_REFERENCE,
+            )
+        )
     return models
 
 
@@ -353,6 +407,48 @@ def _matching_graph_model_binding(
             if graph_node_id == node_id or graph_node_id.endswith(f":{node_id}"):
                 return graph_node_id, input_name
     return candidates[0]
+
+
+def _iter_comfyui_graph_model_selectors(
+    comfyui_graph: dict[str, Any],
+) -> Iterator[tuple[str, str, str, str, str, str]]:
+    for raw_node_id, raw_node in comfyui_graph.items():
+        if not isinstance(raw_node, dict):
+            continue
+        node_type = optional_string_field(raw_node, "class_type")
+        if not node_type:
+            continue
+        inputs = raw_node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        for input_name, value in inputs.items():
+            if not isinstance(input_name, str):
+                continue
+            selector = KNOWN_GRAPH_MODEL_SELECTOR_INPUTS.get((node_type, input_name))
+            if selector is None:
+                continue
+            filename = _safe_graph_model_selector_filename(value)
+            if filename is None:
+                continue
+            folder, model_type = selector
+            yield str(raw_node_id), node_type, input_name, folder, model_type, filename
+
+
+def _safe_graph_model_selector_filename(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    filename = value.strip()
+    if not filename or "\x00" in filename or "\n" in filename or "\r" in filename:
+        return None
+    if re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", filename):
+        return None
+    if "/" in filename or "\\" in filename:
+        return None
+    if Path(filename).name != filename:
+        return None
+    if Path(filename).suffix.casefold() not in MODEL_SELECTOR_EXTENSIONS:
+        return None
+    return filename
 
 
 def _model_type_from_workflow_model(folder: str, node_type: str | None) -> str:

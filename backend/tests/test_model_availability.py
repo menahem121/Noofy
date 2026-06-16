@@ -1939,6 +1939,46 @@ async def test_explicit_source_url_without_size_downloads_and_adopts_identity(
     assert model.identity_verified_by_exporter is False
 
 
+@pytest.mark.anyio
+async def test_explicit_source_url_without_size_adopts_exact_existing_local_file(
+    tmp_path: Path,
+) -> None:
+    payload = b"existing-explicit-source-file"
+    sha = hashlib.sha256(payload).hexdigest()
+    noofy_root = tmp_path / "Noofy Models"
+    model_path = noofy_root / "background_removal" / "birefnet.safetensors"
+    model_path.parent.mkdir(parents=True)
+    model_path.write_bytes(payload)
+    model = RequiredModel(
+        folder="background_removal",
+        filename="birefnet.safetensors",
+        verification_level="filename_only",
+        source_urls=["https://example.com/models/birefnet.safetensors"],
+    )
+    package = _package([model])
+    service = _service(noofy_root=noofy_root)
+
+    fast_summary = service.summarize(
+        package,
+        deep_search=False,
+        verify_hashes=False,
+    )
+    assert fast_summary.models[0].status == "possible_match"
+
+    result = await service.download_missing(package)
+
+    assert result.downloaded_count == 0
+    assert result.failed_count == 0
+    assert result.model_summary.ready_to_run is True
+    assert result.model_summary.models[0].status == "available"
+    assert result.model_summary.models[0].source_path == str(model_path)
+    assert result.model_summary.models[0].matched_sha256 == sha
+    assert model.size_bytes == len(payload)
+    assert model.checksum == f"sha256:{sha}"
+    assert model.verification_level is ModelVerificationLevel.SHA256_SIZE
+    assert model.identity_verified_by_exporter is False
+
+
 def test_model_summary_redacts_secret_bearing_source_url(tmp_path: Path) -> None:
     noofy_root = tmp_path / "Noofy Models"
     service = _service(noofy_root=noofy_root)

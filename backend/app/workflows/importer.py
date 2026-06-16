@@ -1130,10 +1130,10 @@ def _with_comfyui_workflow_model_source_urls(
     comfyui_workflow: dict[str, Any] | None,
     comfyui_graph: dict[str, Any] | None = None,
 ) -> list[RequiredModel]:
-    if not isinstance(comfyui_workflow, dict):
+    if not isinstance(comfyui_workflow, dict) and not isinstance(comfyui_graph, dict):
         return models
     workflow_models = required_models_from_comfyui_workflow(
-        comfyui_workflow,
+        comfyui_workflow or {},
         comfyui_graph=comfyui_graph,
     )
     if not workflow_models:

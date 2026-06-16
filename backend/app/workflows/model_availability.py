@@ -1211,6 +1211,29 @@ class ModelAvailabilityService:
                     matched_sha256=matched_sha256,
                     matched_size_bytes=candidate.stat().st_size,
                 )
+            adopted_sha256 = (
+                self._adopt_exact_source_backed_filename_only_candidate(
+                    model,
+                    candidate,
+                    root=root,
+                    metrics=metrics,
+                )
+                if verify_hashes and status == "possible_match"
+                else None
+            )
+            if adopted_sha256 is not None:
+                base["verification_level"] = model.verification_level
+                base["size_bytes"] = model.size_bytes
+                return RequiredModelAvailability(
+                    **base,
+                    status="available",
+                    status_label="Available",
+                    asset_ownership=self._ownership_for_root(root),
+                    source_path=str(candidate),
+                    matched_root=str(root),
+                    matched_sha256=adopted_sha256,
+                    matched_size_bytes=candidate.stat().st_size,
+                )
 
         if candidates:
             candidate, root = candidates[0]
@@ -1272,6 +1295,57 @@ class ModelAvailabilityService:
         if model.verification_level is ModelVerificationLevel.FILENAME_SIZE:
             return "available" if model.size_bytes is not None and size == model.size_bytes else "possible_match"
         return "possible_match"
+
+    def _adopt_exact_source_backed_filename_only_candidate(
+        self,
+        model: RequiredModel,
+        path: Path,
+        *,
+        root: Path,
+        metrics: VerifyHashMetrics | None = None,
+    ) -> str | None:
+        if model.verification_level is not ModelVerificationLevel.FILENAME_ONLY:
+            return None
+        if not _source_urls(model):
+            return None
+        if not path.is_file():
+            return None
+        try:
+            expected = _safe_join_model_path(root, model.folder, model.filename)
+        except ModelAvailabilityError:
+            return None
+        try:
+            root_resolved = root.expanduser().resolve(strict=False)
+            expected_resolved = expected.expanduser().resolve(strict=False)
+            path_resolved = path.expanduser().resolve(strict=True)
+            path_resolved.relative_to(root_resolved)
+        except (OSError, ValueError):
+            return None
+        if path_resolved != expected_resolved:
+            return None
+
+        try:
+            size = path.stat().st_size
+        except OSError:
+            return None
+        sha256 = self._cached_sha256_file(path, root=root, metrics=metrics)
+        model.size_bytes = size
+        model.checksum = f"sha256:{sha256}"
+        model.verification_level = ModelVerificationLevel.SHA256_SIZE
+        model.identity_verified_by_exporter = False
+        self.log_store.add(
+            "info",
+            "Adopted existing source-backed model identity",
+            "workflow.models",
+            details={
+                "folder": model.folder,
+                "filename": model.filename,
+                "size_bytes": size,
+                "sha256": model.checksum,
+                "path": str(path),
+            },
+        )
+        return sha256
 
     def _local_candidates(
         self,

@@ -10,6 +10,7 @@ from app.workflows.import_normalization import (
     normalize_models,
     normalize_unresolved_runtime_inputs,
     reject_unsupported_exported_launch_options,
+    required_models_from_comfyui_workflow,
 )
 from app.workflows.package import WorkflowInput
 
@@ -58,6 +59,34 @@ def test_normalize_models_accepts_single_source_url_string() -> None:
 
     assert models[0].source_urls == [url]
     assert models[0].source_url == url
+
+
+def test_required_models_from_api_graph_known_model_selector_without_properties() -> None:
+    models = required_models_from_comfyui_workflow(
+        {},
+        comfyui_graph={
+            "88:85:82": {
+                "class_type": "LoadBackgroundRemovalModel",
+                "inputs": {
+                    "bg_removal_name": "birefnet.safetensors",
+                    "label": "birefnet.safetensors",
+                },
+            },
+            "90": {
+                "class_type": "CLIPTextEncode",
+                "inputs": {"text": "birefnet.safetensors"},
+            },
+        },
+    )
+
+    assert len(models) == 1
+    model = models[0]
+    assert model.folder == "background_removal"
+    assert model.filename == "birefnet.safetensors"
+    assert model.node_id == "88:85:82"
+    assert model.node_type == "LoadBackgroundRemovalModel"
+    assert model.input_name == "bg_removal_name"
+    assert model.model_type == "background_removal"
 
 
 def test_detect_unresolved_runtime_inputs_finds_local_load_image_values() -> None:

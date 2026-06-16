@@ -314,19 +314,14 @@ def _repair_required_model_source_urls_from_source_files(
     if not isinstance(raw_models, list):
         return
     source_workflow_path = package_dir / "source-files" / "comfyui_workflow.json"
-    if not source_workflow_path.exists():
-        return
-    try:
-        source_workflow = json.loads(source_workflow_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return
-    if not isinstance(source_workflow, dict):
-        return
     source_graph = _read_optional_source_json(
         package_dir / "source-files" / "comfyui_graph.json"
     )
+    source_workflow = _read_optional_source_json(source_workflow_path)
+    if source_workflow is None and source_graph is None:
+        return
     workflow_models = required_models_from_comfyui_workflow(
-        source_workflow,
+        source_workflow or {},
         comfyui_graph=source_graph,
     )
     if not workflow_models:
