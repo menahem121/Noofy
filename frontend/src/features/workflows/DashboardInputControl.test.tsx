@@ -441,7 +441,7 @@ describe("DashboardInputControl", () => {
       ).toBe(true);
       const preview = document.querySelector<HTMLImageElement>(".dashboard-image-input__preview");
       expect(preview).not.toBeNull();
-      expect(preview).toHaveAttribute("src", "blob:noofy-upload-preview");
+      expect(preview).toHaveAttribute("src", "/api/assets/12345678-1234-1234-1234-123456789abc.png");
       expect(screen.getByRole("group", { name: "Selected image actions" })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Replace" })).toHaveClass("dashboard-image-input__preview-action");
       expect(screen.getByRole("button", { name: "Remove" })).toHaveClass("dashboard-image-input__preview-action");
@@ -756,7 +756,7 @@ describe("DashboardInputControl", () => {
   });
 
   it("shows a recoverable missing-asset state only when a selected asset cannot load", async () => {
-    fetchMock.mockRejectedValue(new Error("missing asset"));
+    fetchMock.mockRejectedValue(new Error("missing metadata"));
 
     render(
       <DashboardInputControl
@@ -775,6 +775,9 @@ describe("DashboardInputControl", () => {
         onImageMaskApply={vi.fn()}
       />,
     );
+
+    const preview = screen.getByAltText("Selected image: 12345678-1234-1234-1234-123456789abc.png");
+    fireEvent.error(preview);
 
     await waitFor(() => {
       expect(screen.getByText("Image could not be loaded")).toBeInTheDocument();

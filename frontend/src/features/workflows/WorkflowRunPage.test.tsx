@@ -5400,6 +5400,7 @@ describe("WorkflowRunPage", () => {
     expect(componentsCss).toMatch(/\.dashboard-image-input--classic\.dashboard-image-input--preview \.dashboard-image-input__surface\s*{[^}]*max-height:\s*320px;[^}]*aspect-ratio:\s*16 \/ 10;/);
     expect(componentsCss).toMatch(/\.dashboard-video-input--classic\.dashboard-video-input--selected \.dashboard-video-input__player\s*{[^}]*aspect-ratio:\s*16 \/ 9;[^}]*object-fit:\s*contain;/);
     expect(componentsCss).toMatch(/\.dashboard-three-d-input--classic\.dashboard-three-d-input--selected \.three-d-viewer\s*{[^}]*grid-template-rows:\s*220px auto auto;/);
+    expect(componentsCss).toMatch(/\.dashboard-image-input--canvas \.dashboard-image-input__surface\s*{[^}]*height:\s*100%;[^}]*min-height:\s*0;/);
     expect(componentsCss).toMatch(/\.dashboard-image-input--canvas \.dashboard-image-input__preview\s*{[^}]*max-height:\s*none;/);
   });
 

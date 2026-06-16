@@ -907,6 +907,7 @@ function AssetImageInput({
   const packageImageUrl = workflowId && packageReference
     ? workflowDefaultAssetMediaUrl(workflowId, inputId, packageReference.asset_id)
     : null;
+  const uploadedImageUrl = assetId ? dashboardAssetMediaUrl(assetId) : null;
   const hasSelection = Boolean(assetId || galleryReference || packageReference);
 
   function closeMaskEditor() {
@@ -936,6 +937,12 @@ function AssetImageInput({
       return undefined;
     }
 
+    const sourceAssetId = typeof assetMetadata?.source_asset_id === "string" ? assetMetadata.source_asset_id : null;
+    if (!assetMetadata?.has_mask || !sourceAssetId) {
+      setMissing(false);
+      return undefined;
+    }
+
     let canceled = false;
     let objectUrl: string | null = null;
     fetchAssetBlobUrl(assetId)
@@ -948,14 +955,14 @@ function AssetImageInput({
         setBlobUrl(url);
       })
       .catch(() => {
-        if (!canceled) setMissing(true);
+        if (!canceled) setBlobUrl(null);
       });
 
     return () => {
       canceled = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [assetId, galleryReference, packageReference]);
+  }, [assetId, assetMetadata?.has_mask, assetMetadata?.source_asset_id, galleryReference, packageReference]);
 
   useEffect(() => {
     setMaskPreviewUrl((prev) => {
@@ -1128,15 +1135,15 @@ function AssetImageInput({
 
   const stateClass = missing
     ? "dashboard-image-input--missing"
-    : maskPreviewUrl || blobUrl || galleryReference || packageImageUrl
+    : maskPreviewUrl || uploadedImageUrl || galleryReference || packageImageUrl
       ? "dashboard-image-input--preview"
       : hasSelection
         ? "dashboard-image-input--loading"
         : "dashboard-image-input--empty";
   const galleryImageUrl = galleryReference ? galleryContentUrlById(galleryReference.gallery_item_id) : null;
-  const selectedImageUrl = maskPreviewUrl ?? blobUrl ?? galleryImageUrl ?? packageImageUrl;
+  const selectedImageUrl = maskPreviewUrl ?? blobUrl ?? uploadedImageUrl ?? galleryImageUrl ?? packageImageUrl;
   const selectedFilename = galleryReference?.filename ?? packageReference?.filename ?? assetMetadata?.original_filename ?? assetId;
-  const assetMaskAvailable = Boolean(assetId && !missing && (blobUrl || assetMetadata));
+  const assetMaskAvailable = Boolean(assetId && !missing && (uploadedImageUrl || blobUrl || assetMetadata));
   const galleryMaskAvailable = Boolean(galleryReference && onGalleryImageMaskPrepare);
   const maskAvailable = Boolean(onImageMaskApply && (assetMaskAvailable || galleryMaskAvailable));
 
