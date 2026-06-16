@@ -156,6 +156,8 @@ interface RunPageState {
   packageData: WorkflowPackageResponse | null;
   apiKeySettings: ApiKeySettingsResponse | null;
   validation: WorkflowValidationResult | null;
+  modelSummaryLoading: boolean;
+  validationLoading: boolean;
   job: EngineJob | null;
   progress: JobProgress | null;
   result: JobResult | null;
@@ -247,6 +249,8 @@ const initialState: RunPageState = {
   packageData: null,
   apiKeySettings: null,
   validation: null,
+  modelSummaryLoading: false,
+  validationLoading: false,
   job: null,
   progress: null,
   result: null,
@@ -420,7 +424,8 @@ export function WorkflowRunPage({
   }, [runComparisonInputSource]);
 
   // A workflow prop change renders before the reset effect below runs. Keep
-  // the previous workflow's requirements out of reconciliation and UI.
+  // the previous workflow's package and readiness data out of reconciliation
+  // and UI.
   const loadedWorkflowStateMatches = state.firstLoadedWorkflowId === workflowId;
   const packageDataForWorkflow =
     loadedWorkflowStateMatches ? state.packageData : null;
@@ -430,6 +435,10 @@ export function WorkflowRunPage({
     loadedWorkflowStateMatches ? state.modelSummary : null;
   const validationForWorkflow =
     loadedWorkflowStateMatches ? state.validation : null;
+  const modelSummaryLoadingForWorkflow =
+    loadedWorkflowStateMatches && state.modelSummaryLoading;
+  const validationLoadingForWorkflow =
+    loadedWorkflowStateMatches && state.validationLoading;
 
   // Build input index from package data.
   const inputIndex = useMemo<Map<string, WorkflowInputDef>>(() => {
@@ -659,68 +668,93 @@ export function WorkflowRunPage({
   async function loadRequirements() {
     const targetWorkflowId = workflowId;
     const loadSequence = ++requirementsLoadSequenceRef.current;
-    setState((current) => ({ ...current, error: null, packageLoadError: null }));
-    try {
-      const [workflowStatus, packageResult, modelSummary, apiKeySettings] = await Promise.all([
-        fetchWorkflowStatus(targetWorkflowId).catch(() => null),
-        fetchWorkflowPackage(targetWorkflowId)
-          .then((packageData) => ({ packageData, error: null }))
-          .catch((error: unknown) => ({
-            packageData: null,
-            error: error instanceof Error ? error.message : String(error),
-          })),
-        fetchWorkflowModelSummary(targetWorkflowId).catch(() => null),
-        fetchApiKeySettings().catch(() => null),
-      ]);
+    setState((current) => {
+      const hasCurrentWorkflowData = current.firstLoadedWorkflowId === targetWorkflowId;
+      return {
+        ...current,
+        workflowStatus: hasCurrentWorkflowData ? current.workflowStatus : null,
+        modelSummary: hasCurrentWorkflowData ? current.modelSummary : null,
+        packageData: hasCurrentWorkflowData ? current.packageData : null,
+        apiKeySettings: hasCurrentWorkflowData ? current.apiKeySettings : null,
+        validation: hasCurrentWorkflowData ? current.validation : null,
+        modelSummaryLoading: !hasCurrentWorkflowData || current.modelSummary === null,
+        validationLoading: !hasCurrentWorkflowData || current.validation === null,
+        error: null,
+        packageLoadError: null,
+      };
+    });
 
-      const validation = await validateWorkflow(targetWorkflowId);
-      if (
-        loadSequence !== requirementsLoadSequenceRef.current ||
-        activeWorkflowIdRef.current !== targetWorkflowId
-      ) {
-        return;
-      }
-      setState((current) => {
-        const next = {
+    const isCurrentLoad = () =>
+      loadSequence === requirementsLoadSequenceRef.current &&
+      activeWorkflowIdRef.current === targetWorkflowId;
+
+    const workflowStatusPromise = fetchWorkflowStatus(targetWorkflowId).catch(() => null);
+    const packagePromise = fetchWorkflowPackage(targetWorkflowId)
+      .then((packageData) => ({ packageData, error: null }))
+      .catch((error: unknown) => ({
+        packageData: null,
+        error: error instanceof Error ? error.message : String(error),
+      }));
+    const modelSummaryPromise = fetchWorkflowModelSummary(targetWorkflowId).catch(() => null);
+    const apiKeySettingsPromise = fetchApiKeySettings().catch(() => null);
+    const validationPromise = validateWorkflow(targetWorkflowId)
+      .then((validation): { validation: WorkflowValidationResult | null; error: unknown | null } => ({
+        validation,
+        error: null,
+      }))
+      .catch((error: unknown): { validation: null; error: unknown } => ({ validation: null, error }));
+
+    const [workflowStatus, packageResult] = await Promise.all([workflowStatusPromise, packagePromise]);
+    if (!isCurrentLoad()) return;
+    setState((current) => {
+      const next = {
+        ...current,
+        firstLoadedWorkflowId: targetWorkflowId,
+        workflowStatus,
+        packageData:
+          packageResult.packageData ??
+          (current.firstLoadedWorkflowId === targetWorkflowId ? current.packageData : null),
+        packageLoadError: packageResult.error,
+      };
+      workflowRunPageStateCache.set(targetWorkflowId, next);
+      return next;
+    });
+
+    await Promise.allSettled([
+      modelSummaryPromise.then((modelSummary) => {
+        if (!isCurrentLoad()) return;
+        setState((current) => ({
           ...current,
-          firstLoadedWorkflowId: targetWorkflowId,
-          workflowStatus,
           modelSummary,
-          packageData:
-            packageResult.packageData ??
-            (current.firstLoadedWorkflowId === targetWorkflowId ? current.packageData : null),
-          apiKeySettings,
-          validation,
-          packageLoadError: packageResult.error,
-        };
-        workflowRunPageStateCache.set(targetWorkflowId, next);
-        return next;
-      });
-    } catch (error) {
-      if (
-        loadSequence !== requirementsLoadSequenceRef.current ||
-        activeWorkflowIdRef.current !== targetWorkflowId
-      ) {
-        return;
-      }
-      setState((current) => {
-        const next = {
+          modelSummaryLoading: false,
+        }));
+      }),
+      apiKeySettingsPromise.then((apiKeySettings) => {
+        if (!isCurrentLoad()) return;
+        setState((current) => ({
           ...current,
-          firstLoadedWorkflowId: targetWorkflowId,
-          workflowStatus: current.firstLoadedWorkflowId === targetWorkflowId ? current.workflowStatus : null,
-          modelSummary: current.firstLoadedWorkflowId === targetWorkflowId ? current.modelSummary : null,
-          packageData: current.firstLoadedWorkflowId === targetWorkflowId ? current.packageData : null,
-          apiKeySettings: current.firstLoadedWorkflowId === targetWorkflowId ? current.apiKeySettings : null,
-          validation: current.firstLoadedWorkflowId === targetWorkflowId ? current.validation : null,
-          error: error instanceof Error ? error.message : String(error),
-          packageLoadError: null,
-        };
-        if (next.packageData) {
-          workflowRunPageStateCache.set(targetWorkflowId, next);
-        }
-        return next;
-      });
-    }
+          apiKeySettings,
+        }));
+      }),
+      validationPromise
+        .then(({ validation, error }) => {
+          if (!isCurrentLoad()) return;
+          if (error) {
+            setState((current) => ({
+              ...current,
+              validation: null,
+              validationLoading: false,
+              error: error instanceof Error ? error.message : String(error),
+            }));
+            return;
+          }
+          setState((current) => ({
+            ...current,
+            validation,
+            validationLoading: false,
+          }));
+        }),
+    ]);
   }
 
   useLayoutEffect(() => {
@@ -1731,12 +1765,23 @@ export function WorkflowRunPage({
     runtimeStatus.backendStatus === "reachable" &&
     (runtimeStatus.engineStatus === "offline" || runtimeStatus.engineStatus === "starting");
   const memoryRefusesRun = Boolean(memoryStatus && isBlockingMemoryState(memoryStatus.state));
-  const initialLoadPending = state.firstLoadedWorkflowId !== workflowId;
-  const workflowValuesReady = !initialLoadPending && userStateLoaded;
+  const dashboardPackagePending = state.firstLoadedWorkflowId !== workflowId;
+  const dashboardValuesReady = !dashboardPackagePending && userStateLoaded;
+  const dashboardLoadingCopy = dashboardPackagePending
+    ? {
+        title: "Opening workflow",
+        message: "Loading the dashboard controls.",
+      }
+    : {
+        title: "Loading your saved inputs",
+        message: "Restoring your saved input values.",
+      };
+  const runReadinessPending = modelSummaryLoadingForWorkflow || validationLoadingForWorkflow;
   // An active run does not disable Run: pressing it again queues another run
   // behind the current one. Only real blockers gate the button.
   const canRun = Boolean(
-    workflowValuesReady
+    dashboardValuesReady
+      && !runReadinessPending
       && workflowStatusForWorkflow?.can_prepare !== false
       && activeValidation?.valid
       && activeModelSummary?.ready_to_run !== false
@@ -1757,11 +1802,13 @@ export function WorkflowRunPage({
         installStatus,
         isBlockedByMemory,
         isWaitingForMemory,
-        loading: !workflowValuesReady,
+        dashboardLoadingReason: !dashboardValuesReady ? `${dashboardLoadingCopy.title}...` : null,
         memoryStatus,
         missingModels,
+        modelSummaryLoading: modelSummaryLoadingForWorkflow,
         modelSummaryReady: activeModelSummary?.ready_to_run,
         validation: activeValidation,
+        validationLoading: validationLoadingForWorkflow,
         workflowStatus: workflowStatusForWorkflow,
       });
   const canCancel = Boolean(
@@ -1803,7 +1850,7 @@ export function WorkflowRunPage({
   const hasDashboard = Boolean(
     packageDataForWorkflow?.dashboard?.status === "configured" && allControls.length > 0,
   );
-  const showCanvasView = viewMode === "canvas" && (initialLoadPending || hasDashboard);
+  const showCanvasView = viewMode === "canvas" && (dashboardPackagePending || hasDashboard);
   const isEditingLayout = draftLayoutOverrides !== null;
   const creatorActionBarPosition = actionBarPositionFromDashboard(
     packageDataForWorkflow?.dashboard?.presentation?.action_bar,
@@ -1939,7 +1986,6 @@ export function WorkflowRunPage({
         ...workflowActionBarRunState,
         memoryLoaded: false,
         showStatusNotice: false,
-        disabledReason: null,
         disabledActionLabel: null,
         developerDetails: null,
       }}
@@ -2213,7 +2259,10 @@ export function WorkflowRunPage({
             outputThreeDsByNodeId={outputThreeDsByNodeId}
             livePreview={activeLivePreview}
             comparisonBeforeImageUrl={comparisonInputImageUrl}
-            valuesReady={workflowValuesReady}
+            valuesReady={dashboardValuesReady}
+            loadingTitle={dashboardLoadingCopy.title}
+            loadingMessage={dashboardLoadingCopy.message}
+            loadingFullCanvas={dashboardPackagePending}
             inputValues={inputValues}
             seedModes={seedModes}
             onSeedModeChange={handleSeedModeChange}
@@ -2309,12 +2358,12 @@ export function WorkflowRunPage({
             </div>
           </div>
 
-          {!workflowValuesReady ? (
+          {!dashboardValuesReady ? (
             <div className="workflow-values-loading" role="status" aria-live="polite">
               <Loader2 className="spin" size={20} aria-hidden="true" />
               <div>
-                <strong>Loading saved settings</strong>
-                <span>Preparing your workflow values.</span>
+                <strong>{dashboardLoadingCopy.title}</strong>
+                <span>{dashboardLoadingCopy.message}</span>
               </div>
             </div>
           ) : hasDashboard ? (
@@ -3967,11 +4016,13 @@ interface RunDisabledReasonInput {
   installStatus: string | null;
   isBlockedByMemory: boolean;
   isWaitingForMemory: boolean;
-  loading: boolean;
+  dashboardLoadingReason: string | null;
   memoryStatus: MemoryStatus | null;
   missingModels: Array<{ filename: string }>;
+  modelSummaryLoading: boolean;
   modelSummaryReady: boolean | undefined;
   validation: WorkflowValidationResult | null;
+  validationLoading: boolean;
   workflowStatus: WorkflowStatusResponse | null;
 }
 
@@ -3981,11 +4032,13 @@ function workflowRunDisabledReason({
   installStatus,
   isBlockedByMemory,
   isWaitingForMemory,
-  loading,
+  dashboardLoadingReason,
   memoryStatus,
   missingModels,
+  modelSummaryLoading,
   modelSummaryReady,
   validation,
+  validationLoading,
   workflowStatus,
 }: RunDisabledReasonInput): string {
   if (isBlockedByMemory && memoryStatus) return memoryStatusDisplay(memoryStatus).message;
@@ -3994,9 +4047,11 @@ function workflowRunDisabledReason({
   if (isWaitingForMemory) return "Noofy is waiting for memory to free up.";
   if (backendKnownUnreachable) return "The local app service is offline.";
   if (engineKnownUnavailable) return "The ComfyUI engine is not ready yet.";
+  if (dashboardLoadingReason) return dashboardLoadingReason;
   if (installStatus === "unsupported" || workflowStatus?.can_prepare === false) {
     return "This workflow cannot run on this machine.";
   }
+  if (modelSummaryLoading) return "Checking required models...";
   if (missingModels.length > 0) {
     const names = missingModels.slice(0, 2).map((model) => model.filename).join(", ");
     const remaining = missingModels.length > 2 ? ` and ${missingModels.length - 2} more` : "";
@@ -4006,7 +4061,7 @@ function workflowRunDisabledReason({
   if (validation && !validation.valid) {
     return validation.errors[0] ?? "This workflow needs setup before it can run.";
   }
-  if (loading || !workflowStatus || !validation) return "Checking workflow readiness...";
+  if (validationLoading || !workflowStatus || !validation) return "Checking workflow readiness...";
   return "This workflow is not ready to run.";
 }
 

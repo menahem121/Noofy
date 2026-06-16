@@ -108,6 +108,9 @@ interface CanvasDashboardViewProps {
   livePreview?: JobLivePreview | null;
   comparisonBeforeImageUrl?: string | null;
   valuesReady: boolean;
+  loadingTitle: string;
+  loadingMessage: string;
+  loadingFullCanvas: boolean;
   inputValues: Record<string, unknown>;
   seedModes: Record<string, SeedMode>;
   onSeedModeChange: (inputId: string, mode: SeedMode) => void;
@@ -171,6 +174,9 @@ export function CanvasDashboardView({
   livePreview,
   comparisonBeforeImageUrl,
   valuesReady,
+  loadingTitle,
+  loadingMessage,
+  loadingFullCanvas,
   inputValues,
   seedModes,
   onSeedModeChange,
@@ -533,11 +539,15 @@ export function CanvasDashboardView({
       <SeedModeContext.Provider value={{ seedModes, onSeedModeChange }}>
         <div className="canvas-dashboard">
           <DashboardCanvasFrame className="canvas-dashboard__canvas" aria-label="Workflow dashboard canvas">
-            <div className="workflow-values-loading" role="status" aria-live="polite">
+            <div
+              className={`workflow-values-loading${loadingFullCanvas ? "" : " workflow-values-loading--compact"}`}
+              role="status"
+              aria-live="polite"
+            >
               <Loader2 className="spin" size={20} aria-hidden="true" />
               <div>
-                <strong>Loading saved settings</strong>
-                <span>Preparing your dashboard values.</span>
+                <strong>{loadingTitle}</strong>
+                <span>{loadingMessage}</span>
               </div>
             </div>
           </DashboardCanvasFrame>

@@ -23,6 +23,19 @@
   margin: auto;
 }
 
+.canvas-dashboard__canvas > .workflow-values-loading--compact {
+  inset: 14px auto auto 14px;
+  width: min(340px, calc(100% - 28px));
+  min-height: 0;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  background: rgba(28, 27, 29, 0.82);
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.22);
+  backdrop-filter: blur(12px);
+}
+
 .workspace-content--canvas-run {
   position: relative;
 }

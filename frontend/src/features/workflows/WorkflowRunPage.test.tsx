@@ -2461,7 +2461,7 @@ describe("WorkflowRunPage", () => {
     renderRunPage();
 
     expect(await screen.findByText("This workflow needs required models")).toBeInTheDocument();
-    expect(screen.getByText(/v1-5-pruned-emaonly-fp16\.safetensors/)).toBeInTheDocument();
+    expect(screen.getAllByText(/v1-5-pruned-emaonly-fp16\.safetensors/).length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: /run workflow/i })).toBeDisabled();
   });
 
@@ -4671,7 +4671,8 @@ describe("WorkflowRunPage", () => {
     expect(document.querySelector(".main-workspace--canvas-run")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Inputs" })).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Preview" })).not.toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("Loading saved settings");
+    expect(screen.getByRole("status")).toHaveTextContent("Opening workflow");
+    expect(screen.queryByText("Loading saved settings")).not.toBeInTheDocument();
 
     // Flush the fire-and-forget /api/resources fetch so its trailing setState lands inside act().
     await act(async () => {});
@@ -4692,13 +4693,14 @@ describe("WorkflowRunPage", () => {
 
       renderRunPage();
 
-      expect(await screen.findByText("Loading saved settings")).toBeInTheDocument();
+      expect(await screen.findByText("Loading your saved inputs")).toBeInTheDocument();
       expect(screen.queryByDisplayValue("a lake")).not.toBeInTheDocument();
       expect(screen.queryByText("a lake")).not.toBeInTheDocument();
       if (viewMode === "classic") {
         expect(screen.getByRole("button", { name: "Run Workflow" })).toBeDisabled();
       } else {
         expect(screen.queryByRole("button", { name: "Run Workflow" })).not.toBeInTheDocument();
+        expect(document.querySelector(".workflow-values-loading--compact")).toBeInTheDocument();
       }
 
       await act(async () => {
@@ -4715,8 +4717,59 @@ describe("WorkflowRunPage", () => {
 
       expect(await screen.findByDisplayValue("my saved prompt")).toBeInTheDocument();
       expect(screen.queryByDisplayValue("a lake")).not.toBeInTheDocument();
+      expect(screen.queryByText("Loading saved settings")).not.toBeInTheDocument();
     },
   );
+
+  it("renders saved dashboard values while model checks and validation are still pending", async () => {
+    window.localStorage.setItem("noofy.prefs", JSON.stringify({ viewMode: "classic" }));
+    const modelSummaryResponse = deferred<Response>();
+    const validationResponse = deferred<Response>();
+    const dashboardVersion = dashboardUserStateVersionForTest(configuredPackageData);
+    mockConfiguredDashboardFetch(fetchMock, readyRuntime, configuredPackageData, null, (url, init) => {
+      if (url.endsWith("/api/workflows/text_to_image_v0/model-summary")) {
+        return modelSummaryResponse.promise;
+      }
+      if (url.endsWith("/api/workflows/text_to_image_v0/validate") && init?.method === "POST") {
+        return validationResponse.promise;
+      }
+      if (url.endsWith("/api/workflows/text_to_image_v0/user-state") && (!init?.method || init.method === "GET")) {
+        return jsonResponse({
+          schema_version: "1",
+          workflow_id: "text_to_image_v0",
+          dashboard_version: dashboardVersion,
+          values: { prompt: "saved prompt before model checks" },
+          layout_overrides: {},
+          presentation_overrides: {},
+          output_preferences: {},
+        });
+      }
+      return undefined;
+    });
+
+    renderRunPage();
+
+    expect(await screen.findByDisplayValue("saved prompt before model checks")).toBeInTheDocument();
+    expect(screen.queryByDisplayValue("a lake")).not.toBeInTheDocument();
+    expect(screen.queryByText("Loading saved settings")).not.toBeInTheDocument();
+
+    const runButton = screen.getByRole("button", { name: "Run Workflow" });
+    expect(runButton).toBeDisabled();
+    expect(screen.getByText("Checking required models...")).toBeInTheDocument();
+
+    await act(async () => {
+      modelSummaryResponse.resolve(jsonResponse(readyModelSummary));
+    });
+
+    expect(screen.getByRole("button", { name: "Run Workflow" })).toBeDisabled();
+    expect(await screen.findByText("Checking workflow readiness...")).toBeInTheDocument();
+
+    await act(async () => {
+      validationResponse.resolve(jsonResponse(validWorkflow));
+    });
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Run Workflow" })).toBeEnabled());
+  });
 
   it("ignores a slower workflow load after switching to another workflow", async () => {
     window.localStorage.setItem("noofy.prefs", JSON.stringify({ viewMode: "classic" }));
@@ -4895,7 +4948,7 @@ describe("WorkflowRunPage", () => {
 
     rerender(page("next-workflow"));
 
-    expect(screen.getByText("Loading saved settings")).toBeInTheDocument();
+    expect(screen.getByText("Opening workflow")).toBeInTheDocument();
     expect(screen.queryByDisplayValue("first saved value")).not.toBeInTheDocument();
     expect(
       fetchMock.mock.calls.filter(([url, requestInit]) =>
@@ -6505,9 +6558,15 @@ describe("WorkflowRunPage", () => {
     const comparisonMetadataResponse = deferred<Response>();
     let maskedMetadataRequestCount = 0;
     let objectUrlIndex = 0;
+    let nextObjectUrl: string | null = null;
     Object.defineProperty(URL, "createObjectURL", {
       configurable: true,
       value: vi.fn(() => {
+        if (nextObjectUrl) {
+          const url = nextObjectUrl;
+          nextObjectUrl = null;
+          return url;
+        }
         objectUrlIndex += 1;
         return `blob:asset-${objectUrlIndex}`;
       }),
@@ -6579,6 +6638,7 @@ describe("WorkflowRunPage", () => {
           return new Response(new Blob(["masked"], { type: "image/png" }), { status: 200 });
         }
         if (url.endsWith(`/api/assets/${sourceAssetId}`)) {
+          nextObjectUrl = "blob:source-asset";
           return new Response(new Blob(["source"], { type: "image/png" }), { status: 200 });
         }
         if (url.endsWith("/api/workflows/text_to_image_v0/user-state")) {
@@ -6645,9 +6705,8 @@ describe("WorkflowRunPage", () => {
     });
 
     expect(await screen.findByRole("slider", { name: /compare original image/i })).toBeInTheDocument();
-    const beforeImage = container.querySelector(".image-comparison-slider__image--before");
     await waitFor(() => {
-      expect(beforeImage).toHaveAttribute("src", "blob:asset-2");
+      expect(container.querySelector(".image-comparison-slider__image--before")).toHaveAttribute("src", "blob:source-asset");
     });
     expect(
       fetchMock.mock.calls.some(([input]) => String(input).endsWith(`/api/assets/${sourceAssetId}`)),
