@@ -93,12 +93,12 @@ from app.workflows.import_normalization import (
     detect_unresolved_runtime_inputs,
     filter_resolved_runtime_inputs,
     has_nonempty_launch_option,
-    model_source_urls_from_comfyui_workflow,
     normalize_asset_ownership,
     normalize_custom_nodes,
     normalize_dashboard,
     normalize_model_verification_level,
     normalize_models,
+    required_models_from_comfyui_workflow,
     normalize_unresolved_runtime_inputs,
     normalize_signed_registry_metadata,
     normalize_signatures,
@@ -662,6 +662,7 @@ class NoofyArchiveImporter:
                 if "comfyui_workflow.json" in self.members
                 else None
             ),
+            graph,
         )
         custom_nodes = _normalize_custom_nodes(capsule_json, package_json)
         dashboard = _normalize_dashboard(dashboard_json)
@@ -1127,28 +1128,32 @@ def _normalize_models(capsule_json: dict[str, Any]) -> list[RequiredModel]:
 def _with_comfyui_workflow_model_source_urls(
     models: list[RequiredModel],
     comfyui_workflow: dict[str, Any] | None,
+    comfyui_graph: dict[str, Any] | None = None,
 ) -> list[RequiredModel]:
-    if not models or not isinstance(comfyui_workflow, dict):
+    if not isinstance(comfyui_workflow, dict):
         return models
-    urls_by_model = _comfyui_workflow_model_source_urls(comfyui_workflow)
-    if not urls_by_model:
+    workflow_models = required_models_from_comfyui_workflow(
+        comfyui_workflow,
+        comfyui_graph=comfyui_graph,
+    )
+    if not workflow_models:
         return models
-    for model in models:
+    existing_by_target = {(model.folder, model.filename): model for model in models}
+    merged = list(models)
+    for workflow_model in workflow_models:
+        target = (workflow_model.folder, workflow_model.filename)
+        model = existing_by_target.get(target)
+        if model is None:
+            existing_by_target[target] = workflow_model
+            merged.append(workflow_model)
+            continue
         if model.source_urls or model.source_url:
             continue
-        source_urls = urls_by_model.get((model.folder, model.filename))
-        if not source_urls:
+        if not workflow_model.source_urls:
             continue
-        model.source_urls = source_urls
-        model.source_url = source_urls[0]
-    return models
-
-
-def _comfyui_workflow_model_source_urls(
-    comfyui_workflow: dict[str, Any],
-) -> dict[tuple[str, str], list[str]]:
-    return model_source_urls_from_comfyui_workflow(comfyui_workflow)
-
+        model.source_urls = list(workflow_model.source_urls)
+        model.source_url = workflow_model.source_urls[0]
+    return merged
 
 def _normalize_model_verification_level(
     model: dict[str, Any],

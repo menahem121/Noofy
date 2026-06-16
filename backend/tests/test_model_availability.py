@@ -11,7 +11,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from app.artifacts import AssetOwnership
+from app.artifacts import AssetOwnership, ModelVerificationLevel
 from app.diagnostics import LogStore
 from app.workflows import model_availability as availability_module
 from app.workflows.model_availability import (
@@ -1896,6 +1896,47 @@ async def test_explicit_source_urls_take_priority_over_provider_search(
 
     assert result.downloaded_count == 1
     assert streamed_urls == ["https://example.com/models/explicit.safetensors"]
+
+
+@pytest.mark.anyio
+async def test_explicit_source_url_without_size_downloads_and_adopts_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"explicit-source-without-size"
+    sha = hashlib.sha256(payload).hexdigest()
+    noofy_root = tmp_path / "Noofy Models"
+    source_url = "https://example.com/models/birefnet.safetensors"
+
+    async def fake_stream(url: str, part_path: Path, **kwargs: object) -> None:
+        part_path.parent.mkdir(parents=True, exist_ok=True)
+        part_path.write_bytes(payload)
+
+    service = _service(noofy_root=noofy_root)
+    monkeypatch.setattr(availability_module, "_stream_url", fake_stream)
+    package = _package(
+        [
+            RequiredModel(
+                folder="background_removal",
+                filename="birefnet.safetensors",
+                verification_level="filename_only",
+                source_urls=[source_url],
+            )
+        ]
+    )
+
+    before = service.summarize(package)
+    assert before.models[0].status == "missing"
+
+    result = await service.download_missing(package)
+
+    model = package.required_models[0]
+    assert result.downloaded_count == 1
+    assert (noofy_root / "background_removal" / "birefnet.safetensors").read_bytes() == payload
+    assert model.size_bytes == len(payload)
+    assert model.checksum == f"sha256:{sha}"
+    assert model.verification_level is ModelVerificationLevel.SHA256_SIZE
+    assert model.identity_verified_by_exporter is False
 
 
 def test_model_summary_redacts_secret_bearing_source_url(tmp_path: Path) -> None:

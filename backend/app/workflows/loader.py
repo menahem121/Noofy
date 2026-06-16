@@ -5,8 +5,8 @@ from typing import Any, Literal
 from app.artifacts import ModelVerificationLevel
 from app.workflows.import_normalization import (
     filter_resolved_runtime_inputs,
-    model_source_urls_from_comfyui_workflow,
     normalize_custom_nodes,
+    required_models_from_comfyui_workflow,
 )
 from app.workflows.package import (
     DashboardSchema,
@@ -322,23 +322,46 @@ def _repair_required_model_source_urls_from_source_files(
         return
     if not isinstance(source_workflow, dict):
         return
-    urls_by_model = model_source_urls_from_comfyui_workflow(source_workflow)
-    if not urls_by_model:
+    source_graph = _read_optional_source_json(
+        package_dir / "source-files" / "comfyui_graph.json"
+    )
+    workflow_models = required_models_from_comfyui_workflow(
+        source_workflow,
+        comfyui_graph=source_graph,
+    )
+    if not workflow_models:
         return
-    for model in raw_models:
-        if not isinstance(model, dict):
+    existing_by_target = {
+        (model.get("folder") or model.get("comfyui_folder"), model.get("filename")): model
+        for model in raw_models
+        if isinstance(model, dict)
+        and isinstance(model.get("folder") or model.get("comfyui_folder"), str)
+        and isinstance(model.get("filename"), str)
+    }
+    for workflow_model in workflow_models:
+        target = (workflow_model.folder, workflow_model.filename)
+        model = existing_by_target.get(target)
+        if model is None:
+            dumped = workflow_model.model_dump(mode="json", exclude_none=True)
+            raw_models.append(dumped)
+            existing_by_target[target] = dumped
             continue
         if model.get("source_urls") or model.get("source_url"):
             continue
-        folder = model.get("folder") or model.get("comfyui_folder")
-        filename = model.get("filename")
-        if not isinstance(folder, str) or not isinstance(filename, str):
+        if not workflow_model.source_urls:
             continue
-        source_urls = urls_by_model.get((folder, filename))
-        if not source_urls:
-            continue
-        model["source_urls"] = source_urls
-        model["source_url"] = source_urls[0]
+        model["source_urls"] = list(workflow_model.source_urls)
+        model["source_url"] = workflow_model.source_urls[0]
+
+
+def _read_optional_source_json(path: Path) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
 
 
 def _repair_imported_custom_nodes_from_source_files(

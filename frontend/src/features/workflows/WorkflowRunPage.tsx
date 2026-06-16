@@ -179,6 +179,7 @@ interface RunFailureDialogState {
   noofyLogs: DiagnosticEvent[];
   detailsOpen: boolean;
   copied: boolean;
+  logsCopied: boolean;
 }
 
 interface RunInputErrorDialogState {
@@ -1245,6 +1246,7 @@ export function WorkflowRunPage({
       noofyLogs: [],
       detailsOpen: false,
       copied: false,
+      logsCopied: false,
     });
   }
 
@@ -1268,6 +1270,7 @@ export function WorkflowRunPage({
             }
           : current,
       );
+      return splitLogs;
     } catch (error) {
       setFailureDialog((current) =>
         current && current.errorMessage === errorMessage && current.jobId === jobId
@@ -1278,6 +1281,7 @@ export function WorkflowRunPage({
             }
           : current,
       );
+      throw error;
     }
   }
 
@@ -1290,6 +1294,32 @@ export function WorkflowRunPage({
     if (!failureDialog) return;
     await navigator.clipboard.writeText(formatFailureReport(workflowId, failureDialog));
     setFailureDialog((current) => (current ? { ...current, copied: true } : current));
+  }
+
+  async function handleCopyFailureDiagnosticLogs() {
+    if (!failureDialog) return;
+    const dialogSnapshot = failureDialog;
+    let comfyuiLogs = dialogSnapshot.comfyuiLogs;
+    let noofyLogs = dialogSnapshot.noofyLogs;
+
+    if (!dialogSnapshot.logsLoaded) {
+      try {
+        const splitLogs = await loadFailureLogsFor(dialogSnapshot.errorMessage, dialogSnapshot.jobId);
+        comfyuiLogs = splitLogs.comfyuiLogs;
+        noofyLogs = splitLogs.noofyLogs;
+      } catch {
+        return;
+      }
+    }
+
+    await navigator.clipboard.writeText(
+      formatFailureLogsReport({
+        comfyuiLogs,
+        noofyLogs,
+        logsLoaded: true,
+      }),
+    );
+    setFailureDialog((current) => (current ? { ...current, logsCopied: true } : current));
   }
 
   function openInputErrorDialog(error: RunUserFixableError) {
@@ -2114,6 +2144,7 @@ export function WorkflowRunPage({
       onToggleDetails={() => setFailureDialog((current) => current ? { ...current, detailsOpen: !current.detailsOpen } : current)}
       onViewLogs={() => void loadFailureLogs()}
       onCopy={() => void handleCopyFailureLogs()}
+      onCopyLogs={() => void handleCopyFailureDiagnosticLogs()}
     />
   ) : null;
   const inputErrorDialogElement = inputErrorDialog ? (
@@ -2693,6 +2724,7 @@ function WorkflowFailureDialog({
   onToggleDetails,
   onViewLogs,
   onCopy,
+  onCopyLogs,
 }: {
   dialog: RunFailureDialogState;
   workflowId: string;
@@ -2701,6 +2733,7 @@ function WorkflowFailureDialog({
   onToggleDetails: () => void;
   onViewLogs: () => void;
   onCopy: () => void;
+  onCopyLogs: () => void;
 }) {
   const memoryFailure = isMemoryFailureCode(dialog.errorCode);
   const failureMessage = memoryFailure
@@ -2785,6 +2818,10 @@ function WorkflowFailureDialog({
           <div className="workflow-input-error-modal__actions">
             <button className="secondary-button" type="button" onClick={onViewLogs}>
               {dialog.logsLoaded ? "Refresh logs" : "View logs"}
+            </button>
+            <button className="secondary-button" type="button" onClick={onCopyLogs}>
+              <Clipboard size={16} aria-hidden="true" />
+              {dialog.logsCopied ? "Logs copied" : "Copy logs"}
             </button>
             <button className={memoryFailure ? "secondary-button" : "primary-button"} type="button" onClick={onCopy}>
               <Clipboard size={16} aria-hidden="true" />
@@ -3749,6 +3786,20 @@ function formatFailureReport(workflowId: string, dialog: RunFailureDialogState) 
     "Noofy logs",
     formatDiagnosticEvents(dialog.noofyLogs) || (dialog.logsLoaded ? "No Noofy logs were returned for this failure." : "Logs were not loaded."),
   ].filter((line): line is string => line !== null).join("\n");
+}
+
+function formatFailureLogsReport({
+  comfyuiLogs,
+  noofyLogs,
+  logsLoaded,
+}: Pick<RunFailureDialogState, "comfyuiLogs" | "noofyLogs" | "logsLoaded">) {
+  return [
+    "ComfyUI engine logs",
+    formatDiagnosticEvents(comfyuiLogs) || (logsLoaded ? "No ComfyUI engine logs were returned for this failure." : "Logs were not loaded."),
+    "",
+    "Noofy logs",
+    formatDiagnosticEvents(noofyLogs) || (logsLoaded ? "No Noofy logs were returned for this failure." : "Logs were not loaded."),
+  ].join("\n");
 }
 
 function formatInputErrorReport(workflowId: string, dialog: RunInputErrorDialogState) {

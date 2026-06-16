@@ -374,6 +374,54 @@ def test_noofy_importer_backfills_model_source_url_from_editable_workflow() -> N
     assert model.source_urls == [source_url]
 
 
+def test_noofy_importer_adds_missing_model_from_editable_workflow_metadata() -> None:
+    source_url = (
+        "https://huggingface.co/example/repo/resolve/main/"
+        "background_removal/birefnet.safetensors"
+    )
+    archive = _archive_bytes_with_comfyui_workflow_update(
+        {
+            "nodes": [
+                {
+                    "id": 82,
+                    "type": "LoadBackgroundRemovalModel",
+                    "widgets_values": ["birefnet.safetensors"],
+                    "properties": {
+                        "models": [
+                            {
+                                "directory": "background_removal",
+                                "name": "birefnet.safetensors",
+                                "url": source_url,
+                            }
+                        ]
+                    },
+                }
+            ]
+        },
+        archive_bytes=_archive_bytes_with_graph_update(
+            {
+                "88:85:82": {
+                    "class_type": "LoadBackgroundRemovalModel",
+                    "inputs": {"bg_removal_name": "birefnet.safetensors"},
+                }
+            },
+            archive_bytes=_archive_bytes_with_capsule_update(
+                {"models": []},
+                archive_bytes=_small_archive_bytes(),
+            ),
+        ),
+    )
+
+    package = NoofyArchiveImporter(archive).normalize()
+
+    model = package.required_models[0]
+    assert model.folder == "background_removal"
+    assert model.filename == "birefnet.safetensors"
+    assert model.node_id == "88:85:82"
+    assert model.input_name == "bg_removal_name"
+    assert model.source_urls == [source_url]
+
+
 def test_noofy_importer_preserves_phase6_signature_metadata() -> None:
     archive = _archive_bytes_with_package_update(
         {
@@ -1955,6 +2003,22 @@ def _archive_bytes_with_comfyui_workflow_update(
                 "comfyui_workflow.json",
                 json.dumps(comfyui_workflow).encode("utf-8"),
             )
+    return payload.getvalue()
+
+
+def _archive_bytes_with_graph_update(
+    graph: dict, *, archive_bytes: bytes | None = None
+) -> bytes:
+    source = io.BytesIO(archive_bytes or _archive_bytes())
+    payload = io.BytesIO()
+    with zipfile.ZipFile(source, "r") as original, zipfile.ZipFile(
+        payload, "w"
+    ) as rewritten:
+        for info in original.infolist():
+            contents = original.read(info)
+            if info.filename == "comfyui_graph.json":
+                contents = json.dumps(graph).encode("utf-8")
+            rewritten.writestr(info, contents)
     return payload.getvalue()
 
 

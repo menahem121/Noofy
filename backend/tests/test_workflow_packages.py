@@ -173,6 +173,76 @@ def test_loader_repairs_missing_model_source_url_from_source_workflow(tmp_path: 
     assert model.source_urls == [source_url]
 
 
+def test_loader_adds_missing_required_model_from_source_workflow(tmp_path: Path) -> None:
+    source_url = (
+        "https://huggingface.co/example/repo/resolve/main/"
+        "background_removal/birefnet.safetensors"
+    )
+    package_dir = tmp_path / "packages" / "missing_background_model"
+    package_dir.mkdir(parents=True)
+    (package_dir / "package.json").write_text(
+        json.dumps(
+            {
+                "metadata": {
+                    "id": "missing_background_model",
+                    "name": "Missing Background Model",
+                    "version": "0.1.0",
+                },
+                "engine": "comfyui",
+                "required_models": [],
+                "comfyui_graph": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    source_files = package_dir / "source-files"
+    source_files.mkdir()
+    (source_files / "comfyui_workflow.json").write_text(
+        json.dumps(
+            {
+                "nodes": [
+                    {
+                        "id": 82,
+                        "type": "LoadBackgroundRemovalModel",
+                        "properties": {
+                            "models": [
+                                {
+                                    "directory": "background_removal",
+                                    "name": "birefnet.safetensors",
+                                    "url": source_url,
+                                }
+                            ]
+                        },
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (source_files / "comfyui_graph.json").write_text(
+        json.dumps(
+            {
+                "88:85:82": {
+                    "class_type": "LoadBackgroundRemovalModel",
+                    "inputs": {"bg_removal_name": "birefnet.safetensors"},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    package = WorkflowPackageLoader(tmp_path / "packages").get_package(
+        "missing_background_model"
+    )
+
+    model = package.required_models[0]
+    assert model.folder == "background_removal"
+    assert model.filename == "birefnet.safetensors"
+    assert model.node_id == "88:85:82"
+    assert model.input_name == "bg_removal_name"
+    assert model.source_urls == [source_url]
+
+
 def test_loader_filters_unresolved_inputs_resolved_by_dashboard_override(tmp_path: Path) -> None:
     package_dir = tmp_path / "packages" / "image_workflow"
     package_dir.mkdir(parents=True)

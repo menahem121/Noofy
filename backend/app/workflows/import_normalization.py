@@ -254,8 +254,24 @@ def normalize_models(capsule_json: dict[str, Any]) -> list[RequiredModel]:
 def model_source_urls_from_comfyui_workflow(
     comfyui_workflow: dict[str, Any],
 ) -> dict[tuple[str, str], list[str]]:
-    urls_by_model: dict[tuple[str, str], list[str]] = {}
+    return {
+        (model.folder, model.filename): list(model.source_urls)
+        for model in required_models_from_comfyui_workflow(comfyui_workflow)
+        if model.source_urls
+    }
+
+
+def required_models_from_comfyui_workflow(
+    comfyui_workflow: dict[str, Any],
+    *,
+    comfyui_graph: dict[str, Any] | None = None,
+) -> list[RequiredModel]:
+    graph_bindings = _comfyui_graph_model_bindings(comfyui_graph or {})
+    models: list[RequiredModel] = []
+    seen: set[tuple[str | None, str | None, str, str]] = set()
     for node in _iter_comfyui_workflow_nodes(comfyui_workflow):
+        node_id = _node_id_string(node.get("id"))
+        node_type = optional_string_field(node, "type")
         properties = node.get("properties")
         if not isinstance(properties, dict):
             continue
@@ -273,14 +289,85 @@ def model_source_urls_from_comfyui_workflow(
                 entry.get("source_urls"),
                 fallback=entry.get("url"),
             )
-            if not source_urls:
+            graph_node_id, input_name = _matching_graph_model_binding(
+                graph_bindings,
+                node_id=node_id,
+                node_type=node_type,
+                filename=filename,
+            )
+            resolved_node_id = graph_node_id or node_id
+            key = (resolved_node_id, input_name, folder, filename)
+            if key in seen:
                 continue
-            key = (folder, filename)
-            merged = urls_by_model.setdefault(key, [])
-            for url in source_urls:
-                if url not in merged:
-                    merged.append(url)
-    return urls_by_model
+            seen.add(key)
+            models.append(
+                RequiredModel(
+                    folder=folder,
+                    filename=filename,
+                    node_id=resolved_node_id,
+                    node_type=node_type,
+                    input_name=input_name,
+                    source_url=source_urls[0] if source_urls else None,
+                    source_urls=source_urls,
+                    model_type=_model_type_from_workflow_model(folder, node_type),
+                    verification_level=ModelVerificationLevel.FILENAME_ONLY,
+                    identity_verified_by_exporter=False,
+                    bundled=False,
+                    asset_ownership=AssetOwnership.EXTERNAL_REFERENCE,
+                )
+            )
+    return models
+
+
+def _comfyui_graph_model_bindings(
+    comfyui_graph: dict[str, Any],
+) -> dict[tuple[str | None, str], list[tuple[str, str]]]:
+    bindings: dict[tuple[str | None, str], list[tuple[str, str]]] = {}
+    for raw_node_id, raw_node in comfyui_graph.items():
+        if not isinstance(raw_node, dict):
+            continue
+        node_id = str(raw_node_id)
+        node_type = optional_string_field(raw_node, "class_type")
+        inputs = raw_node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        for input_name, value in inputs.items():
+            if not isinstance(input_name, str) or not isinstance(value, str):
+                continue
+            bindings.setdefault((node_type, value), []).append((node_id, input_name))
+    return bindings
+
+
+def _matching_graph_model_binding(
+    graph_bindings: dict[tuple[str | None, str], list[tuple[str, str]]],
+    *,
+    node_id: str | None,
+    node_type: str | None,
+    filename: str,
+) -> tuple[str | None, str | None]:
+    candidates = graph_bindings.get((node_type, filename), [])
+    if not candidates:
+        return None, None
+    if node_id:
+        for graph_node_id, input_name in candidates:
+            if graph_node_id == node_id or graph_node_id.endswith(f":{node_id}"):
+                return graph_node_id, input_name
+    return candidates[0]
+
+
+def _model_type_from_workflow_model(folder: str, node_type: str | None) -> str:
+    normalized_node = (node_type or "").casefold()
+    if "backgroundremoval" in normalized_node or folder == "background_removal":
+        return "background_removal"
+    return folder
+
+
+def _node_id_string(value: Any) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    if isinstance(value, int):
+        return str(value)
+    return None
 
 
 def _iter_comfyui_workflow_nodes(value: Any) -> Iterator[dict[str, Any]]:

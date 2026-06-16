@@ -1225,7 +1225,7 @@ class ModelAvailabilityService:
                 message="A local file with this name was found, but Noofy needs stronger verification before using it.",
             )
 
-        if (source_urls or _provider_resolvable(model)) and model.size_bytes is not None:
+        if source_urls or _provider_resolvable(model):
             return RequiredModelAvailability(
                 **base,
                 status="missing",
@@ -1321,12 +1321,21 @@ class ModelAvailabilityService:
     ) -> bool:
         if cancel_event is not None and cancel_event.is_set():
             raise ModelDownloadCanceled("Download canceled.")
-        if model.verification_level is ModelVerificationLevel.FILENAME_ONLY:
-            return False
-        if model.size_bytes is None or model.size_bytes <= 0:
-            raise ModelAvailabilityError("Noofy needs a known file size before downloading this model.")
         explicit_urls = _prioritized_source_urls(_source_urls(model))
         urls = explicit_urls
+        explicit_authoritative_download = (
+            explicit_source_urls_authoritative and bool(explicit_urls)
+        )
+        if (
+            model.verification_level is ModelVerificationLevel.FILENAME_ONLY
+            and not explicit_authoritative_download
+        ):
+            return False
+        if (
+            (model.size_bytes is None or model.size_bytes <= 0)
+            and not explicit_authoritative_download
+        ):
+            raise ModelAvailabilityError("Noofy needs a known file size before downloading this model.")
         if not urls:
             self.log_store.add(
                 "info",
@@ -1355,7 +1364,8 @@ class ModelAvailabilityService:
             )
             return False
         self._validate_owned_model_root()
-        self._ensure_disk_space(model.size_bytes)
+        if model.size_bytes is not None and model.size_bytes > 0:
+            self._ensure_disk_space(model.size_bytes)
         final_path = _safe_join_model_path(self.noofy_models_dir, model.folder, model.filename)
         if final_path.exists():
             current = self._availability_for(model, deep_search=False, verify_hashes=True)
@@ -1374,15 +1384,13 @@ class ModelAvailabilityService:
             urls,
             model,
             final_path,
-            accept_source_identity=(
-                explicit_source_urls_authoritative and bool(explicit_urls)
-            ),
+            accept_source_identity=explicit_authoritative_download,
             progress_callback=progress_callback,
             cancel_event=cancel_event,
             model_index=model_index,
             total_models=total_models,
         )
-        if explicit_source_urls_authoritative and explicit_urls:
+        if explicit_authoritative_download:
             if downloaded_sha256 is None:
                 raise ModelAvailabilityError("Downloaded model identity could not be recorded.")
             actual_size = final_path.stat().st_size
@@ -1407,7 +1415,7 @@ class ModelAvailabilityService:
                 if downloaded_sha256
                 else None,
                 "explicit_source_identity_authoritative": (
-                    explicit_source_urls_authoritative and bool(explicit_urls)
+                    explicit_authoritative_download
                 ),
                 "explicit_source_identity_changed": identity_changed,
             },

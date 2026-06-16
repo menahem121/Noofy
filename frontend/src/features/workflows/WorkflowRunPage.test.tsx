@@ -5226,19 +5226,25 @@ describe("WorkflowRunPage", () => {
     expect(within(dialog).queryByText(/CUDA out of memory/)).not.toBeInTheDocument();
     expect(within(dialog).queryByText(/Submitting workflow run/)).not.toBeInTheDocument();
 
-    fireEvent.click(within(dialog).getByRole("button", { name: "View logs" }));
-    expect(await within(dialog).findByRole("heading", { name: "ComfyUI engine logs" })).toBeInTheDocument();
-    expect(within(dialog).getByRole("heading", { name: "Noofy logs" })).toBeInTheDocument();
-    expect(within(dialog).getByText(/CUDA out of memory/)).toBeInTheDocument();
-    expect(within(dialog).getByText(/Submitting workflow run/)).toBeInTheDocument();
-
-    fireEvent.click(within(dialog).getByRole("button", { name: /copy details/i }));
+    fireEvent.click(within(dialog).getByRole("button", { name: /copy logs/i }));
     await waitFor(() => expect(writeText).toHaveBeenCalled());
     const copied = writeText.mock.calls[0][0] as string;
     expect(copied).toContain("ComfyUI engine logs");
     expect(copied).toContain("Noofy logs");
     expect(copied).toContain("CUDA out of memory");
     expect(copied).toContain("Submitting workflow run");
+    expect(copied).not.toContain("Workflow failure report");
+    expect(await within(dialog).findByRole("heading", { name: "ComfyUI engine logs" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("heading", { name: "Noofy logs" })).toBeInTheDocument();
+    expect(within(dialog).getByText(/CUDA out of memory/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/Submitting workflow run/)).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Logs copied" })).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: /copy details/i }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(2));
+    const detailedCopy = writeText.mock.calls[1][0] as string;
+    expect(detailedCopy).toContain("Workflow failure report");
+    expect(detailedCopy).toContain("ComfyUI engine logs");
   });
 
   it("keeps an imported workflow with no runtime capsule openable but not runnable", async () => {
