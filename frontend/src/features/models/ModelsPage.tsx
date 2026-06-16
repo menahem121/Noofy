@@ -421,7 +421,7 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
         <div className="notice notice--warning notice--row" role="status">
           <AlertTriangle size={18} aria-hidden="true" />
           <div>
-            <strong>That did not work yet.</strong>
+            <strong>Model action failed.</strong>
             <span>{pageError ?? downloadError}</span>
           </div>
         </div>

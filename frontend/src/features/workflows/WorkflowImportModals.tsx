@@ -64,15 +64,15 @@ export function DuplicateWorkflowModal({
           <div className="notice notice--warning" role="status">
             <AlertCircle size={18} aria-hidden="true" />
             <div>
-              <strong>No silent replacement</strong>
-              <span>Replacing clears stale local dashboard values, layout overrides, output preferences, and preparation state.</span>
+              <strong>Replacing resets local setup</strong>
+              <span>Replacing this workflow clears any saved inputs, layout changes, output preferences, and setup state tied to the older copy.</span>
             </div>
           </div>
 
           {busy ? (
             <div className="required-models-modal__processing" role="status" aria-live="polite">
               <Loader2 className="spin" size={16} aria-hidden="true" />
-              <span>Preparing workflow import...</span>
+              <span>Importing workflow...</span>
             </div>
           ) : null}
         </div>
@@ -154,11 +154,10 @@ export function RequiredModelsModal({
       <section className="required-models-modal" aria-busy={importing}>
         <header className="required-models-modal__header">
           <div>
-            <p className="eyebrow">Workflow models</p>
+            <p className="eyebrow">Required models</p>
             <h2 id="required-models-title">{workflowDisplayName(importResult.workflow)}</h2>
             <p>
-              Noofy is checking your local models first. Missing models can be downloaded or selected before the
-              workflow runs. If a download fails, Noofy cleans up the partial file safely.
+              Noofy checks your computer for matching model files first. If anything is missing, you can download it before opening this workflow.
             </p>
           </div>
           <button className="icon-button" type="button" aria-label="Cancel import" disabled={busy} onClick={onCancel}>
@@ -191,7 +190,7 @@ export function RequiredModelsModal({
           {importing ? (
             <div className="required-models-modal__processing" role="status" aria-live="polite">
               <Loader2 className="spin" size={16} aria-hidden="true" />
-              <span>Preparing workflow import...</span>
+              <span>Importing workflow...</span>
             </div>
           ) : null}
         </div>
@@ -229,7 +228,7 @@ export function RequiredModelsModal({
           ) : readyToRun ? (
             <button className="primary-button" type="button" disabled={busy} onClick={onReadyAction}>
               {importing ? <Loader2 className="spin" size={16} aria-hidden="true" /> : <ArrowRight size={16} aria-hidden="true" />}
-              {importing ? "Preparing..." : readyActionLabel}
+              {importing ? "Finishing import..." : readyActionLabel}
             </button>
           ) : (
             <>
@@ -407,11 +406,11 @@ function verificationLabel(level: string) {
   if (level === "sha256_size") return "Verified file";
   if (level === "filename_size") return "Name and size match";
   if (level === "filename_only") return "Name match";
-  return "Model check";
+  return "Not verified";
 }
 
 function modelSourceLabel(model: RequiredModelAvailability) {
-  if (model.source_urls.length > 0) return "Download source known";
-  if (model.source_availability === "resolvable") return "Can search known sources";
-  return "No download source";
+  if (model.source_urls.length > 0) return "Ready to download";
+  if (model.source_availability === "resolvable") return "Can search for a download";
+  return "No download found";
 }

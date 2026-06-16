@@ -52,7 +52,7 @@ export interface WorkflowCardVariant {
 export const fallbackWorkflow: WorkflowCard = {
   id: "text_to_image_v0",
   title: "Text to Image",
-  description: "Generate a new image from a simple text prompt.",
+  description: "Generate new images from a simple text prompt.",
   category: "Image Generation",
   status: "offline",
   statusLabel: "Reconnect",

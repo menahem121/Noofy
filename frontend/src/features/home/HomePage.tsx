@@ -79,7 +79,7 @@ function useDebouncedValue<T>(value: T, delayMs: number) {
 
 function friendlyDescription(workflow: WorkflowSummary) {
   if (workflow.id === "text_to_image_v0") {
-    return "Generate a new image from a simple text prompt.";
+    return "Generate new images from a simple text prompt.";
   }
 
   return workflow.description.replace(/^Milestone \d+\s*/i, "");
@@ -176,7 +176,7 @@ const nativeHomeWorkflowGroups: Record<NativeHomeWorkflowKind, NativeHomeWorkflo
   text_to_image: {
     id: "text_to_image",
     title: "Text to Image",
-    description: "Generate a new image from a simple text prompt.",
+    description: "Generate new images from a simple text prompt.",
   },
   image_to_image: {
     id: "image_to_image",
@@ -514,12 +514,12 @@ export function HomePage({
     runtimeStatus.backendStatus === "unreachable"
       ? {
           title: "Noofy is reconnecting",
-          message: "The page is keeping the last loaded workflows visible while the local app service returns.",
+          message: "The page is keeping the last loaded workflows visible while Noofy reconnects.",
         }
       : workflowLibrary.error
         ? {
             title: "Workflow library could not load",
-            message: "Noofy will keep trying in the background. Check the local app service if this continues.",
+            message: "Noofy will keep trying in the background. Restart Noofy if this keeps happening.",
           }
         : null;
 

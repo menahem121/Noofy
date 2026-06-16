@@ -153,7 +153,7 @@ describe("RuntimeStatusProvider", () => {
     });
 
     expect(result.current.backendStatus).toBe("unreachable");
-    expect(result.current.statusView.label).toBe("Service offline");
+    expect(result.current.statusView.label).toBe("Offline");
   });
 
   it("marks the backend unreachable immediately after an action failure", () => {
@@ -166,7 +166,7 @@ describe("RuntimeStatusProvider", () => {
     });
 
     expect(result.current.backendStatus).toBe("unreachable");
-    expect(result.current.statusView.label).toBe("Service offline");
+    expect(result.current.statusView.label).toBe("Offline");
   });
 
   it("marks the backend unreachable when runtime status hangs", async () => {
@@ -191,8 +191,8 @@ describe("RuntimeStatusProvider", () => {
     vi.useRealTimers();
 
     expect(result.current.backendStatus).toBe("unreachable");
-    expect(result.current.statusView.label).toBe("Service offline");
-    expect(result.current.refreshError).toBe("Noofy's local app service did not answer runtime status in time.");
+    expect(result.current.statusView.label).toBe("Offline");
+    expect(result.current.refreshError).toBe("Noofy took too long to report its current status.");
   });
 
   it("does not let an older failing refresh overwrite a newer successful one", async () => {
@@ -376,6 +376,6 @@ describe("RuntimeStatusProvider", () => {
       lastCheckedAt: Date.now(),
       consecutiveSilentFailures: 0,
       hasKnownState: true,
-    }).label).toBe("Engine offline");
+    }).label).toBe("ComfyUI offline");
   });
 });

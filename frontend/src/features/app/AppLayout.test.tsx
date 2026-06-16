@@ -42,7 +42,7 @@ const offlineRuntimeState: Partial<RuntimeHealthState> = {
 };
 
 describe("AppLayout sidebar", () => {
-  it("replaces the workspace status card with a GitHub repository card", () => {
+  it("keeps the support card above the GitHub repository card", () => {
     render(
       <SidebarProvider>
         <AppLayout activeRoute="home" onNavigate={vi.fn()}>
@@ -52,20 +52,25 @@ describe("AppLayout sidebar", () => {
     );
 
     expect(screen.queryByText("AI Workspace")).not.toBeInTheDocument();
+    expect(screen.getByText("Buy Me a Coffee")).toBeInTheDocument();
+    expect(screen.getByText("Help me build Noofy (And maybe buy a computer that can run it lol)")).toBeInTheDocument();
     expect(screen.getByText("Noofy on GitHub")).toBeInTheDocument();
     expect(screen.getByText("View source & updates")).toBeInTheDocument();
     expect(layoutCss).toContain(".workspace-card--github .workspace-card__avatar");
     expect(layoutCss).toContain("background: #0d1117;");
-    expect(layoutCss).toContain(".engine-card + .workspace-card--github");
+    expect(layoutCss).toContain(".support-card + .workspace-card--github");
     expect(layoutCss).toContain("margin-top: 12px;");
 
-    const coffeeCard = screen.getByText("Buy Me a Coffee").closest(".engine-card");
+    const supportCard = screen.getByText("Buy Me a Coffee").closest(".support-card");
     const githubCard = screen.getByRole("button", { name: "Open Noofy on GitHub" });
     const version = document.querySelector(".sidebar__version");
-    expect(coffeeCard).not.toBeNull();
+    expect(supportCard).not.toBeNull();
     expect(version).not.toBeNull();
-    expect(coffeeCard!.compareDocumentPosition(githubCard) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(supportCard!.compareDocumentPosition(githubCard) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(githubCard.compareDocumentPosition(version!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Support Noofy" }));
+    expect(openExternalUrl).toHaveBeenCalledWith("https://example.com/buy-me-a-coffee");
 
     fireEvent.click(screen.getByRole("button", { name: "Open Noofy on GitHub" }));
 
@@ -125,6 +130,6 @@ describe("AppLayout sidebar", () => {
     );
 
     expect(screen.getByText("Working")).toBeInTheDocument();
-    expect(screen.queryByText("Engine offline")).not.toBeInTheDocument();
+    expect(screen.queryByText("ComfyUI offline")).not.toBeInTheDocument();
   });
 });

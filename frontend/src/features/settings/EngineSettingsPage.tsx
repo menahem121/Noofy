@@ -121,49 +121,49 @@ const ACTION_OK_STATUSES = new Set([
   "repair_completed_started",
 ]);
 const ACTION_RESULT_LABELS: Record<string, string> = {
-  prepared: "Engine environment prepared successfully.",
-  already_prepared: "Environment is already prepared.",
+  prepared: "ComfyUI is ready.",
+  already_prepared: "ComfyUI is already set up.",
   bootstrap_failed:
-    "Preparation failed. Open technical details for the diagnostic log.",
+    "Noofy could not finish setting up ComfyUI. Open developer details for the technical error.",
   requirements_missing:
-    "The bundled engine requirements are missing. Try repair.",
+    "Some bundled ComfyUI files are missing. Try Repair Setup.",
   python_missing:
-    "Noofy could not find its bundled runtime. Restart Noofy, then try repair.",
+    "Noofy could not find its bundled tools. Restart Noofy, then try Repair Setup.",
   python_not_prepared:
-    "Noofy's engine runtime is not prepared yet. Try Set Up or Repair.",
+    "ComfyUI has not been set up yet. Try Set Up ComfyUI.",
   dependency_check_failed:
-    "Noofy could not verify the engine runtime after setup.",
-  not_configured: "No managed runtime environment is configured.",
-  started: "Engine started.",
-  already_running: "Engine is already running.",
+    "Noofy could not confirm that ComfyUI was set up correctly.",
+  not_configured: "No managed ComfyUI setup is available.",
+  started: "ComfyUI started.",
+  already_running: "ComfyUI is already running.",
   repair_completed_started:
-    "The managed ComfyUI environment was repaired and started.",
+    "ComfyUI was repaired and restarted.",
   repair_failed_fallback_active:
-    "Repair failed, so Noofy started a previous working engine.",
+    "Repair failed, so Noofy went back to the last working ComfyUI version.",
   repair_failed_no_fallback:
-    "Repair failed and no fallback engine could be started.",
+    "Repair failed and Noofy could not start ComfyUI.",
   repair_blocked:
-    "Automatic repair is temporarily blocked for this ComfyUI version.",
+    "Repair is temporarily paused for this ComfyUI version.",
   external_unreachable:
-    "The local ComfyUI engine is not reachable. Reconnect or try repair.",
-  stopped: "Engine stopped.",
-  completed: "ComfyUI was updated and validated successfully.",
-  blocked: "ComfyUI updates are not available in this runtime mode.",
-  failed: "ComfyUI update failed. The existing engine was left unchanged.",
-  noofy_runtime_checked: "Noofy found the latest packaged runtime release.",
-  noofy_runtime_ready: "Noofy runtime update was downloaded and validated.",
+    "Noofy could not reach the local ComfyUI connection. Reconnect or try Repair Setup.",
+  stopped: "ComfyUI stopped.",
+  completed: "ComfyUI was updated and checked.",
+  blocked: "ComfyUI updates are not available right now.",
+  failed: "ComfyUI update failed. No changes were applied.",
+  noofy_runtime_checked: "Noofy found the latest app update.",
+  noofy_runtime_ready: "The Noofy app update was downloaded and checked.",
   noofy_runtime_activated:
-    "Noofy runtime update will be used the next time you open Noofy.",
+    "The Noofy app update will be used the next time you open Noofy.",
   noofy_runtime_blocked:
-    "Noofy runtime updates are not available in this build.",
+    "Noofy app updates are not available in this build.",
   noofy_runtime_failed:
-    "Noofy runtime update failed. The current runtime was left unchanged.",
-  updated: "ComfyUI launch setting was saved.",
-  unchanged: "ComfyUI launch setting is already selected.",
+    "The Noofy app update failed. The current version was left unchanged.",
+  updated: "The startup memory mode was saved.",
+  unchanged: "That startup memory mode is already selected.",
   updated_restarted:
-    "ComfyUI launch setting was saved and the managed engine restarted.",
+    "The startup memory mode was saved and ComfyUI restarted.",
   updated_restart_failed:
-    "ComfyUI launch setting was saved, but the managed engine could not restart.",
+    "The startup memory mode was saved, but ComfyUI could not restart.",
 };
 
 const VRAM_MODE_OPTIONS: Array<{
@@ -174,27 +174,27 @@ const VRAM_MODE_OPTIONS: Array<{
   {
     value: "cpu",
     label: "CPU only",
-    description: "Runs without GPU acceleration, usually the slowest",
+    description: "No GPU acceleration. Slowest, but works on more machines.",
   },
   {
     value: "novram",
-    label: "No VRAM",
-    description: "Extreme memory-saving mode, very slow but may still use GPU",
+    label: "Minimum VRAM",
+    description: "Uses as little GPU memory as possible. Slowest GPU mode.",
   },
   {
     value: "lowvram",
-    label: "Low VRAM",
-    description: "For smaller GPUs",
+    label: "Lower VRAM",
+    description: "Uses less GPU memory for smaller cards.",
   },
   {
     value: "normal",
-    label: "Normal VRAM",
-    description: "Recommended",
+    label: "Balanced",
+    description: "Recommended for most computers.",
   },
   {
     value: "highvram",
-    label: "High VRAM",
-    description: "Faster if you have lots of VRAM",
+    label: "Use more VRAM",
+    description: "Faster if your GPU has plenty of memory.",
   },
 ];
 
@@ -229,11 +229,11 @@ function vramModeOption(mode: ComfyUIVramMode) {
 function actionResultMessage(result: { label: string; status: string }) {
   if (result.label === "rebuild") {
     if (result.status === "completed")
-      return "ComfyUI environment was rebuilt and validated successfully.";
+      return "ComfyUI was repaired and checked.";
     if (result.status === "failed")
-      return "ComfyUI environment rebuild failed. The existing engine was left unchanged.";
+      return "Repair Setup failed. No changes were applied.";
     if (result.status === "blocked")
-      return "ComfyUI environment rebuild is not available in this runtime mode.";
+      return "Repair Setup is not available right now.";
   }
   return ACTION_RESULT_LABELS[result.status] ?? result.status;
 }
@@ -253,11 +253,10 @@ function credentialStoreUnavailableMessage(
 ) {
   const store = apiSettings?.credential_store;
   if (!store)
-    return "Noofy could not access the operating system credential store.";
+    return "Noofy could not use this computer's secure password storage.";
   const parts = [
     store.error,
     store.guidance,
-    store.display_path ? `Storage: ${store.display_path}` : null,
   ].filter(Boolean);
   return parts.join(" ");
 }
@@ -270,7 +269,7 @@ const NOOFY_RUNTIME_PHASE_LABELS: Record<string, string> = {
   verifying: "Verifying",
   staging: "Staging",
   validating: "Validating",
-  ready_to_activate: "Ready to activate",
+  ready_to_activate: "Ready for next launch",
   failed: "Failed",
 };
 
@@ -280,15 +279,45 @@ function noofyRuntimePhaseLabel(phase: string | null | undefined) {
 }
 
 function noofyRuntimeSourceLabel(source: string | null | undefined) {
-  if (source === "active") return "Updated runtime";
-  if (source === "bundled") return "Bundled runtime";
+  if (source === "active") return "Updated version";
+  if (source === "bundled") return "Built-in version";
   return "Unknown";
+}
+
+function friendlyNoofyRuntimeProgressText(status: NoofyRuntimeUpdateStatus | null) {
+  if (!status) return null;
+  if (status.error) return status.error;
+  switch (status.phase) {
+    case "downloading":
+      return "Downloading the Noofy app update.";
+    case "validating":
+      return "Checking the Noofy app update.";
+    case "ready_to_activate":
+      return "The Noofy app update is ready for the next launch.";
+    default:
+      return status.progress_label;
+  }
+}
+
+function comfyUiUpdateNoticeText(status: ComfyUIUpdateStatus) {
+  if (status.error) return status.error;
+  if (status.status === "completed") {
+    return status.operation === "rebuild"
+      ? "ComfyUI was repaired and checked."
+      : "ComfyUI was updated and checked.";
+  }
+  if (status.status === "running") {
+    return status.operation === "rebuild"
+      ? "Repairing ComfyUI files."
+      : "Updating ComfyUI files.";
+  }
+  return status.progress_label ?? null;
 }
 
 function comfyUiSourceLabel(source: string | null | undefined) {
   if (source === "bundled") return "Included with Noofy";
   if (source === "managed") return "Managed by Noofy";
-  if (source === "external") return "Connected local engine";
+  if (source === "external") return "Existing ComfyUI install";
   return "Unknown";
 }
 
@@ -552,7 +581,7 @@ export function EngineSettingsPage({
         },
         error: ok
           ? null
-          : (result.disabled_reason ?? "Noofy runtime update check failed."),
+          : (result.disabled_reason ?? "Noofy app update check failed."),
       }));
     } catch (error) {
       setState((current) => ({
@@ -647,7 +676,7 @@ export function EngineSettingsPage({
           ? null
           : (result.error ??
             result.disabled_reason ??
-            "Noofy runtime activation failed."),
+            "Noofy app update could not be enabled for next launch."),
       }));
     } catch (error) {
       setState((current) => ({
@@ -798,7 +827,7 @@ export function EngineSettingsPage({
         modelFolderSettings: result.settings,
         modelFolderStatus: {
           message: result.restart_required
-            ? "Model folder saved. Restart the Noofy engine so ComfyUI can scan the new model folder location."
+            ? "Model folder saved. Restart ComfyUI so it can scan the new model folder location."
             : "Model folder settings saved.",
           ok: true,
         },
@@ -891,18 +920,17 @@ export function EngineSettingsPage({
   const noofyRuntimeCurrentVersion =
     noofyRuntimeSettings?.current_version ??
     noofyRuntimeSettings?.current_runtime_id ??
-    "Bundled runtime";
+    "Built-in version";
   const noofyRuntimeProgressLabel = noofyRuntimeCheckBusy
     ? "Checking"
     : noofyRuntimeActivateBusy
       ? "Activating"
       : noofyRuntimePhaseLabel(state.noofyRuntimeUpdateStatus?.phase);
   const noofyRuntimeProgressText = noofyRuntimeCheckBusy
-    ? "Checking the latest configured GitHub release."
+    ? "Checking for the latest app update."
     : noofyRuntimeActivateBusy
-      ? "Recording the validated runtime for the next app launch."
-      : (state.noofyRuntimeUpdateStatus?.error ??
-        state.noofyRuntimeUpdateStatus?.progress_label);
+      ? "Saving the checked app update for the next time you open Noofy."
+      : friendlyNoofyRuntimeProgressText(state.noofyRuntimeUpdateStatus);
   const showNoofyRuntimeProgress = Boolean(
     noofyRuntimeCheckBusy ||
       noofyRuntimeActivateBusy ||
@@ -962,7 +990,7 @@ export function EngineSettingsPage({
           )}
           <div>
             <strong>
-              {state.actionResult.ok ? "Done" : "Action did not complete"}
+              {state.actionResult.ok ? "Finished" : "Could not finish"}
             </strong>
             <span>{actionResultMessage(state.actionResult)}</span>
           </div>
@@ -1005,8 +1033,8 @@ export function EngineSettingsPage({
               aria-labelledby="comfyui-status-title"
             >
               <div className="engine-status-card__section-heading">
-                <h3 id="comfyui-status-title">ComfyUI Status</h3>
-                <p>Set up or restart the local ComfyUI runner.</p>
+                <h3 id="comfyui-status-title">ComfyUI setup</h3>
+                <p>Set up or restart local ComfyUI.</p>
               </div>
 
               <ul className="engine-status-card__steps">
@@ -1029,7 +1057,7 @@ export function EngineSettingsPage({
                     </span>
                     <span className="engine-status-card__step-hint">
                       {environmentPrepared
-                        ? "Noofy has a local ComfyUI runner ready."
+                        ? "Noofy has what it needs to start ComfyUI."
                         : "Set it up once to run workflows locally."}
                     </span>
                   </div>
@@ -1054,15 +1082,9 @@ export function EngineSettingsPage({
                     <span className="engine-status-card__step-hint">
                       {state.runtime?.reachable
                         ? "Workflows can run on this computer now."
-                        : "Restart ComfyUI before running a workflow."}
+                        : "Start or repair ComfyUI before running a workflow."}
                     </span>
                   </div>
-                  {state.runtime?.managed_process_running &&
-                  state.runtime.pid ? (
-                    <span className="engine-status-card__pid">
-                      PID {state.runtime.pid}
-                    </span>
-                  ) : null}
                 </li>
               </ul>
 
@@ -1248,13 +1270,13 @@ export function EngineSettingsPage({
                 )}
                 <div>
                   <strong>
-                    {state.updateStatus.operation === "repair"
-                      ? `Repair: ${state.updateStatus.phase}`
-                      : state.updateStatus.phase}
+                    {state.updateStatus.operation === "repair" ||
+                    state.updateStatus.operation === "rebuild"
+                      ? "Repair Setup"
+                      : "ComfyUI update"}
                   </strong>
                   <span>
-                    {state.updateStatus.error ??
-                      state.updateStatus.progress_label}
+                    {comfyUiUpdateNoticeText(state.updateStatus)}
                   </span>
                   {state.updateStatus.fallback_version ? (
                     <span>
@@ -1263,8 +1285,8 @@ export function EngineSettingsPage({
                   ) : null}
                   {state.updateStatus.incompatible_version ? (
                     <span>
-                      {state.updateStatus.incompatible_version} failed Noofy
-                      validation.
+                      {state.updateStatus.incompatible_version} is not
+                      compatible with this Noofy version.
                     </span>
                   ) : null}
                 </div>
@@ -1401,9 +1423,9 @@ export function EngineSettingsPage({
             <div className="notice notice--success" role="status">
               <Loader2 className="spin" size={18} aria-hidden="true" />
               <div>
-                <strong>Applying VRAM mode</strong>
+                <strong>Saving startup memory mode</strong>
                 <span>
-                  Noofy is updating the managed ComfyUI launch configuration.
+                  Noofy is saving how managed ComfyUI should start.
                 </span>
               </div>
             </div>
@@ -1413,10 +1435,9 @@ export function EngineSettingsPage({
         <article className="settings-panel api-settings-card">
           <div className="panel-heading">
             <div>
-              <h2>APIs</h2>
+              <h2>Model download API keys</h2>
               <p>
-                Save model platform API keys in this computer&apos;s credential
-                store.
+                Save API keys for model sites in this computer&apos;s secure password storage.
               </p>
             </div>
           </div>
@@ -1723,10 +1744,10 @@ export function EngineSettingsPage({
           <article className="settings-panel">
             <div className="panel-heading">
               <div>
-                <h2>Noofy Runtime</h2>
+                <h2>Noofy App Update</h2>
                 <p>
-                  Update the packaged Noofy app runtime from a validated release
-                  archive.
+                  Download a verified Noofy app update for the next time you
+                  open Noofy.
                 </p>
               </div>
               <button
@@ -1773,10 +1794,10 @@ export function EngineSettingsPage({
               <div className="notice notice--warning" role="status">
                 <AlertCircle size={18} aria-hidden="true" />
                 <div>
-                  <strong>Runtime updates unavailable</strong>
+                  <strong>App updates unavailable</strong>
                   <span>
                     {noofyRuntimeSettings.disabled_reason ??
-                      "Noofy runtime updates are not available right now."}
+                      "Noofy app updates are not available right now."}
                   </span>
                 </div>
               </div>
@@ -1806,10 +1827,10 @@ export function EngineSettingsPage({
               <div className="notice notice--success" role="status">
                 <CheckCircle2 size={18} aria-hidden="true" />
                 <div>
-                  <strong>Ready to activate</strong>
+                  <strong>Ready for next launch</strong>
                   <span>
-                    Noofy runtime {noofyRuntimePending.tag} was validated.
-                    Activation applies the next time you open Noofy.
+                    Noofy {noofyRuntimePending.tag} was checked and is ready.
+                    It will be used next time you open Noofy.
                   </span>
                 </div>
               </div>
@@ -1819,10 +1840,10 @@ export function EngineSettingsPage({
               <div className="notice notice--success" role="status">
                 <CheckCircle2 size={18} aria-hidden="true" />
                 <div>
-                  <strong>Activated for next launch</strong>
+                  <strong>Will be used next launch</strong>
                   <span>
-                    Noofy runtime {noofyRuntimeActive?.tag} will run the next
-                    time you open Noofy.
+                    Noofy {noofyRuntimeActive?.tag} will be used the next time
+                    you open Noofy.
                   </span>
                 </div>
               </div>
@@ -1833,7 +1854,7 @@ export function EngineSettingsPage({
                 <CheckCircle2 size={18} aria-hidden="true" />
                 <div>
                   <strong>Updated</strong>
-                  <span>Noofy is running the activated packaged runtime.</span>
+                  <span>Noofy is using the activated app update.</span>
                 </div>
               </div>
             ) : null}

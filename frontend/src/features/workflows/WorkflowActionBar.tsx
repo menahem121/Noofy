@@ -141,13 +141,13 @@ export function WorkflowActionBar({
             className="primary-button canvas-action-cluster__run workflow-run-action-button"
             type="button"
             disabled={!runState.canRun}
-            aria-label="Run Workflow"
+            aria-label="Run workflow"
             title={
               !runState.canRun && runState.disabledReason
                 ? runState.disabledReason
                 : runState.canRun && runState.isRunning
                   ? "Queue another run behind the current one"
-                  : "Run Workflow"
+                  : "Run workflow"
             }
             aria-describedby={!runState.canRun && runState.disabledReason ? "workflow-run-disabled-reason" : undefined}
             onClick={onRun}
@@ -162,7 +162,7 @@ export function WorkflowActionBar({
             className="secondary-button canvas-action-cluster__cancel workflow-run-action-button"
             type="button"
             disabled={!runState.canCancel}
-            aria-label="Cancel Workflow"
+            aria-label="Cancel run"
             title={runState.cancelTitle ?? undefined}
             onClick={onCancel}
           >
@@ -205,7 +205,7 @@ export function WorkflowActionBar({
                 Edit widgets
               </button>
               <button className="canvas-options-menu__item" role="menuitem" type="button" onClick={() => runMenuAction(onRestoreDefaults)}>
-                Restore dashboard to the workflow default values
+                Restore dashboard defaults
               </button>
             </ViewportMenu>
           </div>

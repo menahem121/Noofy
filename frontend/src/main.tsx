@@ -13,7 +13,7 @@ async function loadDesktopRuntimeConfig() {
     await invoke<NonNullable<Window["__NOOFY_RUNTIME_CONFIG__"]>>("noofy_runtime_config");
 
   if (!window.__NOOFY_RUNTIME_CONFIG__?.apiBaseUrl || !window.__NOOFY_RUNTIME_CONFIG__?.apiToken) {
-    throw new Error("Noofy desktop did not receive backend connection details.");
+    throw new Error("Noofy desktop did not receive its startup connection details.");
   }
 }
 
@@ -32,8 +32,8 @@ function renderStartupError(error: unknown) {
   if (!root) return;
   root.innerHTML = `
     <main role="alert" style="max-width: 680px; margin: 20vh auto; padding: 0 24px; font-family: system-ui, sans-serif; color: #191b1f;">
-      <h1 style="font-size: 1.35rem; margin: 0 0 0.75rem;">Noofy could not start its local app service.</h1>
-      <p style="line-height: 1.5; margin: 0;">The desktop shell did not receive a local API URL and session token. Restart Noofy, and check the packaged runtime if this keeps happening.</p>
+      <h1 style="font-size: 1.35rem; margin: 0 0 0.75rem;">Noofy could not start.</h1>
+      <p style="line-height: 1.5; margin: 0;">Noofy could not connect to its local service on this computer. Restart Noofy. If this keeps happening, reinstall or repair Noofy.</p>
     </main>
   `;
 }

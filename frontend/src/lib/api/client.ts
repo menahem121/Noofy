@@ -19,7 +19,7 @@ function desktopRuntimeConfig() {
   const config = window.__NOOFY_RUNTIME_CONFIG__;
   if (!isDesktopRuntime()) return config;
   if (!config?.apiBaseUrl || !config?.apiToken) {
-    throw new Error("Noofy desktop is missing its local app service runtime config.");
+    throw new Error("Noofy desktop is missing its startup connection settings.");
   }
   return config;
 }
@@ -99,7 +99,7 @@ function localhostApiPath(value: string): string | null {
 }
 
 export async function apiErrorMessage(response: Response): Promise<string> {
-  const fallback = `Noofy local app service returned ${response.status}`;
+  const fallback = `Noofy reported an error while loading this data (${response.status}).`;
   try {
     const payload = (await response.clone().json()) as unknown;
     if (payload && typeof payload === "object" && "detail" in payload) {

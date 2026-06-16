@@ -54,7 +54,7 @@ const textToImageWorkflow = {
   id: "text_to_image_v0",
   name: "Text to Image",
   version: "0.1.0",
-  description: "Generate a new image from a simple text prompt.",
+  description: "Generate new images from a simple text prompt.",
   source_label: "Native Noofy",
   main_model: { name: "SDXL Base", type: "checkpoint", size_bytes: 1 },
   category: "Txt2img",

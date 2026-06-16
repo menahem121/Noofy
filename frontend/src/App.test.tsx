@@ -31,7 +31,7 @@ const workflowSummary = {
   id: "text_to_image_v0",
   name: "Text to Image",
   version: "0.1.0",
-  description: "Generate a new image from a simple text prompt.",
+  description: "Generate new images from a simple text prompt.",
   source_label: "Native Noofy",
   main_model: { name: "SDXL Base", type: "checkpoint", size_bytes: 1 },
   category: "Txt2img",
@@ -289,7 +289,7 @@ describe("App workflow tabs", () => {
     fireEvent.click(within(row as HTMLElement).getByRole("button", { name: "Open" }));
 
     expect(await screen.findByRole("heading", { name: /Dashboard Builder/i })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Run Workflow" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Close Text to Image workspace tab" })).not.toBeInTheDocument();
     expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/api/workflows/text_to_image_v0/open"))).toBe(false);
     expect(JSON.parse(window.localStorage.getItem("noofy.appRoute.v1") ?? "{}")).toMatchObject({ name: "workflows" });
   });
@@ -340,7 +340,7 @@ describe("App workflow tabs", () => {
 
     render(<App />);
 
-    expect(await screen.findByRole("button", { name: "Run Workflow" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Run workflow" })).toBeInTheDocument();
 
     cleanup();
     window.localStorage.removeItem("noofy.workflowTabs.v1");
@@ -353,7 +353,7 @@ describe("App workflow tabs", () => {
     render(<App />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Open Text to Image" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Run Workflow" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Run workflow" }));
 
     await waitFor(() => {
       expect(screen.getByRole("progressbar", { name: "Workflow progress" })).toHaveAttribute("aria-valuenow", "20");
@@ -368,7 +368,7 @@ describe("App workflow tabs", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Text to Image" }));
     // Run stays enabled during the active run; pressing it queues another run.
-    expect(await screen.findByRole("button", { name: "Run Workflow" })).toBeEnabled();
+    expect(await screen.findByRole("button", { name: "Run workflow" })).toBeEnabled();
     expect(screen.getAllByRole("progressbar", { name: "Workflow progress" })).toHaveLength(1);
 
     fireEvent.click(screen.getByRole("button", { name: "Go to home" }));
@@ -385,14 +385,14 @@ describe("App workflow tabs", () => {
     render(<App />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Open Text to Image" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Run Workflow" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Run workflow" }));
 
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/api/jobs/job-1/progress"))).toBe(true);
     });
     expect(await screen.findByText("This run is no longer active. Run this workflow again when ready.")).toBeInTheDocument();
     expect(screen.queryByRole("dialog", { name: /workflow failed/i })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Run Workflow" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Run workflow" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
     expect(screen.queryByText("This run is no longer active. Run this workflow again when ready.")).not.toBeInTheDocument();
   });
@@ -409,11 +409,11 @@ describe("App workflow tabs", () => {
     render(<App />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Text to Image" }));
-    expect(await screen.findByRole("button", { name: "Run Workflow" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Run workflow" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Close Other Workflow workspace tab" }));
 
-    expect(screen.getByRole("button", { name: "Run Workflow" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Run workflow" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Text to Image" })).toHaveAttribute("aria-current", "page");
     await waitFor(() => {
       expect(screen.queryByRole("button", { name: "Other Workflow" })).not.toBeInTheDocument();
@@ -424,7 +424,7 @@ describe("App workflow tabs", () => {
     render(<App />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Open Text to Image" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Run Workflow" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Run workflow" }));
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/api/jobs/job-1/progress"))).toBe(true);
     });
@@ -454,7 +454,7 @@ describe("App workflow tabs", () => {
     render(<App />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Open Text to Image" }));
-    await screen.findByRole("button", { name: "Run Workflow" });
+    await screen.findByRole("button", { name: "Run workflow" });
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([url, init]) =>
         String(url).endsWith("/api/workflows/text_to_image_v0/runner/leases")
@@ -487,7 +487,7 @@ describe("App workflow tabs", () => {
     render(<App />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Open Text to Image" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Run Workflow" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Run workflow" }));
     fireEvent.click(screen.getByRole("button", { name: "Close Text to Image workspace tab" }));
 
     const dialog = await screen.findByRole("dialog", { name: "Stop this workflow?" });

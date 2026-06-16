@@ -169,7 +169,7 @@ const workflowStatus = {
     id: "text_to_image_v0",
     name: "Text to Image",
     version: "0.1.0",
-    description: "Generate a new image from a simple text prompt.",
+    description: "Generate new images from a simple text prompt.",
     publisher_id: "noofy",
     package_id: "text_to_image_v0",
     trust_level: "noofy_verified",
@@ -1213,8 +1213,8 @@ describe("WorkflowRunPage", () => {
       expect(screen.getByDisplayValue("cinematic.safetensors")).toBeInTheDocument();
     }, { timeout: 2500 });
     await waitFor(() => expect(packageFetchCount).toBe(2));
-    expect(screen.queryByText("Loading saved settings")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Run Workflow" })).toBeEnabled();
+    expect(screen.queryByText("Loading saved inputs")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Run workflow" })).toBeEnabled();
     expect(
       fetchMock.mock.calls.filter(([url, init]) =>
         String(url).endsWith("/api/workflows/text_to_image_v0/user-state")
@@ -1422,7 +1422,7 @@ describe("WorkflowRunPage", () => {
     await waitFor(() => expect(runButton).toBeEnabled());
     fireEvent.click(runButton);
 
-    expect(await screen.findByText("Result saved by the local workflow.")).toBeInTheDocument();
+    expect(await screen.findByText("Result ready.")).toBeInTheDocument();
     expect(screen.getByAltText("Generated workflow output")).toHaveAttribute(
       "src",
       "/api/jobs/job-1/outputs/view?filename=result.png&subfolder=&type=output",
@@ -1774,10 +1774,10 @@ describe("WorkflowRunPage", () => {
     const topBarProgress = await screen.findByRole("progressbar", { name: /workflow progress/i });
     expect(topBarProgress).toHaveAttribute("aria-valuenow", "0");
     expect(screen.getByText("0%")).toBeInTheDocument();
-    expect(screen.getByText("Starting workflow...")).toBeInTheDocument();
+    expect(screen.getByText("Starting this workflow...")).toBeInTheDocument();
     // Run stays enabled while a run is pending: another press queues a run.
     expect(screen.getByRole("button", { name: /run workflow/i })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Cancel Workflow" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Cancel run" })).toBeDisabled();
     expect(screen.queryByText("This workflow is already running.")).not.toBeInTheDocument();
     expect(document.querySelector(".primary-button .spin")).toBeInTheDocument();
 
@@ -1790,7 +1790,7 @@ describe("WorkflowRunPage", () => {
       }),
     );
 
-    expect(await screen.findByText("Result saved by the local workflow.")).toBeInTheDocument();
+    expect(await screen.findByText("Result ready.")).toBeInTheDocument();
   });
 
   it("shows preparation progress while Run prepares a custom-node workflow and resumes after the job starts", async () => {
@@ -1857,12 +1857,12 @@ describe("WorkflowRunPage", () => {
     await waitForReadyStatus();
     fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
 
-    expect(await screen.findByRole("dialog", { name: "Preparing workflow" })).toBeInTheDocument();
+    expect(await screen.findByRole("dialog", { name: "Setting up workflow" })).toBeInTheDocument();
     expect(screen.getByText(/Resolving custom-node dependencies|Checking the isolated runner/)).toBeInTheDocument();
-    expect(screen.getByText("Prepare dependency environment")).toBeInTheDocument();
-    expect(screen.getByText("Stage custom-node files")).toBeInTheDocument();
-    expect(screen.getByText("Start isolated runner")).toBeInTheDocument();
-    expect(screen.getByText("Check custom-node registration")).toBeInTheDocument();
+    expect(screen.getByText("Install workflow extras")).toBeInTheDocument();
+    expect(screen.getByText("Set up workflow files")).toBeInTheDocument();
+    expect(screen.getByText("Start workflow engine")).toBeInTheDocument();
+    expect(screen.getByText("Verify workflow extras")).toBeInTheDocument();
 
     runRequest.resolve(
       jsonResponse({
@@ -1873,9 +1873,9 @@ describe("WorkflowRunPage", () => {
       }),
     );
 
-    expect(await screen.findByText("Result saved by the local workflow.")).toBeInTheDocument();
+    expect(await screen.findByText("Result ready.")).toBeInTheDocument();
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: "Preparing workflow" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("dialog", { name: "Setting up workflow" })).not.toBeInTheDocument();
     });
   });
 
@@ -1946,7 +1946,7 @@ describe("WorkflowRunPage", () => {
     await waitForReadyStatus();
     fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
 
-    const dialog = await screen.findByRole("dialog", { name: "Workflow could not be prepared" });
+    const dialog = await screen.findByRole("dialog", { name: "Couldn't set up this workflow" });
     expect(screen.getByText("A custom-node dependency could not be installed.")).toBeInTheDocument();
     expect(screen.queryByText(/build backend failed/)).not.toBeInTheDocument();
     expect(
@@ -1961,7 +1961,7 @@ describe("WorkflowRunPage", () => {
     expect(screen.getByRole("button", { name: "Hide developer details" })).toBeInTheDocument();
 
     fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
-    expect(screen.queryByRole("dialog", { name: "Workflow could not be prepared" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Couldn't set up this workflow" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /run workflow/i })).toBeEnabled();
   });
 
@@ -2006,8 +2006,8 @@ describe("WorkflowRunPage", () => {
     await waitForReadyStatus();
     fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
 
-    expect(screen.queryByRole("dialog", { name: "Preparing workflow" })).not.toBeInTheDocument();
-    expect(screen.getByText("Starting workflow...")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Setting up workflow" })).not.toBeInTheDocument();
+    expect(screen.getByText("Starting this workflow...")).toBeInTheDocument();
 
     runRequest.resolve(
       jsonResponse({
@@ -2019,7 +2019,7 @@ describe("WorkflowRunPage", () => {
     );
 
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: "Preparing workflow" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("dialog", { name: "Setting up workflow" })).not.toBeInTheDocument();
     });
   });
 
@@ -2065,8 +2065,8 @@ describe("WorkflowRunPage", () => {
     await waitForReadyStatus();
     fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
 
-    expect(screen.queryByRole("dialog", { name: "Preparing workflow" })).not.toBeInTheDocument();
-    expect(screen.getByText("Starting workflow...")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Setting up workflow" })).not.toBeInTheDocument();
+    expect(screen.getByText("Starting this workflow...")).toBeInTheDocument();
 
     runRequest.resolve(
       jsonResponse({
@@ -2077,8 +2077,8 @@ describe("WorkflowRunPage", () => {
       }),
     );
 
-    expect(await screen.findByText("Result saved by the local workflow.")).toBeInTheDocument();
-    expect(screen.queryByRole("dialog", { name: "Preparing workflow" })).not.toBeInTheDocument();
+    expect(await screen.findByText("Result ready.")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Setting up workflow" })).not.toBeInTheDocument();
   });
 
   it("keeps the preparation dialog closed for passive install states until preparation actually starts", async () => {
@@ -2133,10 +2133,10 @@ describe("WorkflowRunPage", () => {
 
     // The passive "pending" state means preparation has not started: no dialog.
     await waitFor(() => expect(statusCalls).toBeGreaterThan(1));
-    expect(screen.queryByRole("dialog", { name: "Preparing workflow" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Setting up workflow" })).not.toBeInTheDocument();
 
     // Once the backend reports active preparation, the dialog opens.
-    expect(await screen.findByRole("dialog", { name: "Preparing workflow" }, { timeout: 3000 })).toBeInTheDocument();
+    expect(await screen.findByRole("dialog", { name: "Setting up workflow" }, { timeout: 3000 })).toBeInTheDocument();
 
     runRequest.resolve(
       jsonResponse({
@@ -2147,9 +2147,9 @@ describe("WorkflowRunPage", () => {
       }),
     );
 
-    expect(await screen.findByText("Result saved by the local workflow.")).toBeInTheDocument();
+    expect(await screen.findByText("Result ready.")).toBeInTheDocument();
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: "Preparing workflow" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("dialog", { name: "Setting up workflow" })).not.toBeInTheDocument();
     });
   });
 
@@ -2221,7 +2221,7 @@ describe("WorkflowRunPage", () => {
     fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
 
     // First run: preparation is genuinely in progress, so the dialog shows.
-    expect(await screen.findByRole("dialog", { name: "Preparing workflow" })).toBeInTheDocument();
+    expect(await screen.findByRole("dialog", { name: "Setting up workflow" })).toBeInTheDocument();
 
     backendReady = true;
     const statusCallsBeforeResolve = statusCalls;
@@ -2234,9 +2234,9 @@ describe("WorkflowRunPage", () => {
       }),
     );
 
-    expect(await screen.findByText("Result saved by the local workflow.")).toBeInTheDocument();
+    expect(await screen.findByText("Result ready.")).toBeInTheDocument();
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: "Preparing workflow" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("dialog", { name: "Setting up workflow" })).not.toBeInTheDocument();
     });
     // The page must re-read workflow status after the run so the stored
     // install state lands on the backend's final "ready".
@@ -2248,9 +2248,9 @@ describe("WorkflowRunPage", () => {
 
     // Second run: the backend already reports ready, so the preparation
     // dialog must not re-open from the earlier non-ready snapshot.
-    expect(screen.queryByRole("dialog", { name: "Preparing workflow" })).not.toBeInTheDocument();
-    expect(await screen.findByText("Result saved by the local workflow.")).toBeInTheDocument();
-    expect(screen.queryByRole("dialog", { name: "Preparing workflow" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Setting up workflow" })).not.toBeInTheDocument();
+    expect(await screen.findByText("Result ready.")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Setting up workflow" })).not.toBeInTheDocument();
   });
 
   it("shows the root preparation blocker when Run returns a validation failure", async () => {
@@ -2298,9 +2298,13 @@ describe("WorkflowRunPage", () => {
     await waitForReadyStatus();
     fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
 
-    expect(await screen.findByRole("dialog", { name: "Workflow failed" })).toBeInTheDocument();
-    expect(screen.getAllByText(rootCause).length).toBeGreaterThan(0);
-    expect(screen.getByText(/runtime\.workspace/)).toBeInTheDocument();
+    const dialog = await screen.findByRole("dialog", { name: "Run stopped" });
+    expect(within(dialog).queryByText(rootCause)).not.toBeInTheDocument();
+    expect(within(dialog).queryByText(/runtime\.workspace/)).not.toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "View logs" }));
+    expect(await within(dialog).findByText(/Node package dependency could not be resolved\./)).toBeInTheDocument();
+    expect(await within(dialog).findByText(/runtime\.workspace/)).toBeInTheDocument();
   });
 
   it("shows a friendly missing image dialog without raw engine text as the primary message", async () => {
@@ -2481,7 +2485,7 @@ describe("WorkflowRunPage", () => {
 
     renderRunPage({}, engineOfflineRuntimeState);
 
-    expect(await screen.findByText("The local ComfyUI engine is not reachable")).toBeInTheDocument();
+    expect(await screen.findByText("ComfyUI is not responding")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /run workflow/i })).toBeDisabled();
   });
 
@@ -2513,7 +2517,7 @@ describe("WorkflowRunPage", () => {
       await vi.advanceTimersByTimeAsync(2_000);
     });
     expect(runButton).toBeEnabled();
-    expect(screen.queryByText("The local ComfyUI engine is starting")).not.toBeInTheDocument();
+    expect(screen.queryByText("Starting ComfyUI")).not.toBeInTheDocument();
     expect(screen.getAllByText("Ready").length).toBeGreaterThan(0);
   });
 
@@ -2588,11 +2592,18 @@ describe("WorkflowRunPage", () => {
     await waitForReadyStatus();
     fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
 
-    expect((await screen.findAllByText("Workflow failed")).length).toBeGreaterThan(0);
-    expect(screen.getAllByText("model failed").length).toBeGreaterThan(0);
-    expect(await screen.findByRole("dialog", { name: "Workflow failed" })).toBeInTheDocument();
-    expect(screen.getByText(/ComfyUI execution failed/)).toBeInTheDocument();
-    expect(screen.getByText(/Started best-effort job memory sampling/)).toBeInTheDocument();
+    expect((await screen.findAllByText("Run stopped")).length).toBeGreaterThan(0);
+    const dialog = await screen.findByRole("dialog", { name: "Run stopped" });
+    expect(within(dialog).getByText("The run stopped before it finished.")).toBeInTheDocument();
+    expect(within(dialog).queryByText(/ComfyUI execution failed/)).not.toBeInTheDocument();
+    expect(within(dialog).queryByText(/Started best-effort job memory sampling/)).not.toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Developer details" }));
+    expect(within(dialog).getByText(/model failed/)).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "View logs" }));
+    expect(await within(dialog).findByText(/ComfyUI execution failed/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/Started best-effort job memory sampling/)).toBeInTheDocument();
   });
 
   it("shows a friendly runtime memory error and loads logs only on request", async () => {
@@ -2681,7 +2692,7 @@ describe("WorkflowRunPage", () => {
     expect(within(dialog).getByText(/CUDA out of memory/)).toBeInTheDocument();
     expect(within(dialog).queryByRole("heading", { name: "ComfyUI engine logs" })).not.toBeInTheDocument();
 
-    fireEvent.click(within(dialog).getByRole("button", { name: "Show details" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "View logs" }));
     expect(await within(dialog).findByRole("heading", { name: "ComfyUI engine logs" })).toBeInTheDocument();
     expect(within(dialog).getByRole("heading", { name: "Noofy logs" })).toBeInTheDocument();
 
@@ -2814,14 +2825,14 @@ describe("WorkflowRunPage", () => {
     {
       state: "unloading_previous_workflow",
       status: "queued_pending_memory",
-      title: "Unloading previous workflow",
+      title: "Finishing the previous workflow",
       message: "Noofy is clearing the previous workflow before starting this one.",
     },
     {
       state: "retrying_after_memory_cleanup",
       status: "queued_pending_memory",
-      title: "Retrying after memory cleanup",
-      message: "Noofy freed memory and is trying this workflow one more time.",
+      title: "Trying again",
+      message: "Noofy freed memory and is starting this workflow again.",
     },
     {
       state: "memory_cleanup_failed",
@@ -3146,7 +3157,7 @@ describe("WorkflowRunPage", () => {
 
     // The active run's progress stays on screen instead of flashing back to a
     // preparing/starting state when more runs are queued.
-    expect(screen.queryByText("Starting workflow...")).not.toBeInTheDocument();
+    expect(screen.queryByText("Starting this workflow...")).not.toBeInTheDocument();
     expect(screen.queryByText(/preparing workflow/i)).not.toBeInTheDocument();
   });
 
@@ -3205,12 +3216,12 @@ describe("WorkflowRunPage", () => {
     fireEvent.click(runButton);
 
     expect(await screen.findByRole("progressbar", { name: /workflow progress/i })).toBeInTheDocument();
-    expect(screen.queryByText("Freeing previous models")).not.toBeInTheDocument();
-    expect(screen.queryByText("Noofy is freeing memory before starting this workflow.")).not.toBeInTheDocument();
-    expect(screen.queryByText("Noofy is unloading idle models so this workflow has enough room to start.")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Cancel Workflow" }));
+    expect(screen.queryByText("Making room for this workflow")).not.toBeInTheDocument();
+    expect(screen.queryByText("Noofy is freeing memory before this run starts.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Noofy is unloading models from the previous run so this one can start.")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel run" }));
 
-    await waitFor(() => expect(screen.queryByText("Freeing previous models")).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText("Making room for this workflow")).not.toBeInTheDocument());
     expect(screen.getByRole("button", { name: /run workflow/i })).toBeEnabled();
   });
 
@@ -3284,9 +3295,9 @@ describe("WorkflowRunPage", () => {
       expect(screen.getByText("20%")).toBeInTheDocument();
     });
     expect(screen.queryByText("This workflow is already running.")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Cancel Workflow" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Cancel run" })).toBeEnabled();
 
-    fireEvent.click(screen.getByRole("button", { name: "Cancel Workflow" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel run" }));
 
     await waitFor(() => expect(cancelCalls).toBe(1));
     await waitFor(() => {
@@ -3335,7 +3346,7 @@ describe("WorkflowRunPage", () => {
     });
 
     expect((await screen.findAllByText("Working")).length).toBeGreaterThan(0);
-    const cancelButton = await screen.findByRole("button", { name: "Cancel Workflow" });
+    const cancelButton = await screen.findByRole("button", { name: "Cancel run" });
     await waitFor(() => expect(cancelButton).toBeEnabled());
     expect(screen.queryByText("This workflow is already running.")).not.toBeInTheDocument();
     fireEvent.click(cancelButton);
@@ -3651,7 +3662,7 @@ describe("WorkflowRunPage", () => {
     await waitForReadyStatus();
     fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
     expect(await screen.findByTitle("1 run remaining")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Cancel Workflow" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel run" }));
 
     expect(await screen.findByRole("dialog", { name: "Cancel 20 runs?" })).toBeInTheDocument();
     expect(cancelCalls).toBe(0);
@@ -3801,7 +3812,7 @@ describe("WorkflowRunPage", () => {
     fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
 
     expect(await screen.findByText("2 runs failed")).toBeInTheDocument();
-    expect(screen.queryByRole("dialog", { name: "Workflow failed" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Run stopped" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Details" }));
     expect(screen.getByText("job-fail-1 failed")).toBeInTheDocument();
     expect(screen.getByText("job-fail-2 failed")).toBeInTheDocument();
@@ -3933,7 +3944,7 @@ describe("WorkflowRunPage", () => {
     await screen.findByRole("button", { name: /workflow options/i });
     const batch = screen.getByRole("spinbutton", { name: "Batch count" }).closest(".canvas-batch-count-stepper") as HTMLElement;
     const runButton = screen.getByRole("button", { name: /run workflow/i });
-    const cancelButton = screen.getByRole("button", { name: "Cancel Workflow" });
+    const cancelButton = screen.getByRole("button", { name: "Cancel run" });
     const optionsButton = screen.getByRole("button", { name: /workflow options/i });
 
     expect(batch.compareDocumentPosition(runButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -4303,7 +4314,7 @@ describe("WorkflowRunPage", () => {
     expect(
       screen.queryByText("Describe the image you want, then let Noofy run the local workflow in the background."),
     ).not.toBeInTheDocument();
-    expect(screen.queryByText("The local ComfyUI engine is not reachable")).not.toBeInTheDocument();
+    expect(screen.queryByText("ComfyUI is not responding")).not.toBeInTheDocument();
   });
 
   it("explains why the canvas run button is disabled when required models are missing", async () => {
@@ -4671,8 +4682,8 @@ describe("WorkflowRunPage", () => {
     expect(document.querySelector(".main-workspace--canvas-run")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Inputs" })).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Preview" })).not.toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("Opening workflow");
-    expect(screen.queryByText("Loading saved settings")).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Loading workflow");
+    expect(screen.queryByText("Loading saved inputs")).not.toBeInTheDocument();
 
     // Flush the fire-and-forget /api/resources fetch so its trailing setState lands inside act().
     await act(async () => {});
@@ -4693,13 +4704,13 @@ describe("WorkflowRunPage", () => {
 
       renderRunPage();
 
-      expect(await screen.findByText("Loading your saved inputs")).toBeInTheDocument();
+      expect(await screen.findByText("Loading saved inputs")).toBeInTheDocument();
       expect(screen.queryByDisplayValue("a lake")).not.toBeInTheDocument();
       expect(screen.queryByText("a lake")).not.toBeInTheDocument();
       if (viewMode === "classic") {
-        expect(screen.getByRole("button", { name: "Run Workflow" })).toBeDisabled();
+        expect(screen.getByRole("button", { name: "Run workflow" })).toBeDisabled();
       } else {
-        expect(screen.queryByRole("button", { name: "Run Workflow" })).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Run workflow" })).not.toBeInTheDocument();
         expect(document.querySelector(".workflow-values-loading--compact")).not.toBeInTheDocument();
       }
 
@@ -4717,7 +4728,7 @@ describe("WorkflowRunPage", () => {
 
       expect(await screen.findByDisplayValue("my saved prompt")).toBeInTheDocument();
       expect(screen.queryByDisplayValue("a lake")).not.toBeInTheDocument();
-      expect(screen.queryByText("Loading saved settings")).not.toBeInTheDocument();
+      expect(screen.queryByText("Loading saved inputs")).not.toBeInTheDocument();
     },
   );
 
@@ -4751,24 +4762,22 @@ describe("WorkflowRunPage", () => {
 
     expect(await screen.findByDisplayValue("saved prompt before model checks")).toBeInTheDocument();
     expect(screen.queryByDisplayValue("a lake")).not.toBeInTheDocument();
-    expect(screen.queryByText("Loading saved settings")).not.toBeInTheDocument();
+    expect(screen.queryByText("Loading saved inputs")).not.toBeInTheDocument();
 
-    const runButton = screen.getByRole("button", { name: "Run Workflow" });
+    const runButton = screen.getByRole("button", { name: "Run workflow" });
     expect(runButton).toBeDisabled();
-    expect(screen.getByText("Checking required models...")).toBeInTheDocument();
 
     await act(async () => {
       modelSummaryResponse.resolve(jsonResponse(readyModelSummary));
     });
 
-    expect(screen.getByRole("button", { name: "Run Workflow" })).toBeDisabled();
-    expect(await screen.findByText("Checking workflow readiness...")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Run workflow" })).toBeDisabled();
 
     await act(async () => {
       validationResponse.resolve(jsonResponse(validWorkflow));
     });
 
-    await waitFor(() => expect(screen.getByRole("button", { name: "Run Workflow" })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Run workflow" })).toBeEnabled());
   });
 
   it("ignores a slower workflow load after switching to another workflow", async () => {
@@ -4948,7 +4957,7 @@ describe("WorkflowRunPage", () => {
 
     rerender(page("next-workflow"));
 
-    expect(screen.getByText("Opening workflow")).toBeInTheDocument();
+    expect(screen.getByText("Loading workflow")).toBeInTheDocument();
     expect(screen.queryByDisplayValue("first saved value")).not.toBeInTheDocument();
     expect(
       fetchMock.mock.calls.filter(([url, requestInit]) =>
@@ -5065,7 +5074,7 @@ describe("WorkflowRunPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "First Workflow" }));
 
     expect(screen.getByDisplayValue("first unsaved value")).toBeInTheDocument();
-    expect(screen.queryByText("Loading saved settings")).not.toBeInTheDocument();
+    expect(screen.queryByText("Loading saved inputs")).not.toBeInTheDocument();
     expect(firstPackageRequestCount).toBeGreaterThan(1);
     expect(firstUserStateRequestCount).toBeGreaterThan(1);
   });
@@ -5126,8 +5135,8 @@ describe("WorkflowRunPage", () => {
 
     expect(await screen.findByRole("button", { name: /run workflow/i })).toBeEnabled();
     expect(screen.getAllByText("Working").length).toBeGreaterThan(0);
-    expect(screen.queryByText("The local ComfyUI engine is not reachable")).not.toBeInTheDocument();
-    expect(screen.queryByText("The local ComfyUI engine is starting")).not.toBeInTheDocument();
+    expect(screen.queryByText("ComfyUI is not responding")).not.toBeInTheDocument();
+    expect(screen.queryByText("Starting ComfyUI")).not.toBeInTheDocument();
   });
 
   it("does not show engine repair guidance while workflow progress is active", async () => {
@@ -5156,8 +5165,8 @@ describe("WorkflowRunPage", () => {
     // While progress is active the stale offline status is not trusted, and
     // Run stays enabled so another press can queue behind the active run.
     expect(await screen.findByRole("button", { name: /run workflow/i })).toBeEnabled();
-    expect(screen.queryByText("The local ComfyUI engine is not reachable")).not.toBeInTheDocument();
-    expect(screen.queryByText("The local ComfyUI engine is starting")).not.toBeInTheDocument();
+    expect(screen.queryByText("ComfyUI is not responding")).not.toBeInTheDocument();
+    expect(screen.queryByText("Starting ComfyUI")).not.toBeInTheDocument();
   });
 
   it("marks the backend offline after a run action fails", async () => {
@@ -5210,14 +5219,20 @@ describe("WorkflowRunPage", () => {
 
     expect(await screen.findByText("The workflow is not ready")).toBeInTheDocument();
     expect(screen.getAllByText("run request failed").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Service offline").length).toBeGreaterThan(0);
-    expect(await screen.findByRole("dialog", { name: "Workflow failed" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "ComfyUI engine logs" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Noofy logs" })).toBeInTheDocument();
-    expect(screen.getByText(/CUDA out of memory/)).toBeInTheDocument();
-    expect(screen.getByText(/Submitting workflow run/)).toBeInTheDocument();
+    expect(screen.getAllByText("Offline").length).toBeGreaterThan(0);
+    const dialog = await screen.findByRole("dialog", { name: "Run stopped" });
+    expect(within(dialog).queryByRole("heading", { name: "ComfyUI engine logs" })).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole("heading", { name: "Noofy logs" })).not.toBeInTheDocument();
+    expect(within(dialog).queryByText(/CUDA out of memory/)).not.toBeInTheDocument();
+    expect(within(dialog).queryByText(/Submitting workflow run/)).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: /copy logs/i }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "View logs" }));
+    expect(await within(dialog).findByRole("heading", { name: "ComfyUI engine logs" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("heading", { name: "Noofy logs" })).toBeInTheDocument();
+    expect(within(dialog).getByText(/CUDA out of memory/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/Submitting workflow run/)).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: /copy details/i }));
     await waitFor(() => expect(writeText).toHaveBeenCalled());
     const copied = writeText.mock.calls[0][0] as string;
     expect(copied).toContain("ComfyUI engine logs");
@@ -5428,14 +5443,14 @@ describe("WorkflowRunPage", () => {
     renderRunPage();
 
     const optionsButton = await screen.findByRole("button", { name: /workflow options/i });
-    const cancelButton = screen.getByRole("button", { name: "Cancel Workflow" });
-    const runButton = screen.getByRole("button", { name: "Run Workflow" });
+    const cancelButton = screen.getByRole("button", { name: "Cancel run" });
+    const runButton = screen.getByRole("button", { name: "Run workflow" });
     expect(cancelButton).toBeDisabled();
     expect(cancelButton).toHaveAttribute("title", "Cancel current run");
     expect(cancelButton).toHaveTextContent("");
-    expect(runButton).toHaveAttribute("title", "Run Workflow");
+    expect(runButton).toHaveAttribute("title", "Run workflow");
     expect(runButton).toHaveTextContent("");
-    expect(screen.queryByText("Restore dashboard to the workflow default values")).not.toBeInTheDocument();
+    expect(screen.queryByText("Restore dashboard defaults")).not.toBeInTheDocument();
 
     fireEvent.click(optionsButton);
 
@@ -5452,7 +5467,7 @@ describe("WorkflowRunPage", () => {
     fireEvent.click(optionsButton);
     expect(screen.getByRole("menuitem", { name: /edit dashboard layout/i })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: /edit widgets/i })).toBeInTheDocument();
-    expect(screen.getByRole("menuitem", { name: /restore dashboard to the workflow default values/i })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /restore dashboard defaults/i })).toBeInTheDocument();
 
     fireEvent.pointerDown(document.body);
     expect(screen.queryByRole("menu", { name: /workflow options/i })).not.toBeInTheDocument();
@@ -5577,7 +5592,7 @@ describe("WorkflowRunPage", () => {
     renderRunPage();
 
     fireEvent.click(await screen.findByRole("button", { name: /workflow options/i }));
-    fireEvent.click(screen.getByRole("menuitem", { name: /restore dashboard to the workflow default values/i }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /restore dashboard defaults/i }));
 
     await waitFor(() => {
       expect(
@@ -5684,7 +5699,7 @@ describe("WorkflowRunPage", () => {
 
     expect(screen.queryByRole("menu", { name: /workflow options/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /workflow options/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Cancel Workflow" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cancel run" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /run workflow/i })).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Workflow progress")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /save dashboard/i })).toBeInTheDocument();

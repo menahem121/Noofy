@@ -1071,7 +1071,7 @@ async function uploadDashboardLargeMediaAsset(
         try {
           resolve(JSON.parse(request.responseText) as DashboardAssetUploadResponse);
         } catch {
-          reject(new Error(`Noofy local app service returned an invalid ${kind} upload response.`));
+          reject(new Error(`Noofy returned an unexpected ${kind} upload response.`));
         }
         return;
       }
@@ -1096,7 +1096,7 @@ function xhrErrorMessage(request: XMLHttpRequest): string {
   } catch {
     // Fall through to stable fallback.
   }
-  return `Noofy local app service returned ${request.status}`;
+  return `Noofy reported an error while uploading this file (${request.status}).`;
 }
 
 export function fetchWorkflowIcons(): Promise<WorkflowIconsResponse> {

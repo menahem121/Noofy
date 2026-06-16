@@ -191,7 +191,7 @@ export function useWorkflowLibrary() {
 
 function workflowRefreshError(error: unknown) {
   if (error instanceof DOMException && error.name === "AbortError") {
-    return new Error("Noofy's local app service did not answer the workflow library request in time.");
+    return new Error("Noofy took too long to load your workflows.");
   }
   return error instanceof Error ? error : new Error(String(error));
 }

@@ -559,39 +559,39 @@ describe("DashboardBuilderPage", () => {
     return onContinue;
   }
 
-  it("searches workflow values by dashboard title and current node value", async () => {
+  it("searches workflow controls by dashboard title and current node value", async () => {
     const schema = dragSchema();
     schema.widgets[0] = { ...schema.widgets[0], title: "Creative brief" };
     await renderDragBuilder(schema);
-    const valuesPanel = await screen.findByLabelText("Workflow values");
+    const valuesPanel = await screen.findByLabelText("Workflow controls");
 
-    fireEvent.change(within(valuesPanel).getByRole("searchbox", { name: /search workflow values/i }), {
+    fireEvent.change(within(valuesPanel).getByRole("searchbox", { name: /search workflow controls/i }), {
       target: { value: "creative brief" },
     });
 
     expect(within(valuesPanel).getByText("Positive prompt")).toBeInTheDocument();
     expect(within(valuesPanel).queryByText("Negative prompt")).not.toBeInTheDocument();
 
-    fireEvent.change(within(valuesPanel).getByRole("searchbox", { name: /search workflow values/i }), {
+    fireEvent.change(within(valuesPanel).getByRole("searchbox", { name: /search workflow controls/i }), {
       target: { value: "lake" },
     });
 
     expect(within(valuesPanel).getByText("Positive prompt")).toBeInTheDocument();
     expect(within(valuesPanel).queryByText("Negative prompt")).not.toBeInTheDocument();
 
-    fireEvent.change(within(valuesPanel).getByRole("searchbox", { name: /search workflow values/i }), {
+    fireEvent.change(within(valuesPanel).getByRole("searchbox", { name: /search workflow controls/i }), {
       target: { value: "positive lake" },
     });
 
     expect(within(valuesPanel).getByText("Positive prompt")).toBeInTheDocument();
 
-    fireEvent.change(within(valuesPanel).getByRole("searchbox", { name: /search workflow values/i }), {
+    fireEvent.change(within(valuesPanel).getByRole("searchbox", { name: /search workflow controls/i }), {
       target: { value: "positive blurry" },
     });
 
     expect(within(valuesPanel).queryByText("Positive prompt")).not.toBeInTheDocument();
     expect(within(valuesPanel).queryByText("Negative prompt")).not.toBeInTheDocument();
-    expect(within(valuesPanel).getByText("No values match your search.")).toBeInTheDocument();
+    expect(within(valuesPanel).getByText("No controls match your search.")).toBeInTheDocument();
   });
 
   it("edits a widget name inline from the created widgets list without changing its description", async () => {
@@ -649,7 +649,7 @@ describe("DashboardBuilderPage", () => {
       />,
     );
 
-    const valuesPanel = await screen.findByLabelText("Workflow values");
+    const valuesPanel = await screen.findByLabelText("Workflow controls");
     await within(valuesPanel).findByRole("button", { name: /Int \(Split Steps\).*PrimitiveInt/i });
 
     expect(within(valuesPanel).getAllByText("PrimitiveInt")).toHaveLength(3);
@@ -673,7 +673,7 @@ describe("DashboardBuilderPage", () => {
     ]);
   });
 
-  it("shows a hover preview for workflow values without selecting or adding them", async () => {
+  it("shows a hover preview for workflow controls without selecting or adding them", async () => {
     const onContinue = vi.fn();
     const promptOnlySchema: DashboardSchema = {
       version: 1,
@@ -703,7 +703,7 @@ describe("DashboardBuilderPage", () => {
       />,
     );
 
-    const valuesPanel = screen.getByLabelText("Workflow values");
+    const valuesPanel = screen.getByLabelText("Workflow controls");
     expect(await screen.findByLabelText(/widget title/i)).toHaveValue("Prompt");
     fireEvent.click(await within(valuesPanel).findByRole("button", { name: /sampler/i }));
     const samplerValue = within(valuesPanel).getByRole("button", { name: /sampler_name/i });
@@ -760,7 +760,7 @@ describe("DashboardBuilderPage", () => {
     );
 
     expect(await screen.findByLabelText(/widget title/i)).toHaveValue("Input file");
-    const valuesPanel = screen.getByLabelText("Workflow values");
+    const valuesPanel = screen.getByLabelText("Workflow controls");
     const fileValue = within(valuesPanel).getByRole("button", { name: /^file/i });
 
     fireEvent.mouseEnter(fileValue);
@@ -776,7 +776,7 @@ describe("DashboardBuilderPage", () => {
     expect(screen.getByRole("tooltip")).toHaveTextContent("Generated video result");
   });
 
-  it("shows optional media inputs and PreviewAny text output in Workflow values", async () => {
+  it("shows optional media inputs and PreviewAny text output in Workflow controls", async () => {
     const emptySchema: DashboardSchema = {
       version: 1,
       workflowId: "wf-optional-media",
@@ -805,8 +805,8 @@ describe("DashboardBuilderPage", () => {
       />,
     );
 
-    const valuesPanel = await screen.findByLabelText("Workflow values");
-    const search = within(valuesPanel).getByRole("searchbox", { name: /search workflow values/i });
+    const valuesPanel = await screen.findByLabelText("Workflow controls");
+    const search = within(valuesPanel).getByRole("searchbox", { name: /search workflow controls/i });
     fireEvent.change(search, { target: { value: "optional load" } });
     expect(await within(valuesPanel).findByRole("button", { name: /^image/i })).toBeInTheDocument();
     expect(await within(valuesPanel).findByRole("button", { name: /^audio/i })).toBeInTheDocument();
@@ -1210,7 +1210,7 @@ describe("DashboardBuilderPage", () => {
       />,
     );
 
-    const valuesPanel = await screen.findByLabelText("Workflow values");
+    const valuesPanel = await screen.findByLabelText("Workflow controls");
     fireEvent.click(within(valuesPanel).getByRole("button", { name: /KSampler/i }));
     fireEvent.click(within(valuesPanel).getByRole("button", { name: /^steps/i }));
 

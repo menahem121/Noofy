@@ -1038,7 +1038,7 @@ describe("HomePage", () => {
     renderHomePage();
 
     expect(await screen.findByText("Noofy is reconnecting")).toBeInTheDocument();
-    expect(screen.getAllByText("Service offline")).toHaveLength(1);
+    expect(screen.getAllByText("Offline")).toHaveLength(1);
     expect(screen.getAllByRole("heading", { name: "Text to Image" }).length).toBeGreaterThan(0);
     expect(screen.getByText("Reconnect")).toBeInTheDocument();
   });
@@ -1422,7 +1422,7 @@ describe("HomePage", () => {
     fireEvent.change(fileInput, { target: { files: [file] } });
 
     expect(await screen.findByRole("dialog", { name: "Portrait Workflow" })).toBeInTheDocument();
-    expect(screen.getByText("No silent replacement")).toBeInTheDocument();
+    expect(screen.getByText("Replacing resets local setup")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Import as Copy" }));
 
     await waitFor(() => {
@@ -1593,7 +1593,7 @@ describe("HomePage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Continue Without Downloading" }));
 
     expect(await screen.findByRole("button", { name: "Importing..." })).toBeDisabled();
-    expect(screen.getByText("Preparing workflow import...")).toBeInTheDocument();
+    expect(screen.getByText("Importing workflow...")).toBeInTheDocument();
 
     resolveCommit(
       jsonResponse({

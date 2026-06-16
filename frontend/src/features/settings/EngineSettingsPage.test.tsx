@@ -347,7 +347,7 @@ describe("EngineSettingsPage", () => {
       await screen.findByRole("button", { name: "Restart ComfyUI" }),
     );
 
-    expect(await screen.findByText("Engine started.")).toBeInTheDocument();
+    expect(await screen.findByText("ComfyUI started.")).toBeInTheDocument();
     expect(actionUrls).toEqual(["stop", "start"]);
   });
 
@@ -392,7 +392,7 @@ describe("EngineSettingsPage", () => {
       await screen.findByRole("button", { name: "Restart ComfyUI" }),
     );
 
-    expect(await screen.findByText("Engine started.")).toBeInTheDocument();
+    expect(await screen.findByText("ComfyUI started.")).toBeInTheDocument();
     expect(actionUrls).toEqual(["start"]);
   });
 
@@ -601,11 +601,11 @@ describe("EngineSettingsPage", () => {
 
     expect(slider).toHaveValue("3");
     expect(save).toBeDisabled();
-    expect(screen.getByText("Recommended")).toBeInTheDocument();
+    expect(screen.getByText("Recommended for most computers.")).toBeInTheDocument();
 
     fireEvent.change(slider, { target: { value: "2" } });
 
-    expect(screen.getByText("For smaller GPUs")).toBeInTheDocument();
+    expect(screen.getByText("Uses less GPU memory for smaller cards.")).toBeInTheDocument();
     expect(save).toBeEnabled();
     expect(fetchMock).not.toHaveBeenCalledWith(
       "/api/engine/comfyui/launch-settings",
@@ -617,7 +617,7 @@ describe("EngineSettingsPage", () => {
     fireEvent.click(save);
 
     expect(
-      await screen.findByText(/managed engine restarted/i),
+      await screen.findByText(/saved and ComfyUI restarted/i),
     ).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/engine/comfyui/launch-settings",
@@ -628,11 +628,11 @@ describe("EngineSettingsPage", () => {
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
   });
 
-  it("shows the APIs settings card with hidden API key inputs", async () => {
+  it("shows the model download API key settings card with hidden API key inputs", async () => {
     renderSettingsPage();
 
     expect(
-      await screen.findByRole("heading", { name: "APIs" }),
+      await screen.findByRole("heading", { name: "Model download API keys" }),
     ).toBeInTheDocument();
     const huggingFaceInput = screen.getByLabelText("Hugging Face API Key");
     const civitaiInput = screen.getByLabelText("Civitai API Key");
@@ -689,7 +689,7 @@ describe("EngineSettingsPage", () => {
     expect(screen.getByLabelText("Hugging Face API Key")).toBeDisabled();
   });
 
-  it("shows encrypted-vault repo-local rejection with a display path only", async () => {
+  it("shows encrypted-vault repo-local rejection without exposing repo-local paths", async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("/api/runtime"))
@@ -730,9 +730,7 @@ describe("EngineSettingsPage", () => {
         /cannot use a Noofy data directory inside the repo checkout/i,
       ),
     ).toBeInTheDocument();
-    expect(
-      screen.getByText(/<app-data>\/settings\/api-key-vault\.json/i),
-    ).toBeInTheDocument();
+    expect(screen.queryByText(/api-key-vault\.json/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/\/home\/ubuntu\/Noofy/)).not.toBeInTheDocument();
   });
 
@@ -844,7 +842,9 @@ describe("EngineSettingsPage", () => {
     expect(
       await screen.findByText("/Volumes/AI/Noofy Models"),
     ).toBeInTheDocument();
-    expect(screen.getByText(/restart the noofy engine/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Restart ComfyUI so it can scan the new model folder location/i),
+    ).toBeInTheDocument();
   });
 
   it("shows fallback copy when restart triggers repair and falls back", async () => {
@@ -883,7 +883,7 @@ describe("EngineSettingsPage", () => {
     fireEvent.click(restart);
 
     expect(
-      await screen.findByText(/previous working engine/i),
+      await screen.findByText(/last working ComfyUI version/i),
     ).toBeInTheDocument();
   });
 
@@ -942,10 +942,7 @@ describe("EngineSettingsPage", () => {
     fireEvent.click(restart);
 
     expect(
-      await screen.findByText("Repair: repairing_environment"),
-    ).toBeInTheDocument();
-    expect(
-      await screen.findByText(/repaired and started/i),
+      await screen.findByText(/repaired and restarted/i),
     ).toBeInTheDocument();
   });
 
@@ -1011,22 +1008,15 @@ describe("EngineSettingsPage", () => {
     fireEvent.click(rebuild);
 
     expect(
-      await screen.findByText("repairing_environment"),
-    ).toBeInTheDocument();
-    expect(
-      await screen.findByText(
-        /environment was rebuilt and validated successfully/i,
-        {},
-        { timeout: 2500 },
-      ),
-    ).toBeInTheDocument();
+      (await screen.findAllByText("ComfyUI was repaired and checked.", {}, { timeout: 2500 })).length,
+    ).toBeGreaterThan(0);
   });
 
   it("loads Noofy runtime status without checking GitHub automatically", async () => {
     renderSettingsPage();
 
     expect(
-      await screen.findByRole("heading", { name: "Noofy Runtime" }),
+      await screen.findByRole("heading", { name: "Noofy App Update" }),
     ).toBeInTheDocument();
     expect(screen.getByText("Not checked")).toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalledWith(
@@ -1139,7 +1129,7 @@ describe("EngineSettingsPage", () => {
     renderSettingsPage();
 
     const panel = (
-      await screen.findByRole("heading", { name: "Noofy Runtime" })
+      await screen.findByRole("heading", { name: "Noofy App Update" })
     ).closest("article");
     fireEvent.click(
       within(panel as HTMLElement).getByRole("button", {
@@ -1160,11 +1150,11 @@ describe("EngineSettingsPage", () => {
     );
 
     expect(
-      await screen.findByText("Ready to activate", {}, { timeout: 3000 }),
+      await screen.findByText(/checked and is ready/i, {}, { timeout: 3000 }),
     ).toBeInTheDocument();
     expect(
       await screen.findByText(
-        /activation applies the next time/i,
+        /It will be used next time you open Noofy/i,
         {},
         { timeout: 3000 },
       ),
@@ -1177,7 +1167,7 @@ describe("EngineSettingsPage", () => {
     );
 
     expect(
-      await screen.findByText(/will be used the next time/i),
+      await screen.findByText(/Noofy v0\.2\.0 will be used the next time you open Noofy\./i),
     ).toBeInTheDocument();
   });
 
@@ -1210,7 +1200,7 @@ describe("EngineSettingsPage", () => {
     renderSettingsPage();
 
     const panel = (
-      await screen.findByRole("heading", { name: "Noofy Runtime" })
+      await screen.findByRole("heading", { name: "Noofy App Update" })
     ).closest("article");
     expect(
       within(panel as HTMLElement).getByText(/not configured for this build/i),
@@ -1255,7 +1245,7 @@ describe("EngineSettingsPage", () => {
       await screen.findByRole("heading", { name: "ComfyUI Workflow Engine" }),
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole("heading", { name: "Noofy Runtime" }),
+      screen.queryByRole("heading", { name: "Noofy App Update" }),
     ).not.toBeInTheDocument();
   });
 });

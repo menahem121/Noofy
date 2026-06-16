@@ -624,7 +624,7 @@ function StartCreatingStep({
           <div className="onboarding-starter-card__body">
             <span className="category-badge">Starter workflow</span>
             <h3>Text to Image</h3>
-            <p>Generate a new image from a simple text prompt.</p>
+            <p>Generate new images from a simple text prompt.</p>
             {workflows.length > 1 ? (
               <label className="workflow-variant-select">
                 <span>Model</span>

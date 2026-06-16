@@ -33,7 +33,7 @@ export function useModelDownloadJob(onFinished: () => void) {
       })
       .catch(() => {
         if (mounted) {
-          setDownloadError("Could not check the active model download yet.");
+          setDownloadError("Could not check the current model download yet.");
         }
       });
     return () => {

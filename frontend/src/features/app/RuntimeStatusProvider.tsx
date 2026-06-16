@@ -224,7 +224,7 @@ export function runtimeStatusView(state: RuntimeHealthState): AppStatusView {
   if (state.backendStatus === "unknown") {
     return {
       label: "Checking Noofy",
-      description: "Looking for the local app service",
+      description: "Connecting to the local service",
       tone: "info",
       loading: true,
     };
@@ -232,8 +232,8 @@ export function runtimeStatusView(state: RuntimeHealthState): AppStatusView {
 
   if (state.backendStatus === "unreachable") {
     return {
-      label: "Service offline",
-      description: state.refreshError ?? "Restart Noofy to reconnect to the local app service",
+      label: "Offline",
+      description: state.refreshError ?? "Restart Noofy to reconnect",
       tone: "error",
     };
   }
@@ -241,7 +241,7 @@ export function runtimeStatusView(state: RuntimeHealthState): AppStatusView {
   if (state.engineStatus === "ready") {
     return {
       label: "Ready",
-      description: "Local workflow engine is reachable",
+      description: "Ready to run workflows",
       tone: "success",
     };
   }
@@ -249,7 +249,7 @@ export function runtimeStatusView(state: RuntimeHealthState): AppStatusView {
   if (state.engineStatus === "starting") {
     return {
       label: "Starting",
-      description: "The local engine process is still warming up",
+      description: "Starting ComfyUI",
       tone: "info",
       loading: true,
     };
@@ -258,7 +258,7 @@ export function runtimeStatusView(state: RuntimeHealthState): AppStatusView {
   if (state.engineStatus === "busy") {
     return {
       label: "Working",
-      description: "The local engine is busy loading models or running a workflow",
+      description: "Loading models or running a workflow",
       tone: "info",
       loading: true,
     };
@@ -266,15 +266,15 @@ export function runtimeStatusView(state: RuntimeHealthState): AppStatusView {
 
   if (state.engineStatus === "offline") {
     return {
-      label: "Engine offline",
-      description: state.runtime?.error ?? "Open settings to start or repair the local engine",
+      label: "ComfyUI offline",
+      description: state.runtime?.error ?? "Open Engine Settings to start or repair ComfyUI",
       tone: "warning",
     };
   }
 
   return {
     label: "Connected",
-    description: "Noofy is connected to the local app service",
+    description: "Noofy is connected",
     tone: "info",
   };
 }
@@ -331,7 +331,7 @@ function errorMessage(error: unknown) {
 
 function runtimeRefreshError(error: unknown) {
   if (error instanceof DOMException && error.name === "AbortError") {
-    return new Error("Noofy's local app service did not answer runtime status in time.");
+    return new Error("Noofy took too long to report its current status.");
   }
   return error;
 }

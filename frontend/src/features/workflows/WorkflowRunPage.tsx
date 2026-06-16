@@ -1238,7 +1238,7 @@ export function WorkflowRunPage({
       memoryRequirement,
       developerDetails,
       jobId,
-      logsLoading: !memoryFailure,
+      logsLoading: false,
       logsLoaded: false,
       logError: null,
       comfyuiLogs: [],
@@ -1246,14 +1246,12 @@ export function WorkflowRunPage({
       detailsOpen: false,
       copied: false,
     });
-    if (memoryFailure) return;
-    await loadFailureLogsFor(errorMessage, jobId);
   }
 
   async function loadFailureLogsFor(errorMessage: string, jobId: string | null) {
     setFailureDialog((current) =>
       current && current.errorMessage === errorMessage && current.jobId === jobId
-        ? { ...current, logsLoading: true, logError: null, detailsOpen: true }
+        ? { ...current, logsLoading: true, logError: null }
         : current,
     );
     try {
@@ -1515,7 +1513,7 @@ export function WorkflowRunPage({
       recordTrackedFailure(
         trackedRunHandle(nextRun),
         result.job_id,
-        result.error ?? "The local engine could not finish this run.",
+        result.error ?? "ComfyUI could not finish this run.",
         result.error_code,
         result.user_message,
         result.developer_details,
@@ -1755,7 +1753,7 @@ export function WorkflowRunPage({
   const showUserFacingMemoryNotice = Boolean(
     memoryNotice
       && !showMemoryLoadedPill
-      && memoryNotice.title !== "Memory status"
+      && memoryNotice.title !== "Checking memory"
       && !(memoryStatus && isSilentQueuedMemoryState(memoryStatus.state))
       && !(memoryStatus && isBlockingMemoryState(memoryStatus.state)),
   );
@@ -1769,11 +1767,11 @@ export function WorkflowRunPage({
   const dashboardValuesReady = !dashboardPackagePending && userStateLoaded;
   const dashboardLoadingCopy = dashboardPackagePending
     ? {
-        title: "Opening workflow",
-        message: "Loading the dashboard controls.",
+        title: "Loading workflow",
+        message: "Loading the controls for this workflow.",
       }
     : {
-        title: "Loading your saved inputs",
+        title: "Loading saved inputs",
         message: "Restoring your saved input values.",
       };
   const runReadinessPending = modelSummaryLoadingForWorkflow || validationLoadingForWorkflow;
@@ -2046,7 +2044,7 @@ export function WorkflowRunPage({
         <div className="notice notice--warning" role="status">
           <AlertCircle size={18} aria-hidden="true" />
           <div>
-            <strong>The local app service is offline</strong>
+            <strong>Noofy is offline</strong>
             <span>{runtimeStatus.refreshError ?? "Restart Noofy before running this workflow."}</span>
           </div>
         </div>
@@ -2055,8 +2053,8 @@ export function WorkflowRunPage({
         <div className="notice notice--warning" role="status">
           <AlertCircle size={18} aria-hidden="true" />
           <div>
-            <strong>{runtimeStatus.engineStatus === "starting" ? "The local ComfyUI engine is starting" : "The local ComfyUI engine is not reachable"}</strong>
-            <span>Open Engine Settings to prepare or start the engine before running this workflow.</span>
+            <strong>{runtimeStatus.engineStatus === "starting" ? "Starting ComfyUI" : "ComfyUI is not responding"}</strong>
+            <span>Open Engine Settings to finish setup or restart ComfyUI before running this workflow.</span>
           </div>
         </div>
       ) : null}
@@ -2111,6 +2109,7 @@ export function WorkflowRunPage({
     <WorkflowFailureDialog
       dialog={failureDialog}
       workflowId={workflowId}
+      workflowName={workflowDisplayTitle}
       onClose={() => setFailureDialog(null)}
       onToggleDetails={() => setFailureDialog((current) => current ? { ...current, detailsOpen: !current.detailsOpen } : current)}
       onViewLogs={() => void loadFailureLogs()}
@@ -2121,6 +2120,7 @@ export function WorkflowRunPage({
     <WorkflowInputErrorDialog
       dialog={inputErrorDialog}
       workflowId={workflowId}
+      workflowName={workflowDisplayTitle}
       onClose={() => setInputErrorDialog(null)}
       onFixInput={() => handleFixInput(inputErrorDialog.error)}
       onToggleDetails={() => setInputErrorDialog((current) => current ? { ...current, detailsOpen: !current.detailsOpen } : current)}
@@ -2154,6 +2154,7 @@ export function WorkflowRunPage({
     <RunPreparationDialog
       dialog={runPreparationDialog}
       workflowId={workflowId}
+      workflowName={workflowDisplayTitle}
       onClose={() => setRunPreparationDialog(null)}
     />
   ) : null;
@@ -2479,8 +2480,8 @@ export function WorkflowRunPage({
             <div className="notice notice--error notice--compact" role="status">
               <AlertCircle size={16} aria-hidden="true" />
               <div>
-                <strong>Workflow failed</strong>
-                <span>{state.result.error ?? "Open details for the technical error."}</span>
+                <strong>Run stopped</strong>
+                <span>{state.result.user_message ?? "The run stopped before it finished."}</span>
               </div>
             </div>
           ) : null}
@@ -2590,10 +2591,12 @@ function WorkflowRefreshRequiredDialog({
 function RunPreparationDialog({
   dialog,
   workflowId,
+  workflowName,
   onClose,
 }: {
   dialog: RunPreparationDialogState;
   workflowId: string;
+  workflowName: string;
   onClose: () => void;
 }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -2627,9 +2630,10 @@ function RunPreparationDialog({
           <div>
             <p className="eyebrow">Workflow run</p>
             <h2 id="workflow-preparation-title">
-              {dialog.failed ? "Workflow could not be prepared" : "Preparing workflow"}
+              {dialog.failed ? "Couldn't set up this workflow" : "Setting up workflow"}
             </h2>
             <p>{dialog.message}</p>
+            <p className="workflow-preparation-modal__detail">{workflowName}</p>
           </div>
           <div className="workflow-preparation-modal__header-actions">
             {dialog.failed ? <AlertCircle size={22} aria-hidden="true" /> : <Loader2 className="spin" size={22} aria-hidden="true" />}
@@ -2684,6 +2688,7 @@ function RunPreparationDialog({
 function WorkflowFailureDialog({
   dialog,
   workflowId,
+  workflowName,
   onClose,
   onToggleDetails,
   onViewLogs,
@@ -2691,12 +2696,16 @@ function WorkflowFailureDialog({
 }: {
   dialog: RunFailureDialogState;
   workflowId: string;
+  workflowName: string;
   onClose: () => void;
   onToggleDetails: () => void;
   onViewLogs: () => void;
   onCopy: () => void;
 }) {
   const memoryFailure = isMemoryFailureCode(dialog.errorCode);
+  const failureMessage = memoryFailure
+    ? dialog.userMessage ?? MEMORY_FAILURE_MESSAGE
+    : dialog.userMessage ?? "The run stopped before it finished.";
   return (
     <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="workflow-failure-title">
       <section className="workflow-failure-modal">
@@ -2704,9 +2713,9 @@ function WorkflowFailureDialog({
           <div>
             <p className="eyebrow">Workflow run</p>
             <h2 id="workflow-failure-title">
-              {memoryFailure ? "Not enough memory to run this workflow" : "Workflow failed"}
+              {memoryFailure ? "Not enough memory to run this workflow" : "Run stopped"}
             </h2>
-            <p>{memoryFailure ? dialog.userMessage ?? MEMORY_FAILURE_MESSAGE : dialog.errorMessage}</p>
+            <p>{failureMessage}</p>
           </div>
           <button className="icon-button" type="button" aria-label="Close" onClick={onClose}>
             <X size={18} aria-hidden="true" />
@@ -2715,34 +2724,33 @@ function WorkflowFailureDialog({
 
         <div className="workflow-failure-modal__body">
           <div className="workflow-failure-modal__meta">
-            <span>Workflow: {workflowId}</span>
-            {dialog.jobId ? <span>Job: {dialog.jobId}</span> : <span>Job: not created yet</span>}
+            <span>Workflow: {workflowName}</span>
           </div>
           {memoryFailure ? <MemoryRequirementSummary requirement={dialog.memoryRequirement} /> : null}
           {memoryFailure ? <MemoryFailureSteps requirement={dialog.memoryRequirement} /> : null}
-          {memoryFailure ? (
-            <section className="workflow-input-error-details" aria-label="Developer details">
-              <button className="ghost-button workflow-input-error-details__toggle" type="button" onClick={onToggleDetails}>
-                {dialog.detailsOpen ? <ChevronUp size={16} aria-hidden="true" /> : <ChevronDown size={16} aria-hidden="true" />}
-                Developer details
-              </button>
-              {dialog.detailsOpen ? (
-                <pre className="workflow-log-section__content workflow-input-error-details__content">
-                  {JSON.stringify(
-                    {
-                      error_code: dialog.errorCode,
-                      original_error: dialog.developerDetails.original_error ?? null,
-                      job_id: dialog.jobId,
-                      workflow_id: workflowId,
-                      developer_details: dialog.developerDetails,
-                    },
-                    null,
-                    2,
-                  )}
-                </pre>
-              ) : null}
-            </section>
-          ) : null}
+          <section className="workflow-input-error-details" aria-label="Developer details">
+            <button className="ghost-button workflow-input-error-details__toggle" type="button" onClick={onToggleDetails}>
+              {dialog.detailsOpen ? <ChevronUp size={16} aria-hidden="true" /> : <ChevronDown size={16} aria-hidden="true" />}
+              Developer details
+            </button>
+            {dialog.detailsOpen ? (
+              <pre className="workflow-log-section__content workflow-input-error-details__content">
+                {JSON.stringify(
+                  {
+                    workflow: workflowName,
+                    workflow_id: workflowId,
+                    job_id: dialog.jobId,
+                    user_message: dialog.userMessage,
+                    technical_error: dialog.errorMessage,
+                    error_code: dialog.errorCode,
+                    developer_details: dialog.developerDetails,
+                  },
+                  null,
+                  2,
+                )}
+              </pre>
+            ) : null}
+          </section>
           {dialog.logError ? (
             <div className="notice notice--warning notice--compact" role="status">
               <AlertCircle size={16} aria-hidden="true" />
@@ -2752,7 +2760,7 @@ function WorkflowFailureDialog({
               </div>
             </div>
           ) : null}
-          {!memoryFailure || dialog.logsLoaded || dialog.logsLoading ? (
+          {dialog.logsLoaded || dialog.logsLoading ? (
             <>
               <DiagnosticLogSection
                 title="ComfyUI engine logs"
@@ -2775,14 +2783,12 @@ function WorkflowFailureDialog({
             Close
           </button>
           <div className="workflow-input-error-modal__actions">
-            {memoryFailure ? (
-              <button className="secondary-button" type="button" onClick={onViewLogs}>
-                {dialog.logsLoaded ? "Refresh logs" : "Show details"}
-              </button>
-            ) : null}
+            <button className="secondary-button" type="button" onClick={onViewLogs}>
+              {dialog.logsLoaded ? "Refresh logs" : "View logs"}
+            </button>
             <button className={memoryFailure ? "secondary-button" : "primary-button"} type="button" onClick={onCopy}>
               <Clipboard size={16} aria-hidden="true" />
-              {dialog.copied ? "Copied" : memoryFailure ? "Copy details" : "Copy logs"}
+              {dialog.copied ? "Copied" : "Copy details"}
             </button>
           </div>
         </footer>
@@ -2794,6 +2800,7 @@ function WorkflowFailureDialog({
 function WorkflowInputErrorDialog({
   dialog,
   workflowId,
+  workflowName,
   onClose,
   onFixInput,
   onToggleDetails,
@@ -2802,6 +2809,7 @@ function WorkflowInputErrorDialog({
 }: {
   dialog: RunInputErrorDialogState;
   workflowId: string;
+  workflowName: string;
   onClose: () => void;
   onFixInput: () => void;
   onToggleDetails: () => void;
@@ -2824,8 +2832,7 @@ function WorkflowInputErrorDialog({
 
         <div className="workflow-failure-modal__body">
           <div className="workflow-failure-modal__meta">
-            <span>Workflow: {workflowId}</span>
-            {dialog.error.control_id ? <span>Input: {dialog.error.input_type ?? "required"}</span> : <span>Input: hidden or unavailable</span>}
+            <span>Workflow: {workflowName}</span>
           </div>
           <section className="workflow-input-error-details" aria-label="Developer details">
             <button className="ghost-button workflow-input-error-details__toggle" type="button" onClick={onToggleDetails}>
@@ -3371,7 +3378,7 @@ function progressFromWorkflowRuntime(runtime: WorkflowTabRuntimeState | null): J
     value: null,
     max: null,
     current_node: null,
-    message: "Preparing workflow...",
+    message: "Starting this workflow...",
   };
 }
 
@@ -3382,7 +3389,7 @@ function optimisticProgress(): JobProgress {
     value: 0,
     max: null,
     current_node: null,
-    message: "Starting workflow...",
+    message: "Starting this workflow...",
   };
 }
 
@@ -3394,7 +3401,7 @@ function progressFromSubmittedJob(job: EngineJob): JobProgress {
     value: null,
     max: null,
     current_node: null,
-    message: job.memory_status?.message ?? job.message ?? "Preparing workflow...",
+    message: job.memory_status?.message ?? job.message ?? "Starting this workflow...",
     error_code: job.error_code,
     memory_requirement: job.memory_requirement,
     developer_details: job.memory_decision ? { memory_decision: job.memory_decision } : {},
@@ -3429,7 +3436,7 @@ function runPreparationDialogFromStatus(workflowStatus: WorkflowStatusResponse |
   return {
     message: failed
       ? lastError ?? userMessage ?? "Noofy could not prepare this workflow automatically."
-      : userMessage ?? "Preparing the isolated runner for this workflow.",
+      : userMessage ?? "Setting up this workflow before it runs.",
     detail: failed ? userMessage && userMessage !== lastError ? userMessage : null : preparationStatusDetail(installStatus),
     phases: preparationPhases(workflowStatus),
     failed,
@@ -3446,11 +3453,11 @@ function runPreparationDialogFromValidation(
     : "runner";
   const phaseOrder = [
     ["models", "Check required models"],
-    ["dependencies", "Prepare dependency environment"],
-    ["stage_custom_nodes", "Stage custom-node files"],
-    ["runner", "Start isolated runner"],
-    ["custom_registration", "Check custom-node registration"],
-    ["resume", "Continue run"],
+    ["dependencies", "Install workflow extras"],
+    ["stage_custom_nodes", "Set up workflow files"],
+    ["runner", "Start workflow engine"],
+    ["custom_registration", "Verify workflow extras"],
+    ["resume", "Start run"],
   ] as const;
   const failedIndex = phaseOrder.findIndex(([id]) => id === failedPhase);
   return {
@@ -3512,19 +3519,19 @@ function preparationStatusDetail(status: string | null) {
     case "resolving_models":
     case "downloading":
     case "materializing_model_view":
-      return "Checking required model files and staging the model view.";
+      return "Checking the model files this workflow needs.";
     case "resolving_dependencies":
     case "materializing_dependencies":
     case "preparing_dependency_env":
     case "resolving_runtime_profile":
-      return "Resolving Python packages into the workflow capsule.";
+      return "Installing the extra pieces this workflow needs before the first run.";
     case "materializing_custom_nodes":
     case "checking_compatibility":
-      return "Staging custom nodes in the isolated runner workspace.";
+      return "Setting up this workflow's extra files.";
     case "smoke_testing":
-      return "Starting the isolated runner and checking custom-node registration.";
+      return "Starting the workflow engine for this setup.";
     default:
-      return "Noofy will continue the run automatically when preparation is ready.";
+      return "Noofy will start the run automatically when setup finishes.";
   }
 }
 
@@ -3540,11 +3547,11 @@ function preparationPhases(workflowStatus: WorkflowStatusResponse | null): Prepa
   const ready = installStatus === "ready";
   const phases: PreparationPhase[] = [
     { id: "models", label: "Check required models", status: "pending" },
-    { id: "dependencies", label: "Prepare dependency environment", status: "pending" },
-    { id: "stage_custom_nodes", label: "Stage custom-node files", status: "pending" },
-    { id: "runner", label: "Start isolated runner", status: "pending" },
-    { id: "custom_registration", label: "Check custom-node registration", status: "pending" },
-    { id: "resume", label: "Continue run", status: "pending" },
+    { id: "dependencies", label: "Install workflow extras", status: "pending" },
+    { id: "stage_custom_nodes", label: "Set up workflow files", status: "pending" },
+    { id: "runner", label: "Start workflow engine", status: "pending" },
+    { id: "custom_registration", label: "Verify workflow extras", status: "pending" },
+    { id: "resume", label: "Start run", status: "pending" },
   ];
   const activeIndex = activePhase ? phases.findIndex((phase) => phase.id === activePhase) : -1;
 
@@ -3620,7 +3627,7 @@ function smokeStageStatus(install: Record<string, unknown>, phaseId: string): Pr
 function preparationPhaseStatusLabel(status: PreparationPhaseStatus) {
   switch (status) {
     case "passed":
-      return "Done";
+      return "Ready";
     case "active":
       return "Working";
     case "failed":
@@ -3637,13 +3644,13 @@ function progressMessage(progress: JobProgress | null, result: JobResult | null,
     if (!isSilentQueuedMemoryState(memoryStatus.state)) return memoryStatusDisplay(memoryStatus).message;
     if (progress?.status === "queued_pending_memory") return null;
   }
-  if (progress?.status === "running") return progress.message ?? "Generating image...";
-  if (progress?.status === "queued") return progress.message ?? "Preparing workflow...";
-  if (progress?.status === "queued_pending_memory") return progress.message ?? "Waiting for memory.";
-  if (progress?.status === "blocked_by_memory") return progress.message ?? "This workflow needs more memory.";
+  if (progress?.status === "running") return progress.message ?? "Running workflow...";
+  if (progress?.status === "queued") return progress.message ?? "Starting this workflow...";
+  if (progress?.status === "queued_pending_memory") return progress.message ?? "Waiting for enough memory.";
+  if (progress?.status === "blocked_by_memory") return progress.message ?? "This workflow does not have enough free memory to start.";
   if (progress?.status === "canceled") return "Run canceled.";
-  if (result?.status === "completed") return "Result saved by the local workflow.";
-  if (result?.status === "failed") return "The local engine could not finish this run.";
+  if (result?.status === "completed") return "Result ready.";
+  if (result?.status === "failed") return "ComfyUI could not finish this run.";
   return "Run the workflow to create your first result.";
 }
 
@@ -3728,7 +3735,7 @@ function formatFailureReport(workflowId: string, dialog: RunFailureDialogState) 
   return [
     "Workflow failure report",
     `Workflow: ${workflowId}`,
-    `Job: ${dialog.jobId ?? "not created yet"}`,
+    `Job: ${dialog.jobId ?? "not available"}`,
     `Error: ${dialog.errorMessage}`,
     `Error code: ${dialog.errorCode ?? "none"}`,
     dialog.userMessage ? `User message: ${dialog.userMessage}` : null,
@@ -3917,32 +3924,32 @@ function memoryStatusFallback(state: string): MemoryStatusDisplay {
   }
   if (state === "freeing_previous_models") {
     return {
-      title: "Freeing previous models",
-      message: "Noofy is unloading idle models so this workflow has enough room to start.",
+      title: "Making room for this workflow",
+      message: "Noofy is unloading models from the previous run so this one can start.",
     };
   }
   if (state === "unloading_previous_workflow") {
     return {
-      title: "Unloading previous workflow",
+      title: "Finishing the previous workflow",
       message: "Noofy is clearing the previous workflow before starting this one.",
     };
   }
   if (state === "freeing_memory" || state === "waiting_for_memory_release") {
     return {
       title: "Freeing memory",
-      message: "Noofy asked the local engine to release memory and is waiting to confirm it.",
+      message: "Noofy is freeing memory before this run starts.",
     };
   }
   if (state === "retrying_after_memory_cleanup") {
     return {
-      title: "Retrying after memory cleanup",
-      message: "Noofy freed memory and is trying this workflow one more time.",
+      title: "Trying again",
+      message: "Noofy freed memory and is starting this workflow again.",
     };
   }
   if (state === "memory_cleanup_failed") {
     return {
-      title: "Memory cleanup did not finish",
-      message: "Noofy tried to free memory, but could not confirm that enough was released.",
+      title: "Not enough memory was freed",
+      message: "Noofy tried to free memory, but there still is not enough available for this workflow.",
     };
   }
   if (state === "blocked_external_pressure") {
@@ -3959,14 +3966,14 @@ function memoryStatusFallback(state: string): MemoryStatusDisplay {
   }
   if (state === "blocked_unattributed_pressure") {
     return {
-      title: "Memory is in use but not reclaimable",
-      message: "Noofy sees memory pressure, but cannot safely attribute enough of it to memory it owns.",
+      title: "Memory is still in use",
+      message: "Memory is in use, but Noofy cannot free enough of it automatically.",
     };
   }
   if (state === "blocked_by_memory") {
     return {
-      title: "Memory unavailable",
-      message: "Noofy cannot safely start this workflow with the memory available right now.",
+      title: "Not enough free memory",
+      message: "This workflow does not have enough free RAM or GPU memory to start right now.",
     };
   }
   if (state === "ready_warm_co_resident" || state === "ready_reusing_runner") {
@@ -3976,8 +3983,8 @@ function memoryStatusFallback(state: string): MemoryStatusDisplay {
     };
   }
   return {
-    title: "Memory status",
-    message: "Noofy is checking memory before starting this workflow.",
+    title: "Checking memory",
+    message: "Noofy is checking available memory before this workflow starts.",
   };
 }
 
@@ -4044,8 +4051,8 @@ function workflowRunDisabledReason({
   if (isBlockedByMemory) return "Noofy cannot safely start this workflow with the memory available right now.";
   if (isWaitingForMemory && memoryStatus) return memoryStatusDisplay(memoryStatus).message;
   if (isWaitingForMemory) return "Noofy is waiting for memory to free up.";
-  if (backendKnownUnreachable) return "The local app service is offline.";
-  if (engineKnownUnavailable) return "The ComfyUI engine is not ready yet.";
+  if (backendKnownUnreachable) return "Noofy is offline.";
+  if (engineKnownUnavailable) return "ComfyUI is not ready yet.";
   if (dashboardLoadingReason) return dashboardLoadingReason;
   if (installStatus === "unsupported" || workflowStatus?.can_prepare === false) {
     return "This workflow cannot run on this machine.";
@@ -4060,7 +4067,7 @@ function workflowRunDisabledReason({
   if (validation && !validation.valid) {
     return validation.errors[0] ?? "This workflow needs setup before it can run.";
   }
-  if (validationLoading || !workflowStatus || !validation) return "Checking workflow readiness...";
+  if (validationLoading || !workflowStatus || !validation) return "Checking whether this workflow can run...";
   return "This workflow is not ready to run.";
 }
 
@@ -4211,7 +4218,7 @@ function WorkflowRequiredModelsModal({
       <section className="required-models-modal">
         <header className="required-models-modal__header">
           <div>
-            <p className="eyebrow">Workflow models</p>
+            <p className="eyebrow">Required models</p>
             <h2 id="workflow-required-models-title">Missing Models</h2>
             <p>
               {readyToRun

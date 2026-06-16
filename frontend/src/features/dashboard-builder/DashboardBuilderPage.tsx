@@ -205,7 +205,7 @@ export function DashboardBuilderPage({
         setWorkflowState({
           loading: false,
           workflow: emptyWorkflow(workflowId, activeWorkflowName),
-          error: "Workflow values could not be loaded.",
+          error: "This workflow's controls could not be loaded.",
         });
       });
     return () => {
@@ -580,7 +580,7 @@ export function DashboardBuilderPage({
               </button>
               <h1 id="builder-title" className="builder-heading__inline-title">Dashboard Builder · {displayWorkflowName}</h1>
             </div>
-            <p>Choose which workflow values become simple widgets.</p>
+            <p>Choose which workflow inputs and outputs should appear on the dashboard.</p>
           </div>
 
           <div className="builder-heading__meta">
@@ -624,20 +624,20 @@ export function DashboardBuilderPage({
           <DashboardBuilderLoadingState />
         ) : (
           <div className="builder-grid">
-          <aside className="builder-pane builder-values" aria-label="Workflow values">
+          <aside className="builder-pane builder-values" aria-label="Workflow controls">
             <header className="builder-pane__header">
               <div>
-                <h2>Workflow values</h2>
-                <p>Pick a value to expose as a friendly widget.</p>
+                <h2>Workflow controls</h2>
+                <p>Pick an item to turn it into a simple dashboard control.</p>
               </div>
             </header>
             <div className="builder-pane__toolbar">
               <label className="search-field search-field--builder">
                 <Search size={15} aria-hidden="true" />
-                <span className="sr-only">Search workflow values</span>
+                <span className="sr-only">Search workflow controls</span>
                 <input
                   type="search"
-                  placeholder="Search values..."
+                  placeholder="Search controls..."
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
                 />
@@ -657,7 +657,7 @@ export function DashboardBuilderPage({
               ) : filteredNodes.length === 0 ? (
                 <div className="builder-empty builder-empty--small">
                   <Search size={26} aria-hidden="true" />
-                  <p>No values match your search.</p>
+                  <p>No controls match your search.</p>
                 </div>
               ) : (
                 <ul className="builder-node-list">
@@ -1063,7 +1063,7 @@ function DashboardBuilderLoadingState() {
           </span>
           <div>
             <strong>Loading dashboard builder</strong>
-            <span>Preparing this workflow's values, widgets, and saved dashboard draft.</span>
+            <span>Loading this workflow's controls and saved dashboard draft.</span>
           </div>
         </div>
         <div className="builder-loading__preview" aria-hidden="true">

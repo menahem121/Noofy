@@ -616,7 +616,7 @@ export function DashboardBuilderLayoutPage({
                 </span>
                 <div>
                   <strong>Loading dashboard layout</strong>
-                  <span>Preparing this workflow's saved dashboard canvas.</span>
+                  <span>Loading this workflow's saved dashboard layout.</span>
                 </div>
               </div>
               <div className="builder-loading__layout-preview" aria-hidden="true">

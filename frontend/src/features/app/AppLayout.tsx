@@ -88,7 +88,7 @@ export function AppLayout({
   const runtimeStatus = useOptionalRuntimeStatus();
   const runtimeStatusView = runtimeStatus?.statusView ?? {
     label: "Checking Noofy",
-    description: "Looking for the local app service",
+    description: "Connecting to the local service",
     tone: "info",
     loading: true,
   };
@@ -189,8 +189,8 @@ export function AppLayout({
 
           <div className="sidebar__spacer" />
 
-          <div className="engine-card">
-            <div className="engine-card__header">
+          <div className="support-card">
+            <div className="support-card__header">
               <Coffee size={15} aria-hidden="true" />
               <span>Buy Me a Coffee</span>
             </div>
@@ -234,10 +234,10 @@ function statusViewForWorkflowActivity(
   statusView: AppStatusView,
   progress: AppTopBarProgress | null,
 ): AppStatusView {
-  if (!progress || statusView.label === "Service offline") return statusView;
+  if (!progress || statusView.tone === "error") return statusView;
   return {
     label: "Working",
-    description: "The local engine is running a workflow",
+    description: "A workflow is running",
     tone: "info",
     loading: true,
   };
@@ -398,7 +398,7 @@ function formatGb(mb: number) {
 
 function resourceTooltip(label: string, metric: ResourceMetric | null) {
   if (!metric?.available) return `${label} usage unavailable`;
-  const source = metric.source ? `Source: ${metric.source}` : "Source: Noofy service";
+  const source = metric.source ? `Source: ${metric.source}` : "Source: Reported by Noofy";
   if (metric.used_mb !== null && metric.total_mb !== null && metric.free_mb !== null) {
     return `${label}: ${formatGb(metric.used_mb)} GB used, ${formatGb(metric.free_mb)} GB free of ${formatGb(metric.total_mb)} GB. ${source}`;
   }

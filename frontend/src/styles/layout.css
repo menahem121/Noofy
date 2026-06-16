@@ -35,7 +35,7 @@
 .topbar__actions,
 .workspace-card,
 .sidebar-nav__item,
-.engine-card__header,
+.support-card__header,
 .workflow-card__topline,
 .workflow-card__footer,
 .status-pill,
@@ -559,7 +559,7 @@
     transform 160ms ease;
 }
 
-.engine-card + .workspace-card--github {
+.support-card + .workspace-card--github {
   margin-top: 12px;
 }
 
@@ -607,7 +607,7 @@
 }
 
 .workspace-card span,
-.engine-card p,
+.support-card p,
 .page-heading p,
 .section-heading p,
 .action-card p,

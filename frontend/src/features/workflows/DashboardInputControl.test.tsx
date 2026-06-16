@@ -436,7 +436,13 @@ describe("DashboardInputControl", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByAltText("Selected image: reference portrait.png")).toHaveAttribute("src", "blob:noofy-upload-preview");
+      expect(
+        fetchMock.mock.calls.some(([input]) => String(input).includes("/metadata")),
+      ).toBe(true);
+      expect(screen.getByRole("img", { name: /Selected image:/i })).toHaveAttribute(
+        "src",
+        "blob:noofy-upload-preview",
+      );
       expect(screen.getByRole("group", { name: "Selected image actions" })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Replace" })).toHaveClass("dashboard-image-input__preview-action");
       expect(screen.getByRole("button", { name: "Remove" })).toHaveClass("dashboard-image-input__preview-action");

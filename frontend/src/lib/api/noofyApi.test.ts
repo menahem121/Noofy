@@ -112,7 +112,7 @@ describe("noofyApi", () => {
   it("fails closed in desktop mode without runtime config", async () => {
     window.__TAURI_INTERNALS__ = {};
 
-    await expect(fetchRuntimeStatus()).rejects.toThrow("local app service runtime config");
+    await expect(fetchRuntimeStatus()).rejects.toThrow("startup connection settings");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
