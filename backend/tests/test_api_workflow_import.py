@@ -12,10 +12,17 @@ from app.engine.models import RequiredModelSummary
 from app.engine.service import EngineService, IMPORT_SESSION_TTL, ImportSessionExpiredError
 from app.main import create_app
 from app.runtime.runners.supervisor import RunnerSupervisor
+from app.source_policy import SourcePolicy
 from app.workflows import model_availability as availability_module
+from app.workflows.import_orchestrator import WorkflowImportOrchestrator
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.model_availability import ModelAvailabilityService
-from app.workflows.package import RequiredModel, WorkflowMetadata, WorkflowPackage
+from app.workflows.package import (
+    RequiredModel,
+    WorkflowCustomNodeRecord,
+    WorkflowMetadata,
+    WorkflowPackage,
+)
 from app.workflows.validator import WorkflowPackageValidator
 
 
@@ -569,6 +576,63 @@ def test_staged_import_commit_reuses_previewed_package_for_model_summary(tmp_pat
     assert package_store.import_count == 0
     assert package_store.prepared_import_count == 1
     assert package_store.prepared_package is package_store.package
+
+
+@pytest.mark.anyio
+async def test_import_orchestrator_schedules_initial_preparation_for_resolved_custom_nodes(
+    tmp_path,
+) -> None:
+    package = WorkflowPackage(
+        metadata=WorkflowMetadata(
+            id="local__custom_node_workflow__0.1.0",
+            name="Custom node workflow",
+            version="0.1.0",
+        ),
+        engine="comfyui",
+        comfyui_graph={"1": {"class_type": "MagicSampler", "inputs": {}}},
+        custom_nodes=[
+            WorkflowCustomNodeRecord(
+                id="magic-pack",
+                folder_name="magic-pack",
+                source="https://example.test/magic-pack/archive/pinned.zip",
+                included=True,
+                node_types=["MagicSampler"],
+                source_ref="7b3f5d0a9d508b641f85a7db4fbb7f1c2d3e4f50",
+                source_content_hash="sha256:" + ("1" * 64),
+                source_cache_ref="cache/source",
+            )
+        ],
+        source_policy=SourcePolicy(
+            trust_level="quarantined_community",
+            source_policy="isolated_community_sources",
+            automatic_preparation_allowed=True,
+            allowed_source_origins=["registry-locked"],
+            model_source_trust="filename_only",
+            community_preparation_opted_in=True,
+        ),
+    )
+    prepare_calls: list[str] = []
+
+    async def prepare(workflow_id: str) -> dict[str, object]:
+        prepare_calls.append(workflow_id)
+        return {"status": "ready"}
+
+    class Library:
+        def workflow_summary(self, package: WorkflowPackage) -> dict[str, object]:
+            return {"id": package.metadata.id, "name": package.metadata.name}
+
+    orchestrator = WorkflowImportOrchestrator(
+        imported_package_store=FakePackageStore(package),
+        workflow_library_service=Library(),
+        model_availability_service=FakeAvailabilityService(),
+        log_store=LogStore(),
+        post_import_preparer=prepare,
+    )
+
+    orchestrator.import_workflow_archive(b"archive")
+    await asyncio.sleep(0)
+
+    assert prepare_calls == ["local__custom_node_workflow__0.1.0"]
 
 
 def test_pending_import_session_stays_alive_during_active_download(tmp_path) -> None:

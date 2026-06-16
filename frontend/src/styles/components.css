@@ -548,6 +548,18 @@
   line-height: 1.55;
 }
 
+.workflow-extension {
+  font-weight: 780;
+}
+
+.workflow-extension--json {
+  color: var(--warning);
+}
+
+.workflow-extension--noofy {
+  color: var(--primary-hover);
+}
+
 .section-heading {
   display: flex;
   align-items: flex-end;

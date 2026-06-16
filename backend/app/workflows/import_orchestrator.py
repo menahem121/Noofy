@@ -4,7 +4,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from app.diagnostics import DiagnosticsSink
 from app.engine.models import (
@@ -162,6 +162,7 @@ class WorkflowImportOrchestrator:
         model_ownership_store: object | None = None,
         history_service: HistoryService | None = None,
         user_state_service: UserStateService | None = None,
+        post_import_preparer: Callable[[str], Awaitable[dict[str, object]]] | None = None,
     ) -> None:
         self.imported_package_store = imported_package_store
         self.workflow_library_service = workflow_library_service
@@ -170,6 +171,7 @@ class WorkflowImportOrchestrator:
         self.model_ownership_store = model_ownership_store
         self.history_service = history_service
         self.user_state_service = user_state_service
+        self.post_import_preparer = post_import_preparer
         self._pending_workflow_imports: dict[str, _PendingWorkflowImport] = {}
         self._import_model_download_jobs: dict[str, _ImportModelDownloadJob] = {}
         self._import_model_verification_jobs: dict[str, _ImportModelVerificationJob] = {}
@@ -217,7 +219,74 @@ class WorkflowImportOrchestrator:
         }
         if self.history_service is not None:
             self.history_service.record_workflow_imported(response["workflow"])
+        self._schedule_post_import_preparation(package)
         return response
+
+    def _schedule_post_import_preparation(self, package: WorkflowPackage) -> None:
+        if self.post_import_preparer is None:
+            return
+        if not any(record.included for record in package.custom_nodes):
+            return
+        if package.source_policy is None or not package.source_policy.automatic_preparation_allowed:
+            return
+        if package.import_metadata is not None and package.import_metadata.status in {
+            "blocked_by_policy",
+            "unsupported",
+            "cannot_prepare_automatically",
+        }:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self.log_store.add(
+                "debug",
+                "Post-import workflow preparation skipped outside async runtime",
+                "workflow.import",
+                workflow_id=package.metadata.id,
+            )
+            return
+
+        task = loop.create_task(
+            self._run_post_import_preparation(package.metadata.id)
+        )
+        task.add_done_callback(
+            lambda completed: self._log_post_import_preparation_result(
+                package.metadata.id, completed
+            )
+        )
+
+    async def _run_post_import_preparation(self, workflow_id: str) -> None:
+        assert self.post_import_preparer is not None
+        self.log_store.add(
+            "info",
+            "Post-import workflow preparation started",
+            "workflow.import",
+            workflow_id=workflow_id,
+        )
+        await self.post_import_preparer(workflow_id)
+
+    def _log_post_import_preparation_result(
+        self,
+        workflow_id: str,
+        task: asyncio.Task[None],
+    ) -> None:
+        try:
+            task.result()
+        except Exception as exc:
+            self.log_store.add(
+                "warning",
+                "Post-import workflow preparation failed",
+                "workflow.import",
+                workflow_id=workflow_id,
+                details={"error": str(exc)},
+            )
+            return
+        self.log_store.add(
+            "info",
+            "Post-import workflow preparation finished",
+            "workflow.import",
+            workflow_id=workflow_id,
+        )
 
     def preview_workflow_import(
         self,

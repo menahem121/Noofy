@@ -340,6 +340,10 @@ class EngineService:
         )
         if callable(drain_runner_starts):
             self.run_lifecycle_service.drain_runner_starts = drain_runner_starts
+        if self.workflow_import_orchestrator is not None:
+            self.workflow_import_orchestrator.post_import_preparer = (
+                self.workflow_runner_lifecycle_service.prepare_workflow
+            )
         configure_terminal_notifier = getattr(
             self.runner_supervisor,
             "configure_terminal_notifier",

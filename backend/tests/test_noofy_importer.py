@@ -30,7 +30,11 @@ from app.runtime.dependencies.isolation import (
 from app.runtime.models.model_store import ModelStore
 from app.runtime.node_registry import (
     CustomNodeSourceCache,
+    NodeRegistryEntry,
     NodeRegistryResolver,
+    NodeRegistrySource,
+    NodeRegistrySourceKind,
+    NodeTypeMappingCatalog,
     NoofyNodeRegistry,
 )
 from app.runtime.profiles import ActiveRuntimeProfileState, load_runtime_profile_catalog
@@ -340,6 +344,199 @@ def test_raw_comfyui_json_import_persists_source_files_and_logs(tmp_path: Path) 
     latest = log_store.list_events(limit=1).events[0]
     assert latest.message == "Imported workflow package"
     assert latest.details["raw_comfyui_json"]["source_format"] == "api_graph"
+
+
+def test_raw_comfyui_ui_json_import_detects_custom_nodes_from_graph_and_ui_metadata(
+    tmp_path: Path,
+) -> None:
+    log_store = LogStore()
+    registry = NoofyNodeRegistry(
+        registry_id="raw-json-test-registry",
+        entries=[
+            _custom_node_registry_entry("magic-pack", ["MagicSampler"]),
+            _custom_node_registry_entry("hidden-pack", ["HiddenDefinitionNode"]),
+        ],
+    )
+    store = ImportedWorkflowPackageStore(
+        tmp_path / "packages",
+        log_store=log_store,
+        node_registry_resolver=NodeRegistryResolver(
+            registry=registry,
+            mappings=NodeTypeMappingCatalog(
+                node_type_to_package_id={"MagicSampler": "magic-pack"}
+            ),
+            log_store=log_store,
+        ),
+    )
+    workflow = {
+        "last_node_id": 3,
+        "nodes": [
+            {"id": 1, "type": "MagicSampler", "inputs": [], "widgets_values": []},
+            {
+                "id": 3,
+                "type": "SaveImage",
+                "inputs": [],
+                "widgets_values": ["Noofy"],
+            },
+        ],
+        "links": [],
+        "definitions": {
+            "group": {
+                "nodes": [
+                    {
+                        "id": 50,
+                        "type": "HiddenDefinitionNode",
+                        "inputs": [],
+                        "widgets_values": [],
+                    }
+                ]
+            }
+        },
+    }
+
+    package = store.preview_archive(
+        json.dumps(workflow).encode("utf-8"),
+        original_filename="custom-ui.json",
+    )
+
+    assert {record.id for record in package.custom_nodes} == {
+        "hidden-pack",
+        "magic-pack",
+    }
+    assert {
+        (record.id, tuple(record.node_types)) for record in package.custom_nodes
+    } == {
+        ("hidden-pack", ("HiddenDefinitionNode",)),
+        ("magic-pack", ("MagicSampler",)),
+    }
+    assert package.import_metadata is not None
+    raw_details = package.import_metadata.developer_details["raw_comfyui_json"]
+    assert raw_details["api_node_types"] == ["MagicSampler", "SaveImage"]
+    assert raw_details["ui_node_types"] == [
+        "HiddenDefinitionNode",
+        "MagicSampler",
+        "SaveImage",
+    ]
+    assert raw_details["custom_node_detection"]["status"] == (
+        "resolved_to_registry_packages"
+    )
+    assert raw_details["custom_node_detection"]["required_custom_node_types"] == [
+        "HiddenDefinitionNode",
+        "MagicSampler",
+    ]
+
+
+def test_raw_comfyui_json_import_resolves_custom_node_source_from_exact_node_type(
+    tmp_path: Path,
+) -> None:
+    source_archive = _source_archive_bytes({"node.py": "NODE_CLASS_MAPPINGS = {}\n"})
+    source_digest = hashlib.sha256(source_archive).hexdigest()
+    fetcher = FakeSourceFetcher(source_archive)
+    log_store = LogStore()
+    registry = NoofyNodeRegistry(
+        registry_id="raw-json-test-registry",
+        entries=[
+            _custom_node_registry_entry(
+                "magic-pack",
+                ["MagicSampler"],
+                source_content_hash=f"sha256:{source_digest}",
+            )
+        ],
+    )
+    store = ImportedWorkflowPackageStore(
+        tmp_path / "packages",
+        log_store=log_store,
+        node_registry_resolver=NodeRegistryResolver(
+            registry=registry,
+            log_store=log_store,
+        ),
+        custom_node_source_cache=CustomNodeSourceCache(
+            cache_dir=tmp_path / "custom-node-cache",
+            fetcher=fetcher,
+            log_store=log_store,
+        ),
+    )
+    graph = {"1": {"class_type": "MagicSampler", "inputs": {}}}
+
+    package = store.import_archive(
+        json.dumps(graph).encode("utf-8"),
+        original_filename="custom-api.json",
+        allow_unverified_community_preparation=True,
+    )
+
+    record = package.custom_nodes[0]
+    assert fetcher.urls == [
+        "https://example.test/magic-pack/archive/pinned.zip",
+    ]
+    assert record.id == "magic-pack"
+    assert record.included is True
+    assert record.node_types == ["MagicSampler"]
+    assert record.source_cache_ref == f"{source_digest}/source"
+    assert package.import_metadata is not None
+    assert (
+        package.import_metadata.developer_details["source_resolution"]["status"]
+        == "resolved"
+    )
+
+
+def test_raw_comfyui_json_import_marks_unknown_custom_node_types_unsupported(
+    tmp_path: Path,
+) -> None:
+    store = ImportedWorkflowPackageStore(
+        tmp_path / "packages",
+        log_store=LogStore(),
+        node_registry_resolver=NodeRegistryResolver(
+            registry=NoofyNodeRegistry(registry_id="empty-test-registry"),
+            log_store=LogStore(),
+        ),
+    )
+    graph = {"1": {"class_type": "NotInRegistryNode", "inputs": {}}}
+
+    package = store.preview_archive(
+        json.dumps(graph).encode("utf-8"),
+        original_filename="unknown-custom-node.json",
+    )
+
+    assert package.import_metadata is not None
+    assert package.import_metadata.status == "unsupported"
+    source_resolution = package.import_metadata.developer_details["source_resolution"]
+    assert source_resolution["reason"] == "unresolved_custom_node_types"
+    assert source_resolution["unresolved_node_types"] == ["NotInRegistryNode"]
+    assert package.identity is not None
+    assert package.identity.trust_level == "unsupported"
+
+
+def test_raw_comfyui_json_import_marks_ambiguous_custom_node_types_unsupported(
+    tmp_path: Path,
+) -> None:
+    store = ImportedWorkflowPackageStore(
+        tmp_path / "packages",
+        log_store=LogStore(),
+        node_registry_resolver=NodeRegistryResolver(
+            registry=NoofyNodeRegistry(
+                registry_id="ambiguous-test-registry",
+                entries=[
+                    _custom_node_registry_entry("first-pack", ["SharedNode"]),
+                    _custom_node_registry_entry("second-pack", ["SharedNode"]),
+                ],
+            ),
+            log_store=LogStore(),
+        ),
+    )
+    graph = {"1": {"class_type": "SharedNode", "inputs": {}}}
+
+    package = store.preview_archive(
+        json.dumps(graph).encode("utf-8"),
+        original_filename="ambiguous-custom-node.json",
+    )
+
+    assert package.import_metadata is not None
+    assert package.import_metadata.status == "unsupported"
+    source_resolution = package.import_metadata.developer_details["source_resolution"]
+    assert source_resolution["reason"] == "unresolved_custom_node_types"
+    assert source_resolution["ambiguous_node_types"] == [
+        {"node_type": "SharedNode", "package_ids": ["first-pack", "second-pack"]}
+    ]
 
 
 def test_noofy_importer_streams_source_file_extraction(
@@ -2279,3 +2476,24 @@ def _source_archive_bytes(files: dict[str, str]) -> bytes:
         for name, contents in files.items():
             archive.writestr(name, contents)
     return payload.getvalue()
+
+
+def _custom_node_registry_entry(
+    package_id: str,
+    node_types: list[str],
+    *,
+    source_content_hash: str | None = None,
+) -> NodeRegistryEntry:
+    return NodeRegistryEntry(
+        package_id=package_id,
+        trust_level="registry_locked",
+        node_types=node_types,
+        sources=[
+            NodeRegistrySource(
+                source_kind=NodeRegistrySourceKind.GIT_ZIP_ARCHIVE,
+                source_url=f"https://example.test/{package_id}/archive/pinned.zip",
+                source_ref="7b3f5d0a9d508b641f85a7db4fbb7f1c2d3e4f50",
+                source_content_hash=source_content_hash or "sha256:" + ("1" * 64),
+            )
+        ],
+    )

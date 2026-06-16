@@ -19,12 +19,14 @@ from app.archive_safety import (
 )
 from app.core.config import settings
 from app.diagnostics import DiagnosticsSink
+from app.runtime.dependencies.custom_nodes import load_core_node_manifest_catalog
 from app.runtime.dependencies.isolation import CapsuleLock, HardwareObservations, ModelLock, TrustLevel
 from app.runtime.profiles import RuntimeProfileCatalog
 from app.runtime.node_registry import (
     CustomNodeSourceCache,
     CustomNodeSourceResolutionRequest,
     NodeRegistryResolutionError,
+    NodeRegistryResolutionErrorCode,
     NodeRegistryResolver,
     NodeRegistrySource,
 )
@@ -91,6 +93,7 @@ from app.workflows.import_policy import (
 from app.workflows.import_normalization import (
     ImportNormalizationError,
     comfyui_api_graph_from_ui_workflow,
+    comfyui_workflow_node_types,
     detect_unresolved_runtime_inputs,
     filter_resolved_runtime_inputs,
     has_nonempty_launch_option,
@@ -182,6 +185,7 @@ class ImportedWorkflowPackageStore:
     ) -> WorkflowPackage:
         importer = workflow_importer_for_data(data, original_filename=original_filename)
         package = importer.normalize()
+        package = self._with_detected_raw_comfyui_custom_nodes(package)
         package = self._with_verified_import_trust(package, importer.trust_payload())
         return _package_with_source_policy(
             package,
@@ -200,6 +204,7 @@ class ImportedWorkflowPackageStore:
         try:
             importer = workflow_importer_for_data(data, original_filename=original_filename)
             package = importer.normalize()
+            package = self._with_detected_raw_comfyui_custom_nodes(package)
             package = self._with_verified_import_trust(
                 package, importer.trust_payload()
             )
@@ -249,6 +254,7 @@ class ImportedWorkflowPackageStore:
     ) -> WorkflowPackage:
         if duplicate_action == "copy":
             package = _package_imported_as_copy(package, self.root_dir)
+        package = self._with_detected_raw_comfyui_custom_nodes(package)
         package = _package_with_source_policy(
             package,
             community_preparation_opted_in=allow_unverified_community_preparation,
@@ -451,6 +457,144 @@ class ImportedWorkflowPackageStore:
     def has_package_identity(self, package: WorkflowPackage) -> bool:
         package_dir = mutable_package_dir(self.root_dir, package)
         return package_dir is not None and package_dir.exists()
+
+    def _with_detected_raw_comfyui_custom_nodes(
+        self,
+        package: WorkflowPackage,
+    ) -> WorkflowPackage:
+        raw_details = _raw_comfyui_details(package)
+        if raw_details is None:
+            return package
+
+        detected_node_types = _raw_comfyui_detected_node_types(package)
+        missing_node_types = sorted(
+            node_type
+            for node_type in detected_node_types
+            if node_type not in _core_runtime_node_types()
+        )
+        raw_details = {
+            **raw_details,
+            "node_types": sorted(detected_node_types),
+            "core_node_count": len(_core_runtime_node_types()),
+            "required_custom_node_types": missing_node_types,
+        }
+        package = _package_with_raw_comfyui_details(package, raw_details)
+        if not missing_node_types:
+            return _package_with_raw_custom_node_detection(
+                package,
+                {
+                    "status": "core_only",
+                    "required_custom_node_types": [],
+                },
+            )
+
+        if self.node_registry_resolver is None:
+            self.log_store.add(
+                "warning",
+                "Raw ComfyUI JSON custom-node registry unavailable",
+                "workflow.import",
+                workflow_id=package.metadata.id,
+                details={"unresolved_node_types": missing_node_types},
+            )
+            return _unsupported_raw_custom_nodes(
+                package,
+                reason="custom_node_registry_not_configured",
+                unresolved_node_types=missing_node_types,
+            )
+
+        records_by_id = {record.id: record for record in package.custom_nodes}
+        node_types_by_package_id: dict[str, set[str]] = {
+            record.id: set(record.node_types) for record in package.custom_nodes
+        }
+        resolved_reports: list[dict[str, object]] = []
+        unresolved_node_types: list[str] = []
+        ambiguous_node_types: list[dict[str, object]] = []
+        for node_type in missing_node_types:
+            if any(node_type in node_types for node_types in node_types_by_package_id.values()):
+                continue
+            try:
+                entry, method = self.node_registry_resolver.registry_entry_for_node_types(
+                    [node_type]
+                )
+            except NodeRegistryResolutionError as exc:
+                if exc.code is NodeRegistryResolutionErrorCode.AMBIGUOUS_NODE_TYPE:
+                    ambiguous_node_types.append(
+                        {
+                            "node_type": node_type,
+                            "package_ids": exc.developer_details.get(
+                                "package_ids", []
+                            ),
+                        }
+                    )
+                else:
+                    unresolved_node_types.append(node_type)
+                continue
+            node_types_by_package_id.setdefault(entry.package_id, set()).add(node_type)
+            resolved_reports.append(
+                {
+                    "node_type": node_type,
+                    "package_id": entry.package_id,
+                    "resolution_method": method,
+                }
+            )
+
+        if unresolved_node_types or ambiguous_node_types:
+            self.log_store.add(
+                "warning",
+                "Raw ComfyUI JSON custom-node requirements could not be resolved",
+                "workflow.import",
+                workflow_id=package.metadata.id,
+                details={
+                    "unresolved_node_types": unresolved_node_types,
+                    "ambiguous_node_types": ambiguous_node_types,
+                    "resolved_custom_nodes": resolved_reports,
+                },
+            )
+            return _unsupported_raw_custom_nodes(
+                package,
+                reason="unresolved_custom_node_types",
+                unresolved_node_types=unresolved_node_types,
+                ambiguous_node_types=ambiguous_node_types,
+                resolved_custom_nodes=resolved_reports,
+            )
+
+        for package_id, node_types in node_types_by_package_id.items():
+            existing = records_by_id.get(package_id)
+            if existing is not None:
+                records_by_id[package_id] = existing.model_copy(
+                    update={"node_types": sorted(set(existing.node_types) | node_types)}
+                )
+                continue
+            records_by_id[package_id] = WorkflowCustomNodeRecord(
+                id=package_id,
+                folder_name=package_id,
+                source=f"registry_metadata:{package_id}",
+                included=False,
+                node_types=sorted(node_types),
+            )
+
+        updated_package = package.model_copy(
+            update={"custom_nodes": list(records_by_id.values())}
+        )
+        self.log_store.add(
+            "info",
+            "Raw ComfyUI JSON custom-node requirements detected",
+            "workflow.import",
+            workflow_id=package.metadata.id,
+            details={
+                "required_custom_node_types": missing_node_types,
+                "custom_node_package_ids": sorted(node_types_by_package_id),
+                "source_format": raw_details.get("source_format"),
+            },
+        )
+        return _package_with_raw_custom_node_detection(
+            updated_package,
+            {
+                "status": "resolved_to_registry_packages",
+                "required_custom_node_types": missing_node_types,
+                "resolved_custom_nodes": resolved_reports,
+            },
+        )
 
     def _with_resolved_community_sources(
         self,
@@ -957,6 +1101,13 @@ class RawComfyUIJsonImporter:
             comfyui_workflow or {},
             comfyui_graph=graph,
         )
+        api_node_types = sorted(_graph_node_types(graph))
+        ui_node_types = (
+            sorted(comfyui_workflow_node_types(comfyui_workflow))
+            if comfyui_workflow is not None
+            else []
+        )
+        all_node_types = sorted(set(api_node_types) | set(ui_node_types))
         dashboard = DashboardSchema(version=NOOFY_ARCHIVE_SCHEMA_VERSION, status="not_configured")
         unresolved_inputs = filter_resolved_runtime_inputs(
             _detect_unresolved_runtime_inputs(graph),
@@ -1008,6 +1159,9 @@ class RawComfyUIJsonImporter:
                 "source_format": source_format,
                 "synthesized_api_graph": synthesized_graph,
                 "required_model_count": len(unique_required_models(required_models)),
+                "api_node_types": api_node_types,
+                "ui_node_types": ui_node_types,
+                "node_types": all_node_types,
             }
         }
         self._source_files = {
@@ -1141,14 +1295,96 @@ def _raw_comfyui_display_name(
 
 
 def _raw_comfyui_log_details(package: WorkflowPackage) -> dict[str, object]:
+    details = _raw_comfyui_details(package)
+    if not isinstance(details, dict):
+        return {}
+    return {"raw_comfyui_json": details}
+
+
+def _raw_comfyui_details(package: WorkflowPackage) -> dict[str, Any] | None:
     details = (
         package.import_metadata.developer_details.get("raw_comfyui_json")
         if package.import_metadata is not None
         else None
     )
-    if not isinstance(details, dict):
-        return {}
-    return {"raw_comfyui_json": details}
+    return details if isinstance(details, dict) else None
+
+
+def _package_with_raw_comfyui_details(
+    package: WorkflowPackage,
+    raw_details: dict[str, object],
+) -> WorkflowPackage:
+    if package.import_metadata is None:
+        return package
+    developer_details = dict(package.import_metadata.developer_details)
+    developer_details["raw_comfyui_json"] = raw_details
+    return package.model_copy(
+        update={
+            "import_metadata": package.import_metadata.model_copy(
+                update={"developer_details": developer_details}
+            )
+        }
+    )
+
+
+def _package_with_raw_custom_node_detection(
+    package: WorkflowPackage,
+    detection: dict[str, object],
+) -> WorkflowPackage:
+    raw_details = dict(_raw_comfyui_details(package) or {})
+    raw_details["custom_node_detection"] = detection
+    return _package_with_raw_comfyui_details(package, raw_details)
+
+
+def _raw_comfyui_detected_node_types(package: WorkflowPackage) -> set[str]:
+    raw_details = _raw_comfyui_details(package) or {}
+    detected: set[str] = set(_graph_node_types(package.comfyui_graph))
+    for key in ("node_types", "api_node_types", "ui_node_types"):
+        value = raw_details.get(key)
+        if not isinstance(value, list):
+            continue
+        for item in value:
+            if isinstance(item, str) and _is_resolvable_workflow_node_type(item):
+                detected.add(item)
+    return detected
+
+
+def _unsupported_raw_custom_nodes(
+    package: WorkflowPackage,
+    *,
+    reason: str,
+    unresolved_node_types: list[str],
+    ambiguous_node_types: list[dict[str, object]] | None = None,
+    resolved_custom_nodes: list[dict[str, object]] | None = None,
+) -> WorkflowPackage:
+    source_resolution = {
+        "status": "failed",
+        "reason": reason,
+        "unresolved_node_types": sorted(unresolved_node_types),
+        "ambiguous_node_types": ambiguous_node_types or [],
+        "resolved_custom_nodes": resolved_custom_nodes or [],
+    }
+    package = _package_with_raw_custom_node_detection(
+        package,
+        {
+            "status": "unsupported",
+            **source_resolution,
+        },
+    )
+    return _package_with_import_resolution_status(
+        package,
+        status="unsupported",
+        message="Unsupported workflow",
+        source_resolution=source_resolution,
+    )
+
+
+def _core_runtime_node_types() -> set[str]:
+    catalog = load_core_node_manifest_catalog()
+    node_types: set[str] = set()
+    for manifest in catalog.manifests:
+        node_types.update(manifest.node_types)
+    return node_types
 
 
 def _import_status(

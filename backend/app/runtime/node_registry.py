@@ -304,6 +304,24 @@ class NodeRegistryResolver:
             )
             raise
 
+    def registry_entry_for_node_types(
+        self,
+        node_types: list[str],
+    ) -> tuple[NodeRegistryEntry, str]:
+        """Return the registry package selected for node types without fetching it.
+
+        Import preview uses this to turn raw graph node types into package
+        requirements before the normal source-policy and cache materialization
+        path runs.
+        """
+        return self._resolve_registry_entry(
+            CustomNodeSourceResolutionRequest(
+                node_types=node_types,
+                trust_level=TrustLevel.QUARANTINED_COMMUNITY,
+                allow_unverified_community_preparation=True,
+            )
+        )
+
     def _check_opt_in(self, request: CustomNodeSourceResolutionRequest) -> None:
         if (
             request.trust_level is TrustLevel.QUARANTINED_COMMUNITY

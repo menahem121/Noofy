@@ -747,6 +747,15 @@ def _iter_comfyui_workflow_nodes(value: Any) -> Iterator[dict[str, Any]]:
             yield from _iter_comfyui_workflow_nodes(item)
 
 
+def comfyui_workflow_node_types(workflow: dict[str, Any]) -> set[str]:
+    node_types: set[str] = set()
+    for node in _iter_comfyui_workflow_nodes(workflow):
+        node_type = optional_string_field(node, "type")
+        if node_type:
+            node_types.add(node_type)
+    return node_types
+
+
 def is_comfyui_api_graph(value: Any) -> bool:
     if not isinstance(value, dict) or not value:
         return False

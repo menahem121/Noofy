@@ -792,7 +792,10 @@ export function HomePage({
               </div>
               <div>
                 <h2>Import any ComfyUI Workflow</h2>
-                <p>Import a .json or .noofy ComfyUI workflow to run it through Noofy.</p>
+                <p>
+                  Import a <span className="workflow-extension workflow-extension--json">.json</span> or{" "}
+                  <span className="workflow-extension workflow-extension--noofy">.noofy</span> ComfyUI workflow to run it through Noofy.
+                </p>
               </div>
               <label
                 className={`secondary-button action-card__button${homeData.importing ? " is-disabled" : ""}`}
