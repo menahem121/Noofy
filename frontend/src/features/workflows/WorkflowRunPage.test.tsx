@@ -6494,6 +6494,16 @@ describe("WorkflowRunPage", () => {
   it("uses the source asset behind a masked dashboard image for output comparison", async () => {
     const maskedAssetId = "065c50a0-623b-471f-96a7-075cd7bf25c6.png";
     const sourceAssetId = "2694e2a5-66d8-4998-aca1-48f25503dfe8.png";
+    const maskedMetadata = {
+      asset_id: maskedAssetId,
+      original_filename: "Flux2-Klein_00002_-mask.png",
+      content_type: "image/png",
+      kind: "image",
+      has_mask: true,
+      source_asset_id: sourceAssetId,
+    };
+    const comparisonMetadataResponse = deferred<Response>();
+    let maskedMetadataRequestCount = 0;
     let objectUrlIndex = 0;
     Object.defineProperty(URL, "createObjectURL", {
       configurable: true,
@@ -6552,14 +6562,10 @@ describe("WorkflowRunPage", () => {
       },
       (url) => {
         if (url.endsWith(`/api/assets/${maskedAssetId}/metadata`)) {
-          return jsonResponse({
-            asset_id: maskedAssetId,
-            original_filename: "Flux2-Klein_00002_-mask.png",
-            content_type: "image/png",
-            kind: "image",
-            has_mask: true,
-            source_asset_id: sourceAssetId,
-          });
+          maskedMetadataRequestCount += 1;
+          return maskedMetadataRequestCount === 1
+            ? jsonResponse(maskedMetadata)
+            : comparisonMetadataResponse.promise;
         }
         if (url.endsWith(`/api/assets/${sourceAssetId}/metadata`)) {
           return jsonResponse({
@@ -6625,8 +6631,6 @@ describe("WorkflowRunPage", () => {
     });
     fireEvent.click(await screen.findByRole("button", { name: /run workflow/i }));
 
-    const slider = await screen.findByRole("slider", { name: /compare original image/i });
-    expect(slider).toBeInTheDocument();
     await waitFor(() => {
       expect(runBody).toEqual(
         expect.objectContaining({
@@ -6634,6 +6638,13 @@ describe("WorkflowRunPage", () => {
         }),
       );
     });
+    expect(screen.queryByRole("slider", { name: /compare original image/i })).not.toBeInTheDocument();
+
+    await act(async () => {
+      comparisonMetadataResponse.resolve(jsonResponse(maskedMetadata));
+    });
+
+    expect(await screen.findByRole("slider", { name: /compare original image/i })).toBeInTheDocument();
     const beforeImage = container.querySelector(".image-comparison-slider__image--before");
     await waitFor(() => {
       expect(beforeImage).toHaveAttribute("src", "blob:asset-2");

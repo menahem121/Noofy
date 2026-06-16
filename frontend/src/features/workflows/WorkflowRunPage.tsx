@@ -324,6 +324,7 @@ export function WorkflowRunPage({
   const trackedRunPollInFlightRef = useRef<Set<string>>(new Set());
   const runSubmissionInFlightCountRef = useRef(0);
   const modelVerificationStartInFlightRef = useRef(false);
+  const comparisonSourceResolutionSequenceRef = useRef(0);
   const dashboardSetupRouteRequestedRef = useRef<string | null>(null);
   const runnerLeaseRequestRef = useRef<string | null>(null);
   const requirementsLoadSequenceRef = useRef(0);
@@ -732,7 +733,7 @@ export function WorkflowRunPage({
     setModelDownloadStarting(false);
     setModelVerificationJob(null);
     setModelVerificationError(null);
-    setRunComparisonInputSource(null);
+    clearRunComparisonInputSource();
     clearLivePreview();
     trackedRunsRef.current = [];
     setTrackedRuns([]);
@@ -862,6 +863,35 @@ export function WorkflowRunPage({
     setLivePreview(null);
   }
 
+  function clearRunComparisonInputSource() {
+    comparisonSourceResolutionSequenceRef.current += 1;
+    setRunComparisonInputSource(null);
+  }
+
+  function resolveRunComparisonInputSource(
+    packageData: WorkflowPackageResponse | null,
+    controls: DashboardControlDef[],
+    inputValues: Record<string, unknown>,
+  ) {
+    const sourceWorkflowId = workflowId;
+    const sequence = ++comparisonSourceResolutionSequenceRef.current;
+    setRunComparisonInputSource(null);
+    void comparisonImageSourceForRun(sourceWorkflowId, packageData, controls, inputValues)
+      .then((source) => {
+        if (
+          sequence !== comparisonSourceResolutionSequenceRef.current ||
+          activeWorkflowIdRef.current !== sourceWorkflowId
+        ) {
+          return;
+        }
+        setRunComparisonInputSource(source);
+      })
+      .catch(() => {
+        // Comparison is optional. Failed metadata/source resolution should not
+        // affect run submission or the normal output preview path.
+      });
+  }
+
   async function handleRun() {
     if (!canRun) {
       return;
@@ -900,18 +930,10 @@ export function WorkflowRunPage({
     // comparison on screen instead of flashing back to a starting state.
     const queueingBehindActiveRun =
       trackedRunsRef.current.some(isTrackedRunActive) || isActiveWorkflowProgress(displayedProgress);
-    const submittedComparisonInputSourcePromise = queueingBehindActiveRun
-      ? Promise.resolve(null)
-      : comparisonImageSourceForRun(
-        workflowId,
-        packageDataForWorkflow,
-        allControls,
-        submittedValuesSnapshot,
-      );
     beginRunSubmission();
     if (!queueingBehindActiveRun) {
       clearLivePreview();
-      setRunComparisonInputSource(null);
+      resolveRunComparisonInputSource(packageDataForWorkflow, allControls, submittedValuesSnapshot);
     }
     setFailureDialog(null);
     setInputErrorDialog(null);
@@ -936,10 +958,6 @@ export function WorkflowRunPage({
     }
 
     try {
-      if (!queueingBehindActiveRun) {
-        const submittedComparisonInputSource = await submittedComparisonInputSourcePromise;
-        setRunComparisonInputSource(submittedComparisonInputSource);
-      }
       for (let index = 0; index < runCount; index += 1) {
         const response = await runWorkflow(workflowId, {
           inputs: { ...generationInputs[index] },
@@ -950,7 +968,7 @@ export function WorkflowRunPage({
         if (!isEngineJob(response)) {
           stopPreparationTracking();
           finishRunSubmission();
-          setRunComparisonInputSource(null);
+          clearRunComparisonInputSource();
           const userError = firstRunUserFixableError(response);
           const message = workflowValidationErrorMessage(response);
           const preparationFailure = response.error_category === "workflow_preparation";
@@ -1005,7 +1023,7 @@ export function WorkflowRunPage({
       finishRunSubmission();
       setRunPreparationDialog(null);
       void refreshWorkflowStatusAfterRun();
-      setRunComparisonInputSource(null);
+      clearRunComparisonInputSource();
       setState((current) => ({
         ...current,
         job: null,
