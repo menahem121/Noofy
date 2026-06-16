@@ -2300,7 +2300,7 @@ function DefaultAssetUploader({
     }
   }
   return (
-    <div className="builder-default-asset">
+    <div className="builder-default-asset" data-noofy-workflow-import-drop-ignore>
       <button className="secondary-button secondary-button--small" type="button" onClick={() => fileInputRef.current?.click()}>
         <File size={14} aria-hidden="true" />
         Upload default

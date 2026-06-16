@@ -240,7 +240,7 @@ export function WorkflowExportDialog({
                   placeholder="portrait, cleanup, starter"
                 />
               </label>
-              <div className="workflow-export-icon-picker">
+              <div className="workflow-export-icon-picker" data-noofy-workflow-import-drop-ignore>
                 <div className="workflow-export-icon-picker__label">Icon</div>
                 <div className="workflow-export-icon-grid" role="radiogroup" aria-label="Workflow icon">
                   <button

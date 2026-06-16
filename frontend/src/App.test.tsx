@@ -468,6 +468,20 @@ describe("App workflow tabs", () => {
     expect(await screen.findByText("Home Drop was added to your local workflows.")).toBeInTheDocument();
   });
 
+  it("advertises only .noofy support in the global drop overlay", async () => {
+    render(<App />);
+
+    expect(await screen.findByText("Built-in Workflows")).toBeInTheDocument();
+    const dataTransfer = fileDataTransfer([new File(["archive"], "overlay.noofy", { type: "application/octet-stream" })]);
+    fireEvent.dragEnter(window, { dataTransfer });
+
+    expect(screen.getByText("Drop workflow package to import")).toBeInTheDocument();
+    expect(screen.getByText(".noofy files use the normal Noofy import review.")).toBeInTheDocument();
+    expect(screen.queryByText(/\.json/i)).not.toBeInTheDocument();
+
+    fireEvent.dragLeave(window, { dataTransfer });
+  });
+
   it("starts the staged .noofy import flow when a workflow package is dropped on a workflow run page", async () => {
     const workflow = importedWorkflow("run_drop", "Run Drop");
     importPreviewResponses.set("run-drop.noofy", importResponse(workflow));
@@ -547,6 +561,54 @@ describe("App workflow tabs", () => {
 
     expect(await screen.findByText(/avatar\.png is not a supported workflow import file/i)).toBeInTheDocument();
     expect(importPreviewWasRequested()).toBe(false);
+  });
+
+  it("ignores unsupported files dropped on an explicitly local upload target", async () => {
+    render(<App />);
+
+    await screen.findByText("Built-in Workflows");
+    const uploadTarget = document.createElement("div");
+    uploadTarget.setAttribute("data-noofy-workflow-import-drop-ignore", "");
+    document.body.appendChild(uploadTarget);
+    try {
+      const dataTransfer = fileDataTransfer([new File(["image"], "local-upload.png", { type: "image/png" })]);
+      fireEvent.dragEnter(uploadTarget, { dataTransfer });
+      fireEvent.dragOver(uploadTarget, { dataTransfer });
+      fireEvent.drop(uploadTarget, { dataTransfer });
+
+      expect(screen.queryByText(/not a supported workflow import file/i)).not.toBeInTheDocument();
+      expect(screen.queryByText("Drop workflow package to import")).not.toBeInTheDocument();
+      expect(importPreviewWasRequested()).toBe(false);
+    } finally {
+      uploadTarget.remove();
+    }
+  });
+
+  it("ignores unsupported files when a local upload drop handler already handled the event", async () => {
+    render(<App />);
+
+    await screen.findByText("Built-in Workflows");
+    const localDropTarget = document.createElement("div");
+    const preventDefault = (event: DragEvent) => event.preventDefault();
+    localDropTarget.addEventListener("dragenter", preventDefault);
+    localDropTarget.addEventListener("dragover", preventDefault);
+    localDropTarget.addEventListener("drop", preventDefault);
+    document.body.appendChild(localDropTarget);
+    try {
+      const dataTransfer = fileDataTransfer([new File(["audio"], "local-audio.wav", { type: "audio/wav" })]);
+      fireEvent.dragEnter(localDropTarget, { dataTransfer });
+      fireEvent.dragOver(localDropTarget, { dataTransfer });
+      fireEvent.drop(localDropTarget, { dataTransfer });
+
+      expect(screen.queryByText(/not a supported workflow import file/i)).not.toBeInTheDocument();
+      expect(screen.queryByText("Drop workflow package to import")).not.toBeInTheDocument();
+      expect(importPreviewWasRequested()).toBe(false);
+    } finally {
+      localDropTarget.removeEventListener("dragenter", preventDefault);
+      localDropTarget.removeEventListener("dragover", preventDefault);
+      localDropTarget.removeEventListener("drop", preventDefault);
+      localDropTarget.remove();
+    }
   });
 
   it("keeps raw ComfyUI .json drops on a friendly unsupported path", async () => {

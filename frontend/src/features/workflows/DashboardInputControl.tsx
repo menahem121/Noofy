@@ -1148,7 +1148,7 @@ function AssetImageInput({
   const maskAvailable = Boolean(onImageMaskApply && (assetMaskAvailable || galleryMaskAvailable));
 
   return (
-    <div className={`dashboard-image-input dashboard-image-input--${variant} ${stateClass}`}>
+    <div className={`dashboard-image-input dashboard-image-input--${variant} ${stateClass}`} data-noofy-workflow-import-drop-ignore>
       <input
         ref={inputRef}
         className="dashboard-image-input__file"
@@ -1828,7 +1828,10 @@ function AssetAudioInput({
   const detailsLabel = audioMetadataLabel(extension, mimeType, size, null, "Audio file");
 
   return (
-    <div className={`dashboard-audio-input dashboard-audio-input--${variant}${hasSelection ? " dashboard-audio-input--selected" : ""}`}>
+    <div
+      className={`dashboard-audio-input dashboard-audio-input--${variant}${hasSelection ? " dashboard-audio-input--selected" : ""}`}
+      data-noofy-workflow-import-drop-ignore
+    >
       <input
         ref={inputRef}
         className="dashboard-image-input__file"
@@ -2043,7 +2046,10 @@ function AssetVideoInput({
   const fps = galleryReference?.fps ?? metadata?.fps;
 
   return (
-    <div className={`dashboard-video-input dashboard-video-input--${variant}${hasSelection ? " dashboard-video-input--selected" : ""}`}>
+    <div
+      className={`dashboard-video-input dashboard-video-input--${variant}${hasSelection ? " dashboard-video-input--selected" : ""}`}
+      data-noofy-workflow-import-drop-ignore
+    >
       <input
         ref={inputRef}
         className="dashboard-image-input__file"
@@ -2213,7 +2219,10 @@ function AssetFileInput({
   const size = packageReference?.size_bytes ?? metadata?.size;
 
   return (
-    <div className={`dashboard-file-input dashboard-file-input--${variant}${hasSelection ? " dashboard-file-input--selected" : ""}`}>
+    <div
+      className={`dashboard-file-input dashboard-file-input--${variant}${hasSelection ? " dashboard-file-input--selected" : ""}`}
+      data-noofy-workflow-import-drop-ignore
+    >
       <input
         ref={inputRef}
         className="dashboard-image-input__file"
@@ -2363,7 +2372,10 @@ function AssetThreeDInput({
   const mimeType = galleryReference?.mime_type ?? packageReference?.content_type ?? metadata?.content_type;
   const size = galleryReference?.size_bytes ?? packageReference?.size_bytes ?? metadata?.size;
   return (
-    <div className={`dashboard-three-d-input dashboard-three-d-input--${variant}${hasSelection ? " dashboard-three-d-input--selected" : ""}`}>
+    <div
+      className={`dashboard-three-d-input dashboard-three-d-input--${variant}${hasSelection ? " dashboard-three-d-input--selected" : ""}`}
+      data-noofy-workflow-import-drop-ignore
+    >
       <input ref={inputRef} className="dashboard-image-input__file" type="file" accept=".glb,.gltf,.obj,.stl,.fbx,.ply" disabled={disabled || Boolean(progress)} onChange={(event) => void choose(event)} />
       {galleryOpen ? (
         <GalleryPickerModal

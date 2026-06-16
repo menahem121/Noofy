@@ -9,6 +9,8 @@ import {
 } from "./useWorkflowImportFlow";
 import { importNeedsConfiguration } from "./workflowImportUtils";
 
+const WORKFLOW_IMPORT_DROP_IGNORE_ATTR = "data-noofy-workflow-import-drop-ignore";
+
 export function WorkflowGlobalDropImport({
   importFlow,
 }: {
@@ -25,6 +27,7 @@ export function WorkflowGlobalDropImport({
     }
 
     function shouldHandleFileDrag(event: DragEvent) {
+      if (event.defaultPrevented) return false;
       return hasFileTransfer(event.dataTransfer) && !isLocalFileDropTarget(event.target);
     }
 
@@ -184,13 +187,15 @@ function isLocalFileDropTarget(target: EventTarget | null) {
   return Boolean(
     element.closest(
       [
+        `[${WORKFLOW_IMPORT_DROP_IGNORE_ATTR}]`,
         'input[type="file"]',
         ".dashboard-image-input",
         ".dashboard-audio-input",
+        ".dashboard-video-input",
         ".dashboard-file-input",
         ".dashboard-three-d-input",
         ".builder-default-asset",
-        ".model-import-panel",
+        ".workflow-export-icon-picker",
       ].join(", "),
     ),
   );

@@ -525,7 +525,7 @@ export function WorkflowsPage({
               <div>
                 <strong>Build in ComfyUI, Run in Noofy</strong>
                 <p>
-                  Export your ComfyUI workflow as regular JSON ComfyUI workflow, or package it as a .noofy archive using Export2Noofy, a dedicated ComfyUI custom node made for exporting workflows to Noofy.<br />
+                  Package your ComfyUI workflow as a .noofy archive using Export2Noofy, a dedicated ComfyUI custom node made for exporting workflows to Noofy. Raw ComfyUI JSON import is planned, but this import path currently expects a .noofy package.<br />
 Once imported, Noofy transforms your advanced node graph into a simple dashboard, with only the controls you decided to expose. This keeps the full power in the creator’s hands, while giving users a clean interface anyone can understand and use.<br />
 Noofy hides the technical complexity, manages the workflow experience, and lets users run powerful AI workflows with a few clear controls and one Run button.
                 </p>
@@ -1533,7 +1533,7 @@ function WorkflowMetadataIconPicker({
   onSelectIcon: (icon: string) => void;
 }) {
   return (
-    <div className="workflow-export-icon-picker workflow-metadata-icon-picker">
+    <div className="workflow-export-icon-picker workflow-metadata-icon-picker" data-noofy-workflow-import-drop-ignore>
       <div className="workflow-export-icon-picker__label">Icon</div>
       <div className="workflow-export-icon-grid" role="radiogroup" aria-label="Workflow icon">
         <button
