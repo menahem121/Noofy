@@ -170,7 +170,7 @@ function renderEditableImageWithMask({
 }
 
 async function waitForMaskEditorOpen() {
-  return screen.findByLabelText("Mask drawing area", { selector: "canvas" }, { timeout: 5000 });
+  return screen.findByLabelText("Mask drawing area", { selector: "canvas" });
 }
 
 describe("DashboardInputControl", () => {

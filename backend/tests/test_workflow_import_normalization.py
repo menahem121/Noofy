@@ -89,6 +89,269 @@ def test_required_models_from_api_graph_known_model_selector_without_properties(
     assert model.model_type == "background_removal"
 
 
+@pytest.mark.parametrize(
+    ("node_type", "input_name", "filename", "folder", "model_type"),
+    [
+        (
+            "IPAdapterModelLoader",
+            "ipadapter_file",
+            "ip-adapter-plus.safetensors",
+            "ipadapter",
+            "ipadapter",
+        ),
+        (
+            "ADE_LoadAnimateDiffModel",
+            "model_name",
+            "mm_sd_v15_v2.ckpt",
+            "animatediff_models",
+            "animatediff_model",
+        ),
+        (
+            "ADE_AnimateDiffLoRALoader",
+            "name",
+            "v2_lora.safetensors",
+            "animatediff_motion_lora",
+            "animatediff_motion_lora",
+        ),
+        (
+            "ACN_ControlNetLoaderAdvanced",
+            "cnet",
+            "control_v11p_sd15_canny.safetensors",
+            "controlnet",
+            "controlnet",
+        ),
+        (
+            "ACN_DiffControlNetLoaderAdvanced",
+            "cnet",
+            "diff_controlnet.safetensors",
+            "controlnet",
+            "controlnet",
+        ),
+        (
+            "ACN_ControlNet++LoaderSingle",
+            "name",
+            "controlnet_plus.safetensors",
+            "controlnet",
+            "controlnet",
+        ),
+        (
+            "ACN_ControlNet++LoaderAdvanced",
+            "name",
+            "controlnet_plus_advanced.safetensors",
+            "controlnet",
+            "controlnet",
+        ),
+        ("SAMLoader", "model_name", "sam_vit_b_01ec64.pth", "sams", "sam"),
+        (
+            "ONNXDetectorProvider",
+            "model_name",
+            "face_detector.onnx",
+            "onnx",
+            "onnx_detector",
+        ),
+        ("CLIPLoaderGGUF", "clip_name", "clip_l.gguf", "clip", "clip"),
+        (
+            "UnetLoaderGGUF",
+            "unet_name",
+            "flux1-dev-Q4_K_S.gguf",
+            "diffusion_models",
+            "diffusion_model",
+        ),
+        (
+            "UnetLoaderGGUFAdvanced",
+            "unet_name",
+            "wan2.2-t2v-Q5_K_M.gguf",
+            "diffusion_models",
+            "diffusion_model",
+        ),
+    ],
+)
+def test_required_models_from_api_graph_custom_node_model_selectors(
+    node_type: str,
+    input_name: str,
+    filename: str,
+    folder: str,
+    model_type: str,
+) -> None:
+    models = required_models_from_comfyui_workflow(
+        {},
+        comfyui_graph={
+            "10": {
+                "class_type": node_type,
+                "inputs": {input_name: filename},
+            }
+        },
+    )
+
+    assert len(models) == 1
+    model = models[0]
+    assert model.folder == folder
+    assert model.filename == filename
+    assert model.node_id == "10"
+    assert model.node_type == node_type
+    assert model.input_name == input_name
+    assert model.model_type == model_type
+
+
+@pytest.mark.parametrize(
+    ("node_type", "inputs", "expected"),
+    [
+        (
+            "DualCLIPLoaderGGUF",
+            {"clip_name1": "clip_l.gguf", "clip_name2": "t5xxl_fp16.gguf"},
+            [
+                ("clip_name1", "clip_l.gguf"),
+                ("clip_name2", "t5xxl_fp16.gguf"),
+            ],
+        ),
+        (
+            "TripleCLIPLoaderGGUF",
+            {
+                "clip_name1": "clip_l.gguf",
+                "clip_name2": "clip_g.gguf",
+                "clip_name3": "t5xxl_fp16.gguf",
+            },
+            [
+                ("clip_name1", "clip_l.gguf"),
+                ("clip_name2", "clip_g.gguf"),
+                ("clip_name3", "t5xxl_fp16.gguf"),
+            ],
+        ),
+        (
+            "QuadrupleCLIPLoaderGGUF",
+            {
+                "clip_name1": "clip_l.gguf",
+                "clip_name2": "clip_g.gguf",
+                "clip_name3": "t5xxl_fp16.gguf",
+                "clip_name4": "umt5_xxl.gguf",
+            },
+            [
+                ("clip_name1", "clip_l.gguf"),
+                ("clip_name2", "clip_g.gguf"),
+                ("clip_name3", "t5xxl_fp16.gguf"),
+                ("clip_name4", "umt5_xxl.gguf"),
+            ],
+        ),
+    ],
+)
+def test_required_models_from_api_graph_gguf_multi_clip_loaders(
+    node_type: str,
+    inputs: dict[str, str],
+    expected: list[tuple[str, str]],
+) -> None:
+    models = required_models_from_comfyui_workflow(
+        {},
+        comfyui_graph={"10": {"class_type": node_type, "inputs": inputs}},
+    )
+
+    assert [(model.input_name, model.filename) for model in models] == expected
+    assert {model.folder for model in models} == {"clip"}
+    assert {model.model_type for model in models} == {"clip"}
+
+
+@pytest.mark.parametrize(
+    "graph",
+    [
+        {"1": {"class_type": "CLIPTextEncode", "inputs": {"text": "clip_l.gguf"}}},
+        {
+            "1": {
+                "class_type": "UnrelatedNode",
+                "inputs": {
+                    "label": "ip-adapter-plus.safetensors",
+                    "title": "mm_sd_v15_v2.ckpt",
+                    "name": "sam_vit_b_01ec64.pth",
+                },
+            }
+        },
+        {
+            "1": {
+                "class_type": "IPAdapterModelLoader",
+                "inputs": {"ipadapter_file": "https://example.test/model.safetensors"},
+            }
+        },
+        {
+            "1": {
+                "class_type": "IPAdapterModelLoader",
+                "inputs": {"ipadapter_file": "nested/model.safetensors"},
+            }
+        },
+        {
+            "1": {
+                "class_type": "IPAdapterModelLoader",
+                "inputs": {"ipadapter_file": "/abs/model.safetensors"},
+            }
+        },
+        {
+            "1": {
+                "class_type": "IPAdapterModelLoader",
+                "inputs": {"ipadapter_file": "model.txt"},
+            }
+        },
+    ],
+)
+def test_required_models_from_api_graph_rejects_false_positives(
+    graph: dict[str, dict[str, object]],
+) -> None:
+    assert required_models_from_comfyui_workflow({}, comfyui_graph=graph) == []
+
+
+@pytest.mark.parametrize(
+    ("value", "folder", "filename"),
+    [
+        ("bbox/person_yolov8m.pt", "ultralytics_bbox", "person_yolov8m.pt"),
+        ("segm/person_yolov8m-seg.pt", "ultralytics_segm", "person_yolov8m-seg.pt"),
+    ],
+)
+def test_required_models_from_api_graph_ultralytics_detector_paths(
+    value: str,
+    folder: str,
+    filename: str,
+) -> None:
+    models = required_models_from_comfyui_workflow(
+        {},
+        comfyui_graph={
+            "10": {
+                "class_type": "UltralyticsDetectorProvider",
+                "inputs": {"model_name": value},
+            }
+        },
+    )
+
+    assert len(models) == 1
+    model = models[0]
+    assert model.folder == folder
+    assert model.filename == filename
+    assert model.node_id == "10"
+    assert model.node_type == "UltralyticsDetectorProvider"
+    assert model.input_name == "model_name"
+    assert model.model_type == folder
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "foo/bar/baz.pt",
+        "../bad.pt",
+        "/abs/model.pt",
+        "https://example.test/model.pt",
+    ],
+)
+def test_required_models_from_api_graph_ultralytics_rejects_unsafe_paths(
+    value: str,
+) -> None:
+    models = required_models_from_comfyui_workflow(
+        {},
+        comfyui_graph={
+            "10": {
+                "class_type": "UltralyticsDetectorProvider",
+                "inputs": {"model_name": value},
+            }
+        },
+    )
+
+    assert models == []
+
+
 def test_detect_unresolved_runtime_inputs_finds_local_load_image_values() -> None:
     unresolved = detect_unresolved_runtime_inputs(
         {

@@ -63,20 +63,55 @@ MODEL_SELECTOR_EXTENSIONS = frozenset(
     }
 )
 KNOWN_GRAPH_MODEL_SELECTOR_INPUTS: dict[tuple[str, str], tuple[str, str]] = {
+    ("ACN_ControlNet++LoaderAdvanced", "name"): ("controlnet", "controlnet"),
+    ("ACN_ControlNet++LoaderSingle", "name"): ("controlnet", "controlnet"),
+    ("ACN_ControlNetLoaderAdvanced", "cnet"): ("controlnet", "controlnet"),
+    ("ACN_DiffControlNetLoaderAdvanced", "cnet"): ("controlnet", "controlnet"),
+    ("ADE_AnimateDiffLoRALoader", "name"): (
+        "animatediff_motion_lora",
+        "animatediff_motion_lora",
+    ),
+    ("ADE_LoadAnimateDiffModel", "model_name"): (
+        "animatediff_models",
+        "animatediff_model",
+    ),
     ("CheckpointLoader", "ckpt_name"): ("checkpoints", "checkpoint"),
     ("CheckpointLoaderSimple", "ckpt_name"): ("checkpoints", "checkpoint"),
     ("CLIPLoader", "clip_name"): ("clip", "clip"),
+    ("CLIPLoaderGGUF", "clip_name"): ("clip", "clip"),
     ("CLIPVisionLoader", "clip_name"): ("clip_vision", "clip_vision"),
     ("ControlNetLoader", "control_net_name"): ("controlnet", "controlnet"),
+    ("DualCLIPLoaderGGUF", "clip_name1"): ("clip", "clip"),
+    ("DualCLIPLoaderGGUF", "clip_name2"): ("clip", "clip"),
+    ("IPAdapterModelLoader", "ipadapter_file"): ("ipadapter", "ipadapter"),
     ("LoraLoader", "lora_name"): ("loras", "lora"),
     ("LoraLoaderModelOnly", "lora_name"): ("loras", "lora"),
     ("LoadBackgroundRemovalModel", "bg_removal_name"): (
         "background_removal",
         "background_removal",
     ),
+    ("ONNXDetectorProvider", "model_name"): ("onnx", "onnx_detector"),
+    ("QuadrupleCLIPLoaderGGUF", "clip_name1"): ("clip", "clip"),
+    ("QuadrupleCLIPLoaderGGUF", "clip_name2"): ("clip", "clip"),
+    ("QuadrupleCLIPLoaderGGUF", "clip_name3"): ("clip", "clip"),
+    ("QuadrupleCLIPLoaderGGUF", "clip_name4"): ("clip", "clip"),
+    ("SAMLoader", "model_name"): ("sams", "sam"),
+    ("TripleCLIPLoaderGGUF", "clip_name1"): ("clip", "clip"),
+    ("TripleCLIPLoaderGGUF", "clip_name2"): ("clip", "clip"),
+    ("TripleCLIPLoaderGGUF", "clip_name3"): ("clip", "clip"),
+    ("UnetLoaderGGUF", "unet_name"): ("diffusion_models", "diffusion_model"),
+    ("UnetLoaderGGUFAdvanced", "unet_name"): (
+        "diffusion_models",
+        "diffusion_model",
+    ),
     ("UNETLoader", "unet_name"): ("diffusion_models", "diffusion_model"),
     ("UpscaleModelLoader", "model_name"): ("upscale_models", "upscale_model"),
     ("VAELoader", "vae_name"): ("vae", "vae"),
+}
+ULTRALYTICS_DETECTOR_SELECTOR = ("UltralyticsDetectorProvider", "model_name")
+ULTRALYTICS_DETECTOR_PREFIX_FOLDERS = {
+    "bbox": ("ultralytics_bbox", "ultralytics_bbox"),
+    "segm": ("ultralytics_segm", "ultralytics_segm"),
 }
 
 
@@ -424,6 +459,15 @@ def _iter_comfyui_graph_model_selectors(
         for input_name, value in inputs.items():
             if not isinstance(input_name, str):
                 continue
+            ultralytics_selector = _ultralytics_detector_selector(
+                node_type,
+                input_name,
+                value,
+            )
+            if ultralytics_selector is not None:
+                folder, model_type, filename = ultralytics_selector
+                yield str(raw_node_id), node_type, input_name, folder, model_type, filename
+                continue
             selector = KNOWN_GRAPH_MODEL_SELECTOR_INPUTS.get((node_type, input_name))
             if selector is None:
                 continue
@@ -432,6 +476,34 @@ def _iter_comfyui_graph_model_selectors(
                 continue
             folder, model_type = selector
             yield str(raw_node_id), node_type, input_name, folder, model_type, filename
+
+
+def _ultralytics_detector_selector(
+    node_type: str,
+    input_name: str,
+    value: Any,
+) -> tuple[str, str, str] | None:
+    if (node_type, input_name) != ULTRALYTICS_DETECTOR_SELECTOR:
+        return None
+    if not isinstance(value, str):
+        return None
+    selector = value.strip()
+    if not selector or "\\" in selector:
+        return None
+    if re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", selector):
+        return None
+    parts = selector.split("/")
+    if len(parts) != 2:
+        return None
+    prefix, filename_value = parts
+    target = ULTRALYTICS_DETECTOR_PREFIX_FOLDERS.get(prefix)
+    if target is None:
+        return None
+    filename = _safe_graph_model_selector_filename(filename_value)
+    if filename is None:
+        return None
+    folder, model_type = target
+    return folder, model_type, filename
 
 
 def _safe_graph_model_selector_filename(value: Any) -> str | None:
