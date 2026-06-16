@@ -2275,6 +2275,30 @@ def test_filename_only_specific_model_can_be_searched_by_provider(tmp_path: Path
     assert summary.models[0].source_availability == "resolvable"
 
 
+def test_filename_only_generic_model_requires_manual_download(tmp_path: Path) -> None:
+    noofy_root = tmp_path / "Noofy Models"
+    service = _service(noofy_root=noofy_root)
+
+    summary = service.summarize(
+        _package(
+            [
+                RequiredModel(
+                    folder="diffusion_models",
+                    filename="model.safetensors",
+                    verification_level="filename_only",
+                )
+            ]
+        )
+    )
+
+    assert summary.models[0].status == "needs_manual_download"
+    assert summary.models[0].source_availability == "unknown"
+    assert summary.models[0].message == (
+        "Noofy does not have enough source information to download this model automatically. "
+        f"Place the file at {noofy_root / 'diffusion_models' / 'model.safetensors'} and recheck the workflow."
+    )
+
+
 @pytest.mark.anyio
 async def test_filename_only_provider_identity_downloads_and_adopts_metadata(
     tmp_path: Path,
@@ -2341,13 +2365,88 @@ async def test_filename_only_provider_identity_downloads_and_adopts_metadata(
 
 
 @pytest.mark.anyio
-async def test_filename_only_provider_identity_conflict_is_not_downloaded(
+async def test_filename_only_provider_identity_downloads_from_civitai_exact_filename(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    payload = b"civitai-provider-seeded-identity"
+    sha = hashlib.sha256(payload).hexdigest()
+    noofy_root = tmp_path / "Noofy Models"
+    filename = "exact_civitai_model_v1.safetensors"
+    searched_queries: list[str] = []
+    streamed_urls: list[str] = []
+
+    async def fake_fetch_json(
+        method: str,
+        url: str,
+        params: dict[str, str],
+        headers: dict[str, str],
+    ) -> object:
+        if url == "https://huggingface.co/api/models":
+            return []
+        if url == "https://civitai.com/api/v1/models":
+            searched_queries.append(params["query"])
+            return {
+                "items": [
+                    {
+                        "stats": {"downloadCount": 321},
+                        "modelVersions": [
+                            {
+                                "stats": {"downloadCount": 123},
+                                "files": [
+                                    {
+                                        "name": filename,
+                                        "downloadUrl": "https://civitai.com/api/download/models/777",
+                                        "sizeKB": len(payload) / 1024,
+                                        "hashes": {"SHA256": sha},
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ]
+            }
+        return {"files": []} if "/by-hash/" in url else {"items": []}
+
+    async def fake_stream(url: str, part_path: Path) -> None:
+        streamed_urls.append(url)
+        part_path.parent.mkdir(parents=True, exist_ok=True)
+        part_path.write_bytes(payload)
+
+    model = RequiredModel(
+        folder="checkpoints",
+        filename=filename,
+        verification_level="filename_only",
+    )
+    service = _service(
+        noofy_root=noofy_root,
+        provider_resolver=ProviderModelResolver(
+            api_key_resolver=lambda provider: None,
+            fetch_json=fake_fetch_json,
+        ),
+    )
+    monkeypatch.setattr(availability_module, "_stream_url", fake_stream)
+
+    result = await service.download_missing(_package([model]))
+
+    assert searched_queries == [filename]
+    assert streamed_urls == ["https://civitai.com/api/download/models/777"]
+    assert result.downloaded_count == 1
+    assert result.failed_count == 0
+    assert model.checksum == f"sha256:{sha}"
+    assert model.size_bytes == len(payload)
+
+
+@pytest.mark.anyio
+async def test_filename_only_provider_identity_conflict_uses_most_downloaded_exact_match(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    high_payload = b"popular-provider-model"
+    high_sha = hashlib.sha256(high_payload).hexdigest()
     noofy_root = tmp_path / "Noofy Models"
     filename = "qwen_2.5_vl_7b_fp8_scaled.safetensors"
-    streamed = False
+    streamed_urls: list[str] = []
 
     async def fake_fetch_json(
         method: str,
@@ -2358,12 +2457,13 @@ async def test_filename_only_provider_identity_conflict_is_not_downloaded(
         if url == "https://huggingface.co/api/models":
             if params["search"] == filename:
                 return [
-                    {"modelId": "Qwen/first"},
-                    {"modelId": "Qwen/second"},
+                    {"modelId": "Qwen/low", "downloads": 10},
+                    {"modelId": "Qwen/high", "downloads": 900},
                 ]
             return []
-        if url.endswith("/Qwen/first"):
+        if url.endswith("/Qwen/low"):
             return {
+                "downloads": 10,
                 "siblings": [
                     {
                         "rfilename": filename,
@@ -2371,21 +2471,28 @@ async def test_filename_only_provider_identity_conflict_is_not_downloaded(
                     }
                 ]
             }
-        if url.endswith("/Qwen/second"):
+        if url.endswith("/Qwen/high"):
             return {
+                "downloads": 900,
                 "siblings": [
                     {
                         "rfilename": filename,
-                        "lfs": {"oid": "2" * 64, "size": 10},
+                        "lfs": {"oid": high_sha, "size": len(high_payload)},
                     }
                 ]
             }
         return {"files": []} if "/by-hash/" in url else {"items": []}
 
     async def fake_stream(url: str, part_path: Path) -> None:
-        nonlocal streamed
-        streamed = True
+        streamed_urls.append(url)
+        part_path.parent.mkdir(parents=True, exist_ok=True)
+        part_path.write_bytes(high_payload)
 
+    model = RequiredModel(
+        folder="clip",
+        filename=filename,
+        verification_level="filename_only",
+    )
     service = _service(
         noofy_root=noofy_root,
         provider_resolver=ProviderModelResolver(
@@ -2396,21 +2503,17 @@ async def test_filename_only_provider_identity_conflict_is_not_downloaded(
     monkeypatch.setattr(availability_module, "_stream_url", fake_stream)
 
     result = await service.download_missing(
-        _package(
-            [
-                RequiredModel(
-                    folder="clip",
-                    filename=filename,
-                    verification_level="filename_only",
-                )
-            ]
-        )
+        _package([model])
     )
 
-    assert streamed is False
-    assert result.downloaded_count == 0
-    assert result.failed_count == 1
-    assert result.model_summary.models[0].status == "needs_manual_download"
+    assert streamed_urls == [
+        f"https://huggingface.co/Qwen/high/resolve/main/{filename}"
+    ]
+    assert result.downloaded_count == 1
+    assert result.failed_count == 0
+    assert result.model_summary.models[0].status == "available"
+    assert model.checksum == f"sha256:{high_sha}"
+    assert model.size_bytes == len(high_payload)
 
 
 @pytest.mark.anyio

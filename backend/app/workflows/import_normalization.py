@@ -108,6 +108,55 @@ KNOWN_GRAPH_MODEL_SELECTOR_INPUTS: dict[tuple[str, str], tuple[str, str]] = {
     ("UpscaleModelLoader", "model_name"): ("upscale_models", "upscale_model"),
     ("VAELoader", "vae_name"): ("vae", "vae"),
 }
+KNOWN_UI_WIDGET_INPUT_ORDERS: dict[str, tuple[str, ...]] = {
+    "ACN_ControlNet++LoaderAdvanced": ("name",),
+    "ACN_ControlNet++LoaderSingle": ("name",),
+    "ACN_ControlNetLoaderAdvanced": ("cnet",),
+    "ACN_DiffControlNetLoaderAdvanced": ("cnet",),
+    "ADE_AnimateDiffLoRALoader": ("name",),
+    "ADE_LoadAnimateDiffModel": ("model_name",),
+    "CheckpointLoader": ("ckpt_name",),
+    "CheckpointLoaderSimple": ("ckpt_name",),
+    "CLIPLoader": ("clip_name", "type", "device"),
+    "CLIPLoaderGGUF": ("clip_name",),
+    "CLIPTextEncode": ("text",),
+    "CLIPVisionLoader": ("clip_name",),
+    "ControlNetLoader": ("control_net_name",),
+    "DualCLIPLoader": ("clip_name1", "clip_name2", "type", "device"),
+    "DualCLIPLoaderGGUF": ("clip_name1", "clip_name2", "type"),
+    "EmptyLatentImage": ("width", "height", "batch_size"),
+    "IPAdapterModelLoader": ("ipadapter_file",),
+    "KSampler": (
+        "seed",
+        "steps",
+        "cfg",
+        "sampler_name",
+        "scheduler",
+        "denoise",
+    ),
+    "LoraLoader": ("lora_name", "strength_model", "strength_clip"),
+    "LoraLoaderModelOnly": ("lora_name", "strength_model"),
+    "LoadBackgroundRemovalModel": ("bg_removal_name",),
+    "LoadImage": ("image",),
+    "ONNXDetectorProvider": ("model_name",),
+    "QuadrupleCLIPLoaderGGUF": (
+        "clip_name1",
+        "clip_name2",
+        "clip_name3",
+        "clip_name4",
+        "type",
+    ),
+    "SAMLoader": ("model_name",),
+    "SaveImage": ("filename_prefix",),
+    "TripleCLIPLoader": ("clip_name1", "clip_name2", "clip_name3"),
+    "TripleCLIPLoaderGGUF": ("clip_name1", "clip_name2", "clip_name3"),
+    "UltralyticsDetectorProvider": ("model_name",),
+    "UnetLoaderGGUF": ("unet_name",),
+    "UnetLoaderGGUFAdvanced": ("unet_name",),
+    "UNETLoader": ("unet_name", "weight_dtype"),
+    "UpscaleModelLoader": ("model_name",),
+    "VAELoader": ("vae_name",),
+}
 ULTRALYTICS_DETECTOR_SELECTOR = ("UltralyticsDetectorProvider", "model_name")
 ULTRALYTICS_DETECTOR_PREFIX_FOLDERS = {
     "bbox": ("ultralytics_bbox", "ultralytics_bbox"),
@@ -382,13 +431,37 @@ def required_models_from_comfyui_workflow(
                     asset_ownership=AssetOwnership.EXTERNAL_REFERENCE,
                 )
             )
-    for selector in _iter_comfyui_graph_model_selectors(comfyui_graph or {}):
-        node_id, node_type, input_name, folder, model_type, filename = selector
+    for selector in _iter_comfyui_workflow_widget_model_selectors(comfyui_workflow):
+        node_id, node_type, input_name, folder, model_type, filename, source_urls = selector
         key = (node_id, input_name, folder, filename)
         if key in seen:
             continue
         seen.add(key)
-        source_urls = source_urls_by_target.get((folder, filename), [])
+        if source_urls and (folder, filename) not in source_urls_by_target:
+            source_urls_by_target[(folder, filename)] = list(source_urls)
+        models.append(
+            RequiredModel(
+                folder=folder,
+                filename=filename,
+                node_id=node_id,
+                node_type=node_type,
+                input_name=input_name,
+                source_url=source_urls[0] if source_urls else None,
+                source_urls=list(source_urls),
+                model_type=model_type,
+                verification_level=ModelVerificationLevel.FILENAME_ONLY,
+                identity_verified_by_exporter=False,
+                bundled=False,
+                asset_ownership=AssetOwnership.EXTERNAL_REFERENCE,
+            )
+        )
+    for selector in _iter_comfyui_graph_model_selectors(comfyui_graph or {}):
+        node_id, node_type, input_name, folder, model_type, filename, graph_source_urls = selector
+        key = (node_id, input_name, folder, filename)
+        if key in seen:
+            continue
+        seen.add(key)
+        source_urls = graph_source_urls or source_urls_by_target.get((folder, filename), [])
         models.append(
             RequiredModel(
                 folder=folder,
@@ -446,7 +519,7 @@ def _matching_graph_model_binding(
 
 def _iter_comfyui_graph_model_selectors(
     comfyui_graph: dict[str, Any],
-) -> Iterator[tuple[str, str, str, str, str, str]]:
+) -> Iterator[tuple[str, str, str, str, str, str, list[str]]]:
     for raw_node_id, raw_node in comfyui_graph.items():
         if not isinstance(raw_node, dict):
             continue
@@ -456,6 +529,15 @@ def _iter_comfyui_graph_model_selectors(
         inputs = raw_node.get("inputs")
         if not isinstance(inputs, dict):
             continue
+        selector_count = sum(
+            1
+            for raw_input_name in inputs
+            if isinstance(raw_input_name, str)
+            and (
+                (node_type, raw_input_name) == ULTRALYTICS_DETECTOR_SELECTOR
+                or (node_type, raw_input_name) in KNOWN_GRAPH_MODEL_SELECTOR_INPUTS
+            )
+        )
         for input_name, value in inputs.items():
             if not isinstance(input_name, str):
                 continue
@@ -466,7 +548,12 @@ def _iter_comfyui_graph_model_selectors(
             )
             if ultralytics_selector is not None:
                 folder, model_type, filename = ultralytics_selector
-                yield str(raw_node_id), node_type, input_name, folder, model_type, filename
+                source_urls = _graph_selector_source_urls(
+                    raw_node,
+                    input_name,
+                    selector_count=selector_count,
+                )
+                yield str(raw_node_id), node_type, input_name, folder, model_type, filename, source_urls
                 continue
             selector = KNOWN_GRAPH_MODEL_SELECTOR_INPUTS.get((node_type, input_name))
             if selector is None:
@@ -475,7 +562,51 @@ def _iter_comfyui_graph_model_selectors(
             if filename is None:
                 continue
             folder, model_type = selector
-            yield str(raw_node_id), node_type, input_name, folder, model_type, filename
+            source_urls = _graph_selector_source_urls(
+                raw_node,
+                input_name,
+                selector_count=selector_count,
+            )
+            yield str(raw_node_id), node_type, input_name, folder, model_type, filename, source_urls
+
+
+def _iter_comfyui_workflow_widget_model_selectors(
+    comfyui_workflow: dict[str, Any],
+) -> Iterator[tuple[str, str, str, str, str, str, list[str]]]:
+    for node in _iter_comfyui_workflow_nodes(comfyui_workflow):
+        node_id = _node_id_string(node.get("id"))
+        node_type = optional_string_field(node, "type")
+        if not node_id or not node_type:
+            continue
+        widget_values = node.get("widgets_values")
+        if not isinstance(widget_values, list):
+            continue
+        input_order = KNOWN_UI_WIDGET_INPUT_ORDERS.get(node_type)
+        if not input_order:
+            continue
+        for input_name, value in _ui_widget_values_by_input(node_type, widget_values):
+            ultralytics_selector = _ultralytics_detector_selector(
+                node_type,
+                input_name,
+                value,
+            )
+            if ultralytics_selector is not None:
+                folder, model_type, filename = ultralytics_selector
+                yield node_id, node_type, input_name, folder, model_type, filename, []
+                continue
+            selector = KNOWN_GRAPH_MODEL_SELECTOR_INPUTS.get((node_type, input_name))
+            if selector is None:
+                continue
+            filename = _safe_graph_model_selector_filename(value)
+            if filename is None:
+                continue
+            folder, model_type = selector
+            source_urls = _workflow_model_source_urls_for_widget(
+                node,
+                folder=folder,
+                filename=filename,
+            )
+            yield node_id, node_type, input_name, folder, model_type, filename, source_urls
 
 
 def _ultralytics_detector_selector(
@@ -504,6 +635,67 @@ def _ultralytics_detector_selector(
         return None
     folder, model_type = target
     return folder, model_type, filename
+
+
+def _graph_selector_source_urls(
+    node: dict[str, Any],
+    input_name: str,
+    *,
+    selector_count: int,
+) -> list[str]:
+    inputs = node.get("inputs")
+    if not isinstance(inputs, dict):
+        return []
+    urls: list[str] = []
+    for key in (
+        f"{input_name}_source_url",
+        f"{input_name}_source_urls",
+        f"{input_name}_url",
+        f"{input_name}_download_url",
+    ):
+        urls.extend(normalize_source_urls(inputs.get(key)))
+    if selector_count == 1:
+        for key in ("source_url", "source_urls", "url", "download_url"):
+            urls.extend(normalize_source_urls(inputs.get(key)))
+    return _http_source_urls(urls)
+
+
+def _workflow_model_source_urls_for_widget(
+    node: dict[str, Any],
+    *,
+    folder: str,
+    filename: str,
+) -> list[str]:
+    properties = node.get("properties")
+    if not isinstance(properties, dict):
+        return []
+    model_entries = properties.get("models")
+    if not isinstance(model_entries, list):
+        return []
+    for entry in model_entries:
+        if not isinstance(entry, dict):
+            continue
+        entry_folder = optional_string_field(entry, "directory")
+        entry_filename = optional_string_field(entry, "name")
+        if entry_folder != folder or entry_filename != filename:
+            continue
+        return _http_source_urls(
+            normalize_source_urls(entry.get("source_urls"), fallback=entry.get("url"))
+        )
+    return []
+
+
+def _http_source_urls(urls: list[str]) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for url in urls:
+        if not re.match(r"^https?://", url, flags=re.IGNORECASE):
+            continue
+        if url in seen:
+            continue
+        seen.add(url)
+        normalized.append(url)
+    return normalized
 
 
 def _safe_graph_model_selector_filename(value: Any) -> str | None:
@@ -553,6 +745,173 @@ def _iter_comfyui_workflow_nodes(value: Any) -> Iterator[dict[str, Any]]:
     if isinstance(value, list):
         for item in value:
             yield from _iter_comfyui_workflow_nodes(item)
+
+
+def is_comfyui_api_graph(value: Any) -> bool:
+    if not isinstance(value, dict) or not value:
+        return False
+    found_node = False
+    for raw_node in value.values():
+        if not isinstance(raw_node, dict):
+            return False
+        if not isinstance(raw_node.get("class_type"), str):
+            return False
+        inputs = raw_node.get("inputs")
+        if inputs is not None and not isinstance(inputs, dict):
+            return False
+        found_node = True
+    return found_node
+
+
+def is_comfyui_ui_workflow(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    nodes = value.get("nodes")
+    if not isinstance(nodes, list) or not nodes:
+        return False
+    for node in nodes:
+        if (
+            isinstance(node, dict)
+            and _node_id_string(node.get("id")) is not None
+            and optional_string_field(node, "type") is not None
+        ):
+            return True
+    return False
+
+
+def raw_comfyui_api_graph(payload: dict[str, Any]) -> dict[str, Any] | None:
+    if is_comfyui_api_graph(payload):
+        return payload
+    prompt = payload.get("prompt")
+    if is_comfyui_api_graph(prompt):
+        return prompt
+    return None
+
+
+def comfyui_api_graph_from_ui_workflow(
+    workflow: dict[str, Any],
+) -> dict[str, Any]:
+    if not is_comfyui_ui_workflow(workflow):
+        return {}
+    links_by_id = _ui_workflow_links_by_id(workflow)
+    graph: dict[str, Any] = {}
+    nodes = workflow.get("nodes")
+    if not isinstance(nodes, list):
+        return graph
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        node_id = _node_id_string(node.get("id"))
+        node_type = optional_string_field(node, "type")
+        if not node_id or not node_type:
+            continue
+        inputs: dict[str, Any] = {}
+        raw_inputs = node.get("inputs")
+        if isinstance(raw_inputs, list):
+            for raw_input in raw_inputs:
+                if not isinstance(raw_input, dict):
+                    continue
+                input_name = optional_string_field(raw_input, "name")
+                if not input_name:
+                    continue
+                source = links_by_id.get(_ui_link_id(raw_input.get("link")))
+                if source is None:
+                    continue
+                inputs[input_name] = [source[0], source[1]]
+        widget_values = node.get("widgets_values")
+        input_order = KNOWN_UI_WIDGET_INPUT_ORDERS.get(node_type)
+        if isinstance(widget_values, list) and input_order:
+            for input_name, value in _ui_widget_values_by_input(node_type, widget_values):
+                if input_name in inputs:
+                    continue
+                if value is None:
+                    continue
+                inputs[input_name] = value
+        graph[node_id] = {"class_type": node_type, "inputs": inputs}
+    return graph
+
+
+def _ui_workflow_links_by_id(
+    workflow: dict[str, Any],
+) -> dict[str, tuple[str, int]]:
+    links = workflow.get("links")
+    if not isinstance(links, list):
+        return {}
+    result: dict[str, tuple[str, int]] = {}
+    for link in links:
+        parsed = _parse_ui_workflow_link(link)
+        if parsed is None:
+            continue
+        link_id, origin_id, origin_slot = parsed
+        result[link_id] = (origin_id, origin_slot)
+    return result
+
+
+def _ui_widget_values_by_input(
+    node_type: str,
+    widget_values: list[Any],
+) -> Iterator[tuple[str, Any]]:
+    input_order = KNOWN_UI_WIDGET_INPUT_ORDERS.get(node_type)
+    if not input_order:
+        return
+    values = list(widget_values)
+    if (
+        node_type == "KSampler"
+        and len(values) >= 7
+        and isinstance(values[1], str)
+        and values[1] in {"fixed", "increment", "decrement", "randomize"}
+    ):
+        values = [values[0], *values[2:]]
+    for index, input_name in enumerate(input_order):
+        if index >= len(values):
+            continue
+        yield input_name, values[index]
+
+
+def _parse_ui_workflow_link(value: Any) -> tuple[str, str, int] | None:
+    if isinstance(value, list) and len(value) >= 3:
+        link_id = _ui_link_id(value[0])
+        origin_id = _node_id_string(value[1])
+        origin_slot = _int_index(value[2])
+        if link_id is not None and origin_id is not None and origin_slot is not None:
+            return link_id, origin_id, origin_slot
+    if isinstance(value, dict):
+        link_id = _ui_link_id(value.get("id") or value.get("link_id"))
+        origin_id = _node_id_string(
+            _first_present(
+                value,
+                ("origin_id", "origin", "from_node_id", "source_node_id"),
+            )
+        )
+        origin_slot = _int_index(
+            _first_present(value, ("origin_slot", "from_slot", "source_slot"))
+        )
+        if link_id is not None and origin_id is not None and origin_slot is not None:
+            return link_id, origin_id, origin_slot
+    return None
+
+
+def _ui_link_id(value: Any) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    if isinstance(value, int):
+        return str(value)
+    return None
+
+
+def _int_index(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int) and value >= 0:
+        return value
+    return None
+
+
+def _first_present(data: dict[str, Any], keys: tuple[str, ...]) -> Any:
+    for key in keys:
+        if key in data:
+            return data[key]
+    return None
 
 
 def normalize_model_verification_level(

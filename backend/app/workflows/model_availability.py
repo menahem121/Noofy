@@ -199,6 +199,7 @@ class ProviderModelCandidate:
     size_bytes: int | None = None
     sha256: str | None = None
     source_trust: str = "provider_metadata"
+    download_count: int | None = None
 
     def strength_for(self, model: RequiredModel) -> int:
         expected_sha = _model_sha256(model)
@@ -316,6 +317,7 @@ class ProviderModelResolver:
                     "filename": model.filename,
                     "size_bytes": candidate.size_bytes,
                     "sha256": model.checksum,
+                    "download_count": candidate.download_count,
                 },
             )
 
@@ -506,7 +508,15 @@ class ProviderModelResolver:
                 if not isinstance(files, list):
                     continue
                 for file_record in files:
-                    candidate = _civitai_file_candidate(model, file_record)
+                    candidate = _civitai_file_candidate(
+                        model,
+                        file_record,
+                        download_count=_civitai_download_count(
+                            item,
+                            version,
+                            file_record,
+                        ),
+                    )
                     if candidate is not None:
                         candidates.append(candidate)
         return candidates
@@ -1302,7 +1312,25 @@ class ModelAvailabilityService:
             status="needs_manual_download",
             status_label="Needs manual download",
             asset_ownership=AssetOwnership.EXTERNAL_REFERENCE,
-            message="Noofy does not have enough source information to download this model automatically.",
+            message=self._manual_download_message(model),
+        )
+
+    def _manual_download_message(self, model: RequiredModel) -> str:
+        try:
+            target = _safe_join_model_path(
+                self.noofy_models_dir,
+                model.folder,
+                model.filename,
+            )
+        except ModelAvailabilityError:
+            target = (
+                self.noofy_models_dir
+                / Path(model.folder).name
+                / Path(model.filename).name
+            )
+        return (
+            "Noofy does not have enough source information to download this model automatically. "
+            f"Place the file at {target} and recheck the workflow."
         )
 
     def _candidate_status(
@@ -2279,15 +2307,10 @@ def _select_reliable_candidates(
     ]
     if not identity_candidates:
         return []
-    identities = {
-        (candidate.sha256, candidate.size_bytes)
-        for candidate in identity_candidates
-    }
-    if len(identities) != 1:
-        return []
     return sorted(
         identity_candidates,
         key=lambda candidate: (
+            -(candidate.download_count or 0),
             0 if candidate.provider == "hugging_face" else 1,
             candidate.download_url,
         ),
@@ -2329,12 +2352,19 @@ def _dedupe_provider_candidates(
             size_bytes=candidate.size_bytes if candidate.size_bytes is not None else existing.size_bytes,
             sha256=candidate.sha256 if candidate.sha256 is not None else existing.sha256,
             source_trust=candidate.source_trust,
+            download_count=(
+                candidate.download_count
+                if candidate.download_count is not None
+                else existing.download_count
+            ),
         )
     return list(deduped.values())
 
 
 def _hugging_face_search_terms(model: RequiredModel) -> list[str]:
     filename = Path(model.filename).name
+    if _provider_identity_resolution_required(model):
+        return [filename] if filename else []
     stem = Path(filename).stem
     tokens = [
         token
@@ -2441,6 +2471,7 @@ def _hugging_face_candidates_from_repo_record(
     if not isinstance(siblings, list):
         return []
     expected_sha = _model_sha256(model)
+    download_count = _int_or_none(repo.get("downloads"))
     candidates: list[ProviderModelCandidate] = []
     for sibling in siblings:
         if not isinstance(sibling, dict):
@@ -2462,6 +2493,7 @@ def _hugging_face_candidates_from_repo_record(
                 filename=Path(rfilename).name,
                 size_bytes=size,
                 sha256=sha256,
+                download_count=download_count,
             )
         )
     return candidates
@@ -2500,7 +2532,10 @@ def _hugging_face_resolve_url(
 
 
 def _civitai_file_candidate(
-    model: RequiredModel, file_record: object
+    model: RequiredModel,
+    file_record: object,
+    *,
+    download_count: int | None = None,
 ) -> ProviderModelCandidate | None:
     if not isinstance(file_record, dict):
         return None
@@ -2529,7 +2564,37 @@ def _civitai_file_candidate(
         filename=Path(name).name,
         size_bytes=size,
         sha256=sha256,
+        download_count=download_count,
     )
+
+
+def _civitai_download_count(
+    item: dict[str, object],
+    version: dict[str, object],
+    file_record: object,
+) -> int | None:
+    counts: list[int] = []
+    if isinstance(file_record, dict):
+        for key in ("downloadCount", "downloads"):
+            value = _int_or_none(file_record.get(key))
+            if value is not None:
+                counts.append(value)
+        stats = file_record.get("stats")
+        if isinstance(stats, dict):
+            value = _int_or_none(stats.get("downloadCount") or stats.get("downloads"))
+            if value is not None:
+                counts.append(value)
+    for data in (version, item):
+        stats = data.get("stats")
+        if isinstance(stats, dict):
+            value = _int_or_none(stats.get("downloadCount") or stats.get("downloads"))
+            if value is not None:
+                counts.append(value)
+        for key in ("downloadCount", "downloads"):
+            value = _int_or_none(data.get(key))
+            if value is not None:
+                counts.append(value)
+    return max(counts) if counts else None
 
 
 def _sha_from_mapping(data: dict[str, object]) -> str | None:

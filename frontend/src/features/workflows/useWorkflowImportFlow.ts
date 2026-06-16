@@ -43,7 +43,7 @@ export interface WorkflowImportFlowController {
   dismissImportError: () => void;
 }
 
-export const SUPPORTED_WORKFLOW_IMPORT_EXTENSIONS = [".noofy"] as const;
+export const SUPPORTED_WORKFLOW_IMPORT_EXTENSIONS = [".noofy", ".json"] as const;
 
 export function workflowImportExtension(filename: string) {
   const match = /\.[^.\\/]+$/.exec(filename.trim().toLowerCase());
@@ -58,14 +58,9 @@ export function isSupportedWorkflowImportFile(file: { name: string }) {
 
 export function unsupportedWorkflowImportMessage(filename?: string | null) {
   const name = filename?.trim();
-  if (name && workflowImportExtension(name) === ".json") {
-    // TODO: Add a backend raw-ComfyUI-JSON import path that stages an
-    // unverified local workflow and sends it through dashboard setup.
-    return "Raw ComfyUI .json import is not ready yet. Import a .noofy workflow package for now.";
-  }
   return name
-    ? `Noofy can import .noofy workflow packages. ${name} is not a supported workflow import file.`
-    : "Noofy can import .noofy workflow packages here.";
+    ? `Noofy can import .noofy workflow packages and ComfyUI .json workflows. ${name} is not a supported workflow import file.`
+    : "Noofy can import .noofy workflow packages and ComfyUI .json workflows here.";
 }
 
 const initialWorkflowImportFlowState: WorkflowImportFlowState = {

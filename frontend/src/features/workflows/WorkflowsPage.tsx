@@ -494,7 +494,7 @@ export function WorkflowsPage({
                 <FileUp size={16} aria-hidden="true" />
                 {importFlow.importing ? "Importing..." : "Import Workflow"}
               </button>
-              <input ref={fileInputRef} className="sr-only" type="file" accept=".noofy" onChange={handleImport} />
+              <input ref={fileInputRef} className="sr-only" type="file" accept=".noofy,.json" onChange={handleImport} />
             </div>
           </section>
 
@@ -525,7 +525,7 @@ export function WorkflowsPage({
               <div>
                 <strong>Build in ComfyUI, Run in Noofy</strong>
                 <p>
-                  Package your ComfyUI workflow as a .noofy archive using Export2Noofy, a dedicated ComfyUI custom node made for exporting workflows to Noofy. Raw ComfyUI JSON import is planned, but this import path currently expects a .noofy package.<br />
+                  Package your ComfyUI workflow as a .noofy archive using Export2Noofy, a dedicated ComfyUI custom node made for exporting workflows to Noofy, or import a regular ComfyUI .json workflow and let Noofy detect setup needs.<br />
 Once imported, Noofy transforms your advanced node graph into a simple dashboard, with only the controls you decided to expose. This keeps the full power in the creator’s hands, while giving users a clean interface anyone can understand and use.<br />
 Noofy hides the technical complexity, manages the workflow experience, and lets users run powerful AI workflows with a few clear controls and one Run button.
                 </p>

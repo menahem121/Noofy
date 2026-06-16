@@ -6,7 +6,7 @@ import json
 import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Protocol
 from uuid import uuid4
 
 from pydantic import ValidationError
@@ -90,9 +90,11 @@ from app.workflows.import_policy import (
 )
 from app.workflows.import_normalization import (
     ImportNormalizationError,
+    comfyui_api_graph_from_ui_workflow,
     detect_unresolved_runtime_inputs,
     filter_resolved_runtime_inputs,
     has_nonempty_launch_option,
+    is_comfyui_ui_workflow,
     normalize_asset_ownership,
     normalize_custom_nodes,
     normalize_dashboard,
@@ -106,6 +108,7 @@ from app.workflows.import_normalization import (
     normalized_display_name,
     observed_hardware,
     optional_string_field,
+    raw_comfyui_api_graph,
     reject_unsupported_exported_launch_options,
     string_field,
 )
@@ -142,6 +145,12 @@ class NoofyImportError(RuntimeError):
     """Raised when a `.noofy` archive cannot be safely imported."""
 
 
+class WorkflowDataImporter(Protocol):
+    def normalize(self) -> WorkflowPackage: ...
+    def trust_payload(self) -> dict[str, Any]: ...
+    def extract_source_files(self, target_dir: Path) -> None: ...
+
+
 class ImportedWorkflowPackageStore:
     """Stores normalized imported workflow packages under workflow-store."""
 
@@ -171,7 +180,7 @@ class ImportedWorkflowPackageStore:
         original_filename: str | None = None,
         allow_unverified_community_preparation: bool = False,
     ) -> WorkflowPackage:
-        importer = NoofyArchiveImporter(data, original_filename=original_filename)
+        importer = workflow_importer_for_data(data, original_filename=original_filename)
         package = importer.normalize()
         package = self._with_verified_import_trust(package, importer.trust_payload())
         return _package_with_source_policy(
@@ -189,7 +198,7 @@ class ImportedWorkflowPackageStore:
         duplicate_action: str | None = None,
     ) -> WorkflowPackage:
         try:
-            importer = NoofyArchiveImporter(data, original_filename=original_filename)
+            importer = workflow_importer_for_data(data, original_filename=original_filename)
             package = importer.normalize()
             package = self._with_verified_import_trust(
                 package, importer.trust_payload()
@@ -218,7 +227,7 @@ class ImportedWorkflowPackageStore:
         try:
             return self._persist_imported_archive(
                 data,
-                importer=NoofyArchiveImporter(data, original_filename=original_filename),
+                importer=workflow_importer_for_data(data, original_filename=original_filename),
                 package=package,
                 original_filename=original_filename,
                 allow_unverified_community_preparation=allow_unverified_community_preparation,
@@ -232,7 +241,7 @@ class ImportedWorkflowPackageStore:
         self,
         data: bytes,
         *,
-        importer: NoofyArchiveImporter,
+        importer: WorkflowDataImporter,
         package: WorkflowPackage,
         original_filename: str | None,
         allow_unverified_community_preparation: bool,
@@ -301,6 +310,7 @@ class ImportedWorkflowPackageStore:
                 "version": package.identity.version if package.identity else None,
                 "custom_node_count": len(package.custom_nodes),
                 "required_model_count": len(unique_required_models(package.required_models)),
+                **_raw_comfyui_log_details(package),
                 "unresolved_input_count": len(package.unresolved_runtime_inputs),
             },
         )
@@ -897,6 +907,248 @@ class NoofyArchiveImporter:
             )
         except ArchiveValidationError as exc:
             raise NoofyImportError(str(exc)) from exc
+
+
+class RawComfyUIJsonImporter:
+    """Normalizes a raw ComfyUI JSON workflow into an imported package."""
+
+    def __init__(self, data: bytes, *, original_filename: str | None = None) -> None:
+        if len(data) > MAX_JSON_BYTES:
+            raise NoofyImportError("Workflow JSON is too large to import automatically.")
+        self.data = data
+        self.original_filename = original_filename
+        try:
+            payload = json.loads(data.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise NoofyImportError("Workflow JSON is not valid UTF-8 JSON.") from exc
+        if not isinstance(payload, dict):
+            raise NoofyImportError("Workflow JSON must contain a JSON object.")
+        self.payload = payload
+        self._package: WorkflowPackage | None = None
+        self._source_files: dict[str, dict[str, Any]] | None = None
+
+    def normalize(self) -> WorkflowPackage:
+        if self._package is not None:
+            return self._package
+        graph = raw_comfyui_api_graph(self.payload)
+        source_format = "api_graph" if graph is not None else None
+        comfyui_workflow: dict[str, Any] | None = None
+        synthesized_graph = False
+        if graph is None and is_comfyui_ui_workflow(self.payload):
+            comfyui_workflow = self.payload
+            graph = comfyui_api_graph_from_ui_workflow(self.payload)
+            source_format = "ui_workflow"
+            synthesized_graph = True
+        if graph is None or not graph:
+            raise NoofyImportError(
+                "Workflow JSON must be a ComfyUI API graph or a saved ComfyUI workflow."
+            )
+
+        package_id = _raw_comfyui_package_id(self.original_filename, self.payload)
+        version = "0.1.0"
+        publisher_id = "local"
+        workflow_id = imported_workflow_id(publisher_id, package_id, version)
+        display_name = _raw_comfyui_display_name(
+            self.original_filename,
+            self.payload,
+            fallback=package_id,
+        )
+        required_models = required_models_from_comfyui_workflow(
+            comfyui_workflow or {},
+            comfyui_graph=graph,
+        )
+        dashboard = DashboardSchema(version=NOOFY_ARCHIVE_SCHEMA_VERSION, status="not_configured")
+        unresolved_inputs = filter_resolved_runtime_inputs(
+            _detect_unresolved_runtime_inputs(graph),
+            [],
+        )
+        import_status = _import_status(unresolved_inputs, dashboard)
+        package_json = {
+            "schema_version": NOOFY_ARCHIVE_SCHEMA_VERSION,
+            "publisher_id": publisher_id,
+            "package_id": package_id,
+            "version": version,
+            "trust_level": TrustLevel.QUARANTINED_COMMUNITY.value,
+            "metadata": {
+                "display_name": display_name,
+                "description": "",
+                "author": "",
+                "tags": ["ComfyUI JSON"],
+            },
+            "source_policy": "local",
+        }
+        capsule_json = {
+            "schema_version": NOOFY_ARCHIVE_SCHEMA_VERSION,
+            "models": [
+                {
+                    "comfyui_folder": model.folder,
+                    "filename": model.filename,
+                    "model_type": model.model_type,
+                    "node_id": model.node_id,
+                    "node_type": model.node_type,
+                    "input_name": model.input_name,
+                    "source_urls": list(model.source_urls),
+                    "asset_ownership": model.asset_ownership.value,
+                }
+                for model in required_models
+            ],
+            "custom_nodes": [],
+        }
+        export_report = {
+            "schema_version": NOOFY_ARCHIVE_SCHEMA_VERSION,
+            "source": "raw_comfyui_json_import",
+            "source_format": source_format,
+            "synthesized_api_graph": synthesized_graph,
+        }
+        dashboard_json = dashboard.model_dump(mode="json", exclude_none=True)
+        dashboard_json["inputs"] = []
+        dashboard_json["outputs"] = []
+        developer_details = {
+            "raw_comfyui_json": {
+                "source_format": source_format,
+                "synthesized_api_graph": synthesized_graph,
+                "required_model_count": len(unique_required_models(required_models)),
+            }
+        }
+        self._source_files = {
+            "package.json": package_json,
+            "comfyui_graph.json": graph,
+            "dashboard.json": dashboard_json,
+            "capsule.lock.json": capsule_json,
+            "export-report.json": export_report,
+        }
+        if comfyui_workflow is not None:
+            self._source_files["comfyui_workflow.json"] = comfyui_workflow
+        try:
+            self._package = WorkflowPackage(
+                metadata=WorkflowMetadata(
+                    id=workflow_id,
+                    name=display_name,
+                    display_name=display_name,
+                    version=version,
+                    description="",
+                    author=publisher_id,
+                    tags=["ComfyUI JSON"],
+                ),
+                display_name=display_name,
+                identity=WorkflowPackageIdentity(
+                    publisher_id=publisher_id,
+                    package_id=package_id,
+                    version=version,
+                    trust_level=TrustLevel.QUARANTINED_COMMUNITY.value,
+                    source="raw_comfyui_json_import",
+                ),
+                engine="comfyui",
+                required_models=required_models,
+                comfyui_graph=graph,
+                inputs=[],
+                outputs=[],
+                dashboard=dashboard,
+                custom_nodes=[],
+                unresolved_runtime_inputs=unresolved_inputs,
+                export_report=export_report,
+                exported_package=package_json,
+                exported_capsule=capsule_json,
+                observed_hardware={},
+                smoke_tests=WorkflowSmokeTests(),
+                import_metadata=WorkflowImportMetadata(
+                    original_filename=self.original_filename,
+                    imported_at=datetime.now(UTC).isoformat(),
+                    source_archive_sha256=f"sha256:{hashlib.sha256(self.data).hexdigest()}",
+                    status=import_status,
+                    user_facing_message=_import_status_message(import_status),
+                    developer_details=developer_details,
+                ),
+            )
+        except ValidationError as exc:
+            raise NoofyImportError("Workflow JSON could not be normalized.") from exc
+        return self._package
+
+    def trust_payload(self) -> dict[str, Any]:
+        self.normalize()
+        assert self._source_files is not None
+        return imported_archive_trust_payload(
+            package_json=self._source_files["package.json"],
+            comfyui_graph=self._source_files["comfyui_graph.json"],
+            dashboard_json=self._source_files["dashboard.json"],
+            capsule_json=self._source_files["capsule.lock.json"],
+            export_report=self._source_files["export-report.json"],
+        )
+
+    def extract_source_files(self, target_dir: Path) -> None:
+        self.normalize()
+        assert self._source_files is not None
+        target_dir.mkdir(parents=True, exist_ok=True)
+        for name, payload in self._source_files.items():
+            (target_dir / name).write_text(
+                json.dumps(payload, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+        (target_dir / "raw-comfyui-workflow.json").write_bytes(self.data)
+
+
+def workflow_importer_for_data(
+    data: bytes,
+    *,
+    original_filename: str | None = None,
+) -> WorkflowDataImporter:
+    try:
+        return NoofyArchiveImporter(data, original_filename=original_filename)
+    except NoofyImportError as archive_error:
+        try:
+            return RawComfyUIJsonImporter(data, original_filename=original_filename)
+        except NoofyImportError as json_error:
+            if _workflow_import_extension(original_filename) == ".json":
+                raise json_error from archive_error
+            raise archive_error from json_error
+
+
+def _workflow_import_extension(original_filename: str | None) -> str:
+    if not original_filename:
+        return ""
+    return Path(original_filename).suffix.casefold()
+
+
+def _raw_comfyui_package_id(
+    original_filename: str | None,
+    payload: dict[str, Any],
+) -> str:
+    for value in (
+        payload.get("name"),
+        payload.get("title"),
+        Path(original_filename).stem if original_filename else None,
+    ):
+        if isinstance(value, str) and value.strip():
+            return safe_store_segment(value.strip())
+    return "comfyui-workflow"
+
+
+def _raw_comfyui_display_name(
+    original_filename: str | None,
+    payload: dict[str, Any],
+    *,
+    fallback: str,
+) -> str:
+    for value in (
+        payload.get("name"),
+        payload.get("title"),
+        Path(original_filename).stem if original_filename else None,
+    ):
+        if isinstance(value, str) and value.strip():
+            cleaned = value.strip().replace("_", " ").replace("-", " ")
+            return " ".join(cleaned.split())
+    return fallback
+
+
+def _raw_comfyui_log_details(package: WorkflowPackage) -> dict[str, object]:
+    details = (
+        package.import_metadata.developer_details.get("raw_comfyui_json")
+        if package.import_metadata is not None
+        else None
+    )
+    if not isinstance(details, dict):
+        return {}
+    return {"raw_comfyui_json": details}
 
 
 def _import_status(

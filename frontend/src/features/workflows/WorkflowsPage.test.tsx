@@ -970,7 +970,7 @@ describe("WorkflowsPage", () => {
     const view = renderPage();
 
     await screen.findByRole("heading", { name: "Workflows" });
-    const input = view.container.querySelector('input[type="file"][accept=".noofy"]') as HTMLInputElement;
+    const input = view.container.querySelector('input[type="file"][accept=".noofy,.json"]') as HTMLInputElement;
     fireEvent.change(input, { target: { files: [new File(["noofy"], "missing-model.noofy", { type: "application/octet-stream" })] } });
 
     expect(await screen.findByRole("dialog", { name: "Missing Model Flow" })).toBeInTheDocument();
@@ -1044,7 +1044,7 @@ describe("WorkflowsPage", () => {
 
     const view = renderPage();
     await screen.findByRole("heading", { name: "Workflows" });
-    const input = view.container.querySelector('input[type="file"][accept=".noofy"]') as HTMLInputElement;
+    const input = view.container.querySelector('input[type="file"][accept=".noofy,.json"]') as HTMLInputElement;
     fireEvent.change(input, {
       target: { files: [new File(["noofy"], "remove-background.noofy", { type: "application/octet-stream" })] },
     });

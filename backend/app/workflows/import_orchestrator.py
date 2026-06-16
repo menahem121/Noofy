@@ -130,6 +130,26 @@ def _requirement_id(model: RequiredModel) -> str:
     return required_model_reference_id(model)
 
 
+def _availability_can_attempt_import_download(
+    availability: RequiredModelAvailability,
+) -> bool:
+    return availability.status == "missing" or (
+        availability.status == "possible_match"
+        and availability.source_availability == "resolvable"
+    )
+
+
+def _raw_comfyui_import_details(package: WorkflowPackage) -> dict[str, object]:
+    details = (
+        package.import_metadata.developer_details.get("raw_comfyui_json")
+        if package.import_metadata is not None
+        else None
+    )
+    if not isinstance(details, dict):
+        return {}
+    return {"raw_comfyui_json": details}
+
+
 class WorkflowImportOrchestrator:
     """Stateful orchestrator for staged workflow import and per-import model downloads."""
 
@@ -253,6 +273,7 @@ class WorkflowImportOrchestrator:
                 "import_session_id": session_id,
                 "required_model_count": required_model_count,
                 "duplicate_identity": duplicate_identity is not None,
+                **_raw_comfyui_import_details(package),
             },
         )
         return StagedWorkflowImportResponse(
@@ -288,7 +309,9 @@ class WorkflowImportOrchestrator:
             fast=True,
             verify_hashes=True,
         )
-        missing_models = [model for model in before.models if model.status == "missing"]
+        missing_models = [
+            model for model in before.models if _availability_can_attempt_import_download(model)
+        ]
         job_id = f"model-download-{uuid.uuid4().hex}"
         now = datetime.now(UTC)
         job = _ImportModelDownloadJob(

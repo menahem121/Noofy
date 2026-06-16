@@ -245,6 +245,103 @@ def test_noofy_importer_normalizes_real_export_without_importing_custom_nodes() 
     assert ("custom_nodes" in sys.modules) is custom_nodes_was_loaded
 
 
+def test_raw_comfyui_api_json_import_extracts_required_models_and_source_urls(tmp_path: Path) -> None:
+    graph = {
+        "4": {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": {
+                "ckpt_name": "raw_model.safetensors",
+                "ckpt_name_source_url": "https://huggingface.co/acme/raw/resolve/main/raw_model.safetensors",
+            },
+        },
+        "9": {"class_type": "SaveImage", "inputs": {"images": ["4", 0]}},
+    }
+
+    package = ImportedWorkflowPackageStore(
+        tmp_path / "packages", log_store=LogStore()
+    ).preview_archive(
+        json.dumps(graph).encode("utf-8"),
+        original_filename="raw-api.json",
+    )
+
+    assert package.identity is not None
+    assert package.identity.source == "raw_comfyui_json_import"
+    assert package.import_metadata is not None
+    assert package.import_metadata.status == "needs_input_setup"
+    assert package.import_metadata.developer_details["raw_comfyui_json"]["source_format"] == "api_graph"
+    assert package.required_models[0].folder == "checkpoints"
+    assert package.required_models[0].filename == "raw_model.safetensors"
+    assert package.required_models[0].source_urls == [
+        "https://huggingface.co/acme/raw/resolve/main/raw_model.safetensors"
+    ]
+
+
+def test_raw_comfyui_ui_json_import_synthesizes_api_graph_and_models(tmp_path: Path) -> None:
+    workflow = {
+        "last_node_id": 9,
+        "nodes": [
+            {
+                "id": 4,
+                "type": "CheckpointLoaderSimple",
+                "inputs": [],
+                "widgets_values": ["ui_model.safetensors"],
+            },
+            {
+                "id": 9,
+                "type": "SaveImage",
+                "inputs": [{"name": "images", "type": "IMAGE", "link": 12}],
+                "widgets_values": ["Noofy"],
+            },
+        ],
+        "links": [[12, 4, 0, 9, 0, "IMAGE"]],
+    }
+
+    package = ImportedWorkflowPackageStore(
+        tmp_path / "packages", log_store=LogStore()
+    ).preview_archive(
+        json.dumps(workflow).encode("utf-8"),
+        original_filename="ui-workflow.json",
+    )
+
+    assert package.comfyui_graph["4"] == {
+        "class_type": "CheckpointLoaderSimple",
+        "inputs": {"ckpt_name": "ui_model.safetensors"},
+    }
+    assert package.comfyui_graph["9"] == {
+        "class_type": "SaveImage",
+        "inputs": {"images": ["4", 0], "filename_prefix": "Noofy"},
+    }
+    assert package.required_models[0].folder == "checkpoints"
+    assert package.required_models[0].filename == "ui_model.safetensors"
+    assert package.import_metadata is not None
+    details = package.import_metadata.developer_details["raw_comfyui_json"]
+    assert details["source_format"] == "ui_workflow"
+    assert details["synthesized_api_graph"] is True
+
+
+def test_raw_comfyui_json_import_persists_source_files_and_logs(tmp_path: Path) -> None:
+    log_store = LogStore()
+    graph = {
+        "7": {
+            "class_type": "VAELoader",
+            "inputs": {"vae_name": "ae.safetensors"},
+        }
+    }
+    store = ImportedWorkflowPackageStore(tmp_path / "packages", log_store=log_store)
+
+    package = store.import_archive(
+        json.dumps(graph).encode("utf-8"),
+        original_filename="raw-log.json",
+    )
+
+    package_dir = store.package_dir(package)
+    assert (package_dir / "source-files" / "raw-comfyui-workflow.json").exists()
+    assert json.loads((package_dir / "source-files" / "comfyui_graph.json").read_text()) == graph
+    latest = log_store.list_events(limit=1).events[0]
+    assert latest.message == "Imported workflow package"
+    assert latest.details["raw_comfyui_json"]["source_format"] == "api_graph"
+
+
 def test_noofy_importer_streams_source_file_extraction(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -420,6 +517,32 @@ def test_noofy_importer_adds_missing_model_from_editable_workflow_metadata() -> 
     assert model.node_id == "88:85:82"
     assert model.input_name == "bg_removal_name"
     assert model.source_urls == [source_url]
+
+
+def test_noofy_importer_adds_graph_only_model_without_source_for_provider_fallback() -> None:
+    archive = _archive_bytes_with_graph_update(
+        {
+            "14": {
+                "class_type": "CLIPLoader",
+                "inputs": {"clip_name": "qwen_2.5_vl_7b_fp8_scaled.safetensors"},
+            }
+        },
+        archive_bytes=_archive_bytes_with_capsule_update(
+            {"models": []},
+            archive_bytes=_small_archive_bytes(),
+        ),
+    )
+
+    package = NoofyArchiveImporter(archive).normalize()
+
+    model = package.required_models[0]
+    assert model.folder == "clip"
+    assert model.filename == "qwen_2.5_vl_7b_fp8_scaled.safetensors"
+    assert model.node_id == "14"
+    assert model.node_type == "CLIPLoader"
+    assert model.input_name == "clip_name"
+    assert model.source_urls == []
+    assert model.verification_level == "filename_only"
 
 
 def test_noofy_importer_preserves_phase6_signature_metadata() -> None:
