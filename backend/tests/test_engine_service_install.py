@@ -2025,6 +2025,76 @@ async def test_prepare_workflow_drives_bundled_capsule_to_ready(tmp_path: Path) 
 
 
 @pytest.mark.anyio
+async def test_prepare_workflow_dedupes_concurrent_requests(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    packages_dir = tmp_path / "packages"
+    capsule_payload = _runner_capsule_payload()
+    _write_workflow_with_capsule(packages_dir, "runner_workflow", capsule_payload)
+    service = _build_service(tmp_path, packages_dir=packages_dir)
+    assert service.capsule_installer is not None
+    started = asyncio.Event()
+    release = asyncio.Event()
+    prepare_calls = 0
+
+    async def slow_prepare(capsule_lock, *, workflow_id=None, local_model_requirements=None, workflow_execution_smoke_allowed=True):
+        nonlocal prepare_calls
+        del local_model_requirements, workflow_execution_smoke_allowed
+        prepare_calls += 1
+        started.set()
+        await release.wait()
+        return service.capsule_installer.install_state_store.update(
+            capsule_lock.runtime.capsule_fingerprint,
+            status=InstallStatus.READY,
+            installed_at="2026-06-16T00:00:00+00:00",
+            dependency_env_path="/tmp/noofy-env",
+            runner_workspace_path="/tmp/noofy-workspace",
+            smoke_test_status=SmokeTestStatus.PASSED,
+        )
+
+    monkeypatch.setattr(service.capsule_installer, "prepare", slow_prepare)
+
+    first = asyncio.create_task(service.prepare_workflow("runner_workflow"))
+    await started.wait()
+    second = asyncio.create_task(service.prepare_workflow("runner_workflow"))
+    await asyncio.sleep(0)
+    release.set()
+    first_result, second_result = await asyncio.gather(first, second)
+
+    assert prepare_calls == 1
+    assert first_result["status"] == InstallStatus.READY.value
+    assert second_result["status"] == InstallStatus.READY.value
+    assert first_result["runner_workspace_path"] == second_result["runner_workspace_path"]
+
+
+@pytest.mark.anyio
+async def test_prepare_workflow_reuses_cached_ready_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    packages_dir = tmp_path / "packages"
+    capsule_payload = _runner_capsule_payload()
+    _write_workflow_with_capsule(packages_dir, "runner_workflow", capsule_payload)
+    service = _build_service(tmp_path, packages_dir=packages_dir)
+    assert service.capsule_installer is not None
+    state_store = service.capsule_installer.install_state_store
+    state_store.update(
+        "runner_workflow-fp",
+        status=InstallStatus.READY,
+        installed_at="2026-06-16T00:00:00+00:00",
+        dependency_env_path="/tmp/noofy-env",
+        runner_workspace_path="/tmp/noofy-workspace",
+        smoke_test_status=SmokeTestStatus.PASSED,
+    )
+
+    async def fail_prepare(*args, **kwargs):
+        raise AssertionError("cached ready preparation should be reused")
+
+    monkeypatch.setattr(service.capsule_installer, "prepare", fail_prepare)
+
+    result = await service.prepare_workflow("runner_workflow")
+
+    assert result["status"] == InstallStatus.READY.value
+    assert result["reused_cached_preparation"] is True
+    assert result["runner_workspace_path"] == "/tmp/noofy-workspace"
+
+
+@pytest.mark.anyio
 async def test_prepare_workflow_with_unresolved_runtime_input_does_not_mark_ready(tmp_path: Path) -> None:
     packages_dir = tmp_path / "packages"
     workflow_dir = packages_dir / "runner_workflow"

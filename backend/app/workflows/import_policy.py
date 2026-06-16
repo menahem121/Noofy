@@ -43,6 +43,10 @@ def import_status_message(status: str) -> str:
         return "Needs permission to prepare community workflow"
     if status == "unsupported":
         return "Unsupported workflow"
+    if status == "missing_custom_nodes":
+        return "Required custom nodes were not found"
+    if status == "needs_comfyui_update":
+        return "Update managed ComfyUI, then retry"
     if status == "cannot_prepare_automatically":
         return "Cannot prepare automatically"
     return "Imported"
@@ -140,6 +144,7 @@ def non_bundled_required_custom_node_records(
     package: WorkflowPackage,
 ) -> list[WorkflowCustomNodeRecord]:
     graph_types = graph_node_types(package.comfyui_graph)
+    graph_types.update(_import_executable_node_types(package))
     required: list[WorkflowCustomNodeRecord] = []
     for record in package.custom_nodes:
         if record.included:
@@ -150,6 +155,25 @@ def non_bundled_required_custom_node_records(
             continue
         required.append(record)
     return required
+
+
+def _import_executable_node_types(package: WorkflowPackage) -> set[str]:
+    details = (
+        package.import_metadata.developer_details.get("raw_comfyui_json")
+        if package.import_metadata is not None
+        else None
+    )
+    if not isinstance(details, dict):
+        return set()
+    node_types: set[str] = set()
+    for key in ("executable_node_types", "executable_ui_node_types"):
+        value = details.get(key)
+        if not isinstance(value, list):
+            continue
+        node_types.update(
+            item for item in value if isinstance(item, str)
+        )
+    return node_types
 
 
 def graph_node_types(graph: dict[str, Any]) -> set[str]:

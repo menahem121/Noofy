@@ -18,6 +18,8 @@ from app.engine.service import EngineService
 from app.runtime.capsule_installer import CapsuleInstaller
 from app.runtime.dependencies.custom_nodes import (
     CUSTOM_NODE_WORKSPACE_MANIFEST_FILENAME,
+    CoreNodeManifest,
+    CoreNodeManifestCatalog,
     CustomNodeWorkspaceMaterializer,
 )
 from app.runtime.install_state import InstallStateStore
@@ -96,6 +98,16 @@ class FakeSourceFetcher:
     def fetch(self, url: str) -> bytes:
         self.urls.append(url)
         return self.payload
+
+
+class FakeGitHubCustomNodeUrlResolver:
+    def __init__(self, source: NodeRegistrySource) -> None:
+        self.source = source
+        self.calls: list[tuple[str, str]] = []
+
+    def resolve(self, url: str, *, node_type: str) -> tuple[str, NodeRegistrySource]:
+        self.calls.append((node_type, url))
+        return f"github-{node_type.casefold()}", self.source
 
 
 @pytest.fixture(autouse=True)
@@ -346,7 +358,7 @@ def test_raw_comfyui_json_import_persists_source_files_and_logs(tmp_path: Path) 
     assert latest.details["raw_comfyui_json"]["source_format"] == "api_graph"
 
 
-def test_raw_comfyui_ui_json_import_detects_custom_nodes_from_graph_and_ui_metadata(
+def test_raw_comfyui_ui_json_import_ignores_unreferenced_definition_node_types(
     tmp_path: Path,
 ) -> None:
     log_store = LogStore()
@@ -354,7 +366,6 @@ def test_raw_comfyui_ui_json_import_detects_custom_nodes_from_graph_and_ui_metad
         registry_id="raw-json-test-registry",
         entries=[
             _custom_node_registry_entry("magic-pack", ["MagicSampler"]),
-            _custom_node_registry_entry("hidden-pack", ["HiddenDefinitionNode"]),
         ],
     )
     store = ImportedWorkflowPackageStore(
@@ -400,13 +411,11 @@ def test_raw_comfyui_ui_json_import_detects_custom_nodes_from_graph_and_ui_metad
     )
 
     assert {record.id for record in package.custom_nodes} == {
-        "hidden-pack",
         "magic-pack",
     }
     assert {
         (record.id, tuple(record.node_types)) for record in package.custom_nodes
     } == {
-        ("hidden-pack", ("HiddenDefinitionNode",)),
         ("magic-pack", ("MagicSampler",)),
     }
     assert package.import_metadata is not None
@@ -417,13 +426,135 @@ def test_raw_comfyui_ui_json_import_detects_custom_nodes_from_graph_and_ui_metad
         "MagicSampler",
         "SaveImage",
     ]
+    assert raw_details["executable_ui_node_types"] == []
     assert raw_details["custom_node_detection"]["status"] == (
         "resolved_to_registry_packages"
     )
     assert raw_details["custom_node_detection"]["required_custom_node_types"] == [
-        "HiddenDefinitionNode",
         "MagicSampler",
     ]
+
+
+def test_raw_comfyui_ui_json_import_requires_referenced_definition_node_types(
+    tmp_path: Path,
+) -> None:
+    log_store = LogStore()
+    registry = NoofyNodeRegistry(
+        registry_id="raw-json-test-registry",
+        entries=[
+            _custom_node_registry_entry("hidden-pack", ["HiddenDefinitionNode"]),
+        ],
+    )
+    store = ImportedWorkflowPackageStore(
+        tmp_path / "packages",
+        log_store=log_store,
+        node_registry_resolver=NodeRegistryResolver(
+            registry=registry,
+            log_store=log_store,
+        ),
+    )
+    workflow = {
+        "last_node_id": 3,
+        "nodes": [
+            {
+                "id": 1,
+                "type": "workflow/subgraph-a",
+                "inputs": [],
+                "widgets_values": [],
+            },
+            {
+                "id": 3,
+                "type": "SaveImage",
+                "inputs": [],
+                "widgets_values": ["Noofy"],
+            },
+        ],
+        "links": [],
+        "definitions": {
+            "subgraph-a": {
+                "nodes": [
+                    {
+                        "id": 50,
+                        "type": "HiddenDefinitionNode",
+                        "inputs": [],
+                        "widgets_values": [],
+                    }
+                ]
+            }
+        },
+    }
+
+    package = store.preview_archive(
+        json.dumps(workflow).encode("utf-8"),
+        original_filename="custom-ui.json",
+    )
+
+    assert [(record.id, record.node_types) for record in package.custom_nodes] == [
+        ("hidden-pack", ["HiddenDefinitionNode"])
+    ]
+    assert package.import_metadata is not None
+    raw_details = package.import_metadata.developer_details["raw_comfyui_json"]
+    assert raw_details["api_node_types"] == ["SaveImage"]
+    assert raw_details["executable_ui_node_types"] == ["HiddenDefinitionNode"]
+    assert raw_details["custom_node_detection"]["required_custom_node_types"] == [
+        "HiddenDefinitionNode"
+    ]
+
+
+def test_raw_comfyui_json_core_node_comparison_uses_selected_runtime_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime_catalog = load_runtime_profile_catalog(Path("app/runtime/profile_catalog.json"))
+    profile, selected_variant = importer_module._select_import_runtime_profile(
+        runtime_catalog.profiles
+    )
+    other_variant = next(
+        variant
+        for variant in profile.variants
+        if variant.runtime_profile_variant_id != selected_variant.runtime_profile_variant_id
+    )
+    core_catalog = CoreNodeManifestCatalog(
+        manifests=[
+            CoreNodeManifest(
+                runtime_profile_id=profile.runtime_profile_id,
+                runtime_profile_variant_id=selected_variant.runtime_profile_variant_id,
+                runtime_profile_manifest_hash=profile.runtime_profile_manifest_hash,
+                node_types=["SaveImage"],
+            ),
+            CoreNodeManifest(
+                runtime_profile_id=profile.runtime_profile_id,
+                runtime_profile_variant_id=other_variant.runtime_profile_variant_id,
+                runtime_profile_manifest_hash=profile.runtime_profile_manifest_hash,
+                node_types=["CrossProfileCoreNode"],
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        importer_module,
+        "load_core_node_manifest_catalog",
+        lambda: core_catalog,
+    )
+    store = ImportedWorkflowPackageStore(
+        tmp_path / "packages",
+        log_store=LogStore(),
+        runtime_profile_catalog_provider=lambda: runtime_catalog,
+        node_registry_resolver=NodeRegistryResolver(
+            registry=NoofyNodeRegistry(registry_id="empty-test-registry"),
+            log_store=LogStore(),
+        ),
+    )
+    graph = {"1": {"class_type": "CrossProfileCoreNode", "inputs": {}}}
+
+    package = store.preview_archive(
+        json.dumps(graph).encode("utf-8"),
+        original_filename="cross-profile.json",
+    )
+
+    assert package.import_metadata is not None
+    assert package.import_metadata.status == "missing_custom_nodes"
+    source_resolution = package.import_metadata.developer_details["source_resolution"]
+    assert source_resolution["unresolved_node_types"] == ["CrossProfileCoreNode"]
 
 
 def test_raw_comfyui_json_import_resolves_custom_node_source_from_exact_node_type(
@@ -479,7 +610,7 @@ def test_raw_comfyui_json_import_resolves_custom_node_source_from_exact_node_typ
     )
 
 
-def test_raw_comfyui_json_import_marks_unknown_custom_node_types_unsupported(
+def test_raw_comfyui_json_import_marks_unknown_custom_node_types_missing(
     tmp_path: Path,
 ) -> None:
     store = ImportedWorkflowPackageStore(
@@ -498,15 +629,15 @@ def test_raw_comfyui_json_import_marks_unknown_custom_node_types_unsupported(
     )
 
     assert package.import_metadata is not None
-    assert package.import_metadata.status == "unsupported"
+    assert package.import_metadata.status == "missing_custom_nodes"
     source_resolution = package.import_metadata.developer_details["source_resolution"]
     assert source_resolution["reason"] == "unresolved_custom_node_types"
     assert source_resolution["unresolved_node_types"] == ["NotInRegistryNode"]
     assert package.identity is not None
-    assert package.identity.trust_level == "unsupported"
+    assert package.identity.trust_level == "quarantined_community"
 
 
-def test_raw_comfyui_json_import_marks_ambiguous_custom_node_types_unsupported(
+def test_raw_comfyui_json_import_marks_ambiguous_custom_node_types_missing(
     tmp_path: Path,
 ) -> None:
     store = ImportedWorkflowPackageStore(
@@ -531,11 +662,113 @@ def test_raw_comfyui_json_import_marks_ambiguous_custom_node_types_unsupported(
     )
 
     assert package.import_metadata is not None
-    assert package.import_metadata.status == "unsupported"
+    assert package.import_metadata.status == "missing_custom_nodes"
     source_resolution = package.import_metadata.developer_details["source_resolution"]
     assert source_resolution["reason"] == "unresolved_custom_node_types"
     assert source_resolution["ambiguous_node_types"] == [
         {"node_type": "SharedNode", "package_ids": ["first-pack", "second-pack"]}
+    ]
+
+
+def test_raw_comfyui_json_import_resolves_unresolved_custom_node_from_github_url(
+    tmp_path: Path,
+) -> None:
+    archive = _source_archive_bytes(
+        {
+            "node.py": (
+                "raise RuntimeError('trusted backend must not import custom node')\n"
+            ),
+        }
+    )
+    archive_digest = hashlib.sha256(archive).hexdigest()
+    source = NodeRegistrySource(
+        source_kind=NodeRegistrySourceKind.GIT_ZIP_ARCHIVE,
+        source_url="https://codeload.github.com/example/custom-node/zip/" + "a" * 40,
+        source_ref="a" * 40,
+        source_content_hash=f"sha256:{archive_digest}",
+    )
+    fetcher = FakeSourceFetcher(archive)
+    resolver = FakeGitHubCustomNodeUrlResolver(source)
+    store = ImportedWorkflowPackageStore(
+        tmp_path / "packages",
+        log_store=LogStore(),
+        node_registry_resolver=NodeRegistryResolver(
+            registry=NoofyNodeRegistry(registry_id="empty-test-registry"),
+            log_store=LogStore(),
+        ),
+        custom_node_source_cache=CustomNodeSourceCache(
+            cache_dir=tmp_path / "custom-node-cache",
+            fetcher=fetcher,
+            log_store=LogStore(),
+        ),
+        custom_node_github_resolver=resolver,
+    )
+    graph = {"1": {"class_type": "ManualNode", "inputs": {}}}
+    package = store.preview_archive(
+        json.dumps(graph).encode("utf-8"),
+        original_filename="manual-node.json",
+        allow_unverified_community_preparation=True,
+    )
+
+    resolved = store.resolve_custom_nodes_from_github_urls(
+        package,
+        urls_by_node_type={"ManualNode": "https://github.com/example/custom-node"},
+        allow_unverified_community_preparation=True,
+    )
+
+    assert resolver.calls == [
+        ("ManualNode", "https://github.com/example/custom-node")
+    ]
+    assert fetcher.urls == [source.source_url]
+    assert resolved.import_metadata is not None
+    assert resolved.import_metadata.status == "needs_input_setup"
+    assert resolved.import_metadata.developer_details["source_resolution"]["status"] == "resolved"
+    record = resolved.custom_nodes[0]
+    assert record.included is True
+    assert record.node_types == ["ManualNode"]
+    assert record.source_ref == "a" * 40
+    assert record.source_content_hash == f"sha256:{archive_digest}"
+    assert "node" not in sys.modules
+
+
+def test_raw_comfyui_json_import_keeps_unresolved_github_failures_actionable(
+    tmp_path: Path,
+) -> None:
+    class FailingResolver:
+        def resolve(self, url: str, *, node_type: str) -> tuple[str, NodeRegistrySource]:
+            raise RuntimeError("bad url")
+
+    store = ImportedWorkflowPackageStore(
+        tmp_path / "packages",
+        log_store=LogStore(),
+        node_registry_resolver=NodeRegistryResolver(
+            registry=NoofyNodeRegistry(registry_id="empty-test-registry"),
+            log_store=LogStore(),
+        ),
+        custom_node_github_resolver=FailingResolver(),
+    )
+    graph = {"1": {"class_type": "ManualNode", "inputs": {}}}
+    package = store.preview_archive(
+        json.dumps(graph).encode("utf-8"),
+        original_filename="manual-node.json",
+    )
+
+    resolved = store.resolve_custom_nodes_from_github_urls(
+        package,
+        urls_by_node_type={"ManualNode": "https://example.test/not-github"},
+        allow_unverified_community_preparation=True,
+    )
+
+    assert resolved.import_metadata is not None
+    assert resolved.import_metadata.status == "missing_custom_nodes"
+    details = resolved.import_metadata.developer_details["source_resolution"]
+    assert details["reason"] == "user_github_url_resolution_failed"
+    assert details["failed_custom_nodes"] == [
+        {
+            "node_type": "ManualNode",
+            "url": "https://example.test/not-github",
+            "error": "bad url",
+        }
     ]
 
 

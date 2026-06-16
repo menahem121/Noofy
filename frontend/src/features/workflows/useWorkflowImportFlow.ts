@@ -8,7 +8,9 @@ import {
   fetchImportModelDownloadStatus,
   fetchImportModelVerificationStatus,
   fetchWorkflows,
+  markImportHasNoCustomNodes,
   previewWorkflowPackageImport,
+  resolveImportCustomNodesFromUrls,
   type ImportModelDownloadJobStatus,
   type ImportModelVerificationJobStatus,
   type WorkflowImportResponse,
@@ -37,11 +39,16 @@ export interface WorkflowImportFlowController {
   cancelModelDownload: () => Promise<void>;
   continueImport: () => Promise<void>;
   duplicateImport: (action: "replace" | "copy") => Promise<void>;
+  resolveCustomNodesFromUrls: (urlsByNodeType: Record<string, string>) => Promise<void>;
+  markWorkflowHasNoCustomNodes: () => Promise<void>;
   readyImportAction: () => Promise<void>;
   cancelImport: () => Promise<void>;
   dismissImportResult: () => void;
   dismissImportError: () => void;
 }
+
+export const RAW_COMFY_JSON_IMPORT_UNSUPPORTED_MESSAGE =
+  "Noofy can import raw ComfyUI .json workflow files here.";
 
 export const SUPPORTED_WORKFLOW_IMPORT_EXTENSIONS = [".noofy", ".json"] as const;
 
@@ -58,9 +65,12 @@ export function isSupportedWorkflowImportFile(file: { name: string }) {
 
 export function unsupportedWorkflowImportMessage(filename?: string | null) {
   const name = filename?.trim();
+  if (name && workflowImportExtension(name) === ".json") {
+    return RAW_COMFY_JSON_IMPORT_UNSUPPORTED_MESSAGE;
+  }
   return name
-    ? `Noofy can import .noofy workflow packages and ComfyUI .json workflows. ${name} is not a supported workflow import file.`
-    : "Noofy can import .noofy workflow packages and ComfyUI .json workflows here.";
+    ? `Noofy can import .noofy workflow packages and raw ComfyUI .json files. ${name} is not a supported workflow import file.`
+    : "Noofy can import .noofy workflow packages and raw ComfyUI .json files here.";
 }
 
 const initialWorkflowImportFlowState: WorkflowImportFlowState = {
@@ -78,6 +88,13 @@ function rememberImportedSetup(importResult: WorkflowImportResponse) {
   addPendingImportedSetupReminder(
     importResult.workflow.id,
     workflowDisplayName(importResult.workflow),
+  );
+}
+
+function importNeedsCustomNodeResolution(importResult: WorkflowImportResponse) {
+  return Boolean(
+    importResult.custom_node_resolution &&
+    ["missing_custom_nodes", "needs_comfyui_update"].includes(importResult.custom_node_resolution.status),
   );
 }
 
@@ -132,6 +149,7 @@ export function useWorkflowImportFlow({
         importResult.import_session_id &&
         (
           importResult.duplicate_identity ||
+          importNeedsCustomNodeResolution(importResult) ||
           (importResult.model_summary && importResult.model_summary.total_count > 0)
         )
       ) {
@@ -274,6 +292,60 @@ export function useWorkflowImportFlow({
       }));
     }
   }, [finishImport, state.pendingImport?.import_session_id]);
+
+  const resolveCustomNodesFromUrls = useCallback(async (urlsByNodeType: Record<string, string>) => {
+    const sessionId = state.pendingImport?.import_session_id;
+    if (!sessionId) return;
+    setState((current) => ({ ...current, importing: true, importError: null }));
+    try {
+      const importResult = await resolveImportCustomNodesFromUrls(sessionId, urlsByNodeType);
+      if (
+        importResult.import_session_id &&
+        (
+          importResult.duplicate_identity ||
+          importNeedsCustomNodeResolution(importResult) ||
+          (importResult.model_summary && importResult.model_summary.total_count > 0)
+        )
+      ) {
+        setState((current) => ({
+          ...current,
+          importing: false,
+          pendingImport: importResult,
+          importError: null,
+        }));
+        return;
+      }
+      const committed = await commitWorkflowImport(sessionId);
+      await finishImport(committed, false);
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        importing: false,
+        importError: error instanceof Error ? error.message : String(error),
+      }));
+    }
+  }, [finishImport, state.pendingImport?.import_session_id]);
+
+  const markWorkflowHasNoCustomNodes = useCallback(async () => {
+    const sessionId = state.pendingImport?.import_session_id;
+    if (!sessionId) return;
+    setState((current) => ({ ...current, importing: true, importError: null }));
+    try {
+      const importResult = await markImportHasNoCustomNodes(sessionId);
+      setState((current) => ({
+        ...current,
+        importing: false,
+        pendingImport: importResult,
+        importError: null,
+      }));
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        importing: false,
+        importError: error instanceof Error ? error.message : String(error),
+      }));
+    }
+  }, [state.pendingImport?.import_session_id]);
 
   const readyImportAction = useCallback(async () => {
     const sessionId = state.pendingImport?.import_session_id;
@@ -472,6 +544,8 @@ export function useWorkflowImportFlow({
     cancelModelDownload,
     continueImport,
     duplicateImport,
+    resolveCustomNodesFromUrls,
+    markWorkflowHasNoCustomNodes,
     readyImportAction,
     cancelImport,
     dismissImportResult,

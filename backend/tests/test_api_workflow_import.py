@@ -83,6 +83,8 @@ class FakeImportService:
         self.previewed_filename: str | None = None
         self.allow_unverified_community_preparation = False
         self.committed_duplicate_action: str | None = None
+        self.custom_node_urls: dict[str, str] | None = None
+        self.no_custom_nodes_session_id: str | None = None
         self.pending_sessions: set[str] = {"import-session-1"}
         self.shutdown_called = False
 
@@ -231,6 +233,64 @@ class FakeImportService:
         status["user_facing_message"] = "Model download was canceled."
         return status
 
+    def resolve_import_custom_nodes_from_urls(
+        self,
+        import_session_id: str,
+        *,
+        urls_by_node_type: dict[str, str],
+    ):
+        if import_session_id not in self.pending_sessions:
+            raise KeyError(import_session_id)
+        self.custom_node_urls = urls_by_node_type
+        return {
+            "import_session_id": import_session_id,
+            "workflow_id": "unknown__custom_node_workflow__0.1.0",
+            "status": "needs_input_setup",
+            "user_facing_message": "Needs input setup",
+            "workflow": {
+                "id": "unknown__custom_node_workflow__0.1.0",
+                "name": "Custom node workflow",
+                "version": "0.1.0",
+                "description": "",
+            },
+            "required_model_count": 0,
+            "custom_node_count": 1,
+            "unresolved_input_count": 1,
+            "model_summary": None,
+            "custom_node_resolution": None,
+        }
+
+    def mark_import_has_no_custom_nodes(self, import_session_id: str):
+        if import_session_id not in self.pending_sessions:
+            raise KeyError(import_session_id)
+        self.no_custom_nodes_session_id = import_session_id
+        return {
+            "import_session_id": import_session_id,
+            "workflow_id": "unknown__custom_node_workflow__0.1.0",
+            "status": "needs_comfyui_update",
+            "user_facing_message": "Update managed ComfyUI, then retry preparation.",
+            "workflow": {
+                "id": "unknown__custom_node_workflow__0.1.0",
+                "name": "Custom node workflow",
+                "version": "0.1.0",
+                "description": "",
+            },
+            "required_model_count": 0,
+            "custom_node_count": 0,
+            "unresolved_input_count": 0,
+            "model_summary": None,
+            "custom_node_resolution": {
+                "status": "needs_comfyui_update",
+                "user_facing_message": "Update managed ComfyUI, then retry preparation.",
+                "unresolved_node_types": ["NewCoreNode"],
+                "ambiguous_node_types": [],
+                "github_url_fields": [{"node_type": "NewCoreNode", "label": "NewCoreNode"}],
+                "can_provide_github_urls": True,
+                "can_mark_no_custom_nodes": True,
+                "update_guidance": "Update managed ComfyUI from Settings to a newer version, then retry preparation.",
+            },
+        }
+
     def commit_workflow_import(self, import_session_id: str, *, duplicate_action: str | None = None):
         self.committed_duplicate_action = duplicate_action
         if import_session_id not in self.pending_sessions:
@@ -363,6 +423,46 @@ def test_import_workflow_endpoint_passes_community_preparation_opt_in(monkeypatc
 
     assert response.status_code == 200
     assert fake_service.allow_unverified_community_preparation is True
+
+
+def test_import_custom_node_url_resolution_endpoint(monkeypatch) -> None:
+    monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
+    fake_service = FakeImportService()
+
+    with TestClient(create_app(engine_service=fake_service)) as client:
+        response = client.post(
+            "/api/workflows/import/import-session-1/custom-nodes/resolve-from-urls",
+            json={
+                "urls_by_node_type": {
+                    "MissingSampler": "https://github.com/example/custom-node"
+                }
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "needs_input_setup"
+    assert fake_service.custom_node_urls == {
+        "MissingSampler": "https://github.com/example/custom-node"
+    }
+
+
+def test_import_no_custom_nodes_endpoint_returns_update_guidance(monkeypatch) -> None:
+    monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
+    fake_service = FakeImportService()
+
+    with TestClient(create_app(engine_service=fake_service)) as client:
+        response = client.post(
+            "/api/workflows/import/import-session-1/custom-nodes/no-custom-nodes",
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "needs_comfyui_update"
+    assert payload["custom_node_resolution"]["unresolved_node_types"] == [
+        "NewCoreNode"
+    ]
+    assert "Update managed ComfyUI from Settings" in payload["custom_node_resolution"]["update_guidance"]
+    assert fake_service.no_custom_nodes_session_id == "import-session-1"
 
 
 def test_preview_workflow_import_endpoint_returns_staged_model_summary(monkeypatch) -> None:

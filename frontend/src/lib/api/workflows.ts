@@ -454,7 +454,13 @@ export interface WorkflowModelVerificationJobStatus {
 export interface WorkflowImportResponse {
   import_session_id?: string | null;
   workflow_id: string;
-  status: "imported" | "needs_input_setup" | "cannot_prepare_automatically" | string;
+  status:
+    | "imported"
+    | "needs_input_setup"
+    | "cannot_prepare_automatically"
+    | "missing_custom_nodes"
+    | "needs_comfyui_update"
+    | string;
   user_facing_message: string;
   workflow: WorkflowSummary;
   required_model_count: number;
@@ -467,6 +473,17 @@ export interface WorkflowImportResponse {
     existing_workflow?: WorkflowSummary;
     incoming_workflow?: WorkflowSummary;
     actions?: string[];
+  } | null;
+  custom_node_resolution?: {
+    status: string;
+    user_facing_message: string;
+    unresolved_node_types: string[];
+    ambiguous_node_types: Array<{ node_type: string; package_ids?: string[] }>;
+    github_url_fields: Array<{ node_type: string; label: string }>;
+    can_provide_github_urls: boolean;
+    can_mark_no_custom_nodes: boolean;
+    update_guidance?: string | null;
+    developer_details?: Record<string, unknown>;
   } | null;
 }
 
@@ -867,6 +884,22 @@ export function commitWorkflowImport(importSessionId: string, duplicateAction?: 
   return postJson<WorkflowImportResponse>(
     `/workflows/import/${encodeURIComponent(importSessionId)}/commit`,
     duplicateAction ? { duplicate_action: duplicateAction } : undefined,
+  );
+}
+
+export function resolveImportCustomNodesFromUrls(
+  importSessionId: string,
+  urlsByNodeType: Record<string, string>,
+) {
+  return postJson<WorkflowImportResponse>(
+    `/workflows/import/${encodeURIComponent(importSessionId)}/custom-nodes/resolve-from-urls`,
+    { urls_by_node_type: urlsByNodeType },
+  );
+}
+
+export function markImportHasNoCustomNodes(importSessionId: string) {
+  return postJson<WorkflowImportResponse>(
+    `/workflows/import/${encodeURIComponent(importSessionId)}/custom-nodes/no-custom-nodes`,
   );
 }
 

@@ -1004,9 +1004,14 @@ async def test_cached_non_bundled_custom_node_stays_staged_until_smoke_passes(tm
         log_store=log_store,
         downloader=downloader,
     )
+    trusted_core_dir = tmp_path / "ComfyUI-source"
+    trusted_core_dir.mkdir()
+    (trusted_core_dir / "main.py").write_text("print('trusted core')\n", encoding="utf-8")
+    (trusted_core_dir / "custom_nodes").mkdir()
     workspace_preparer = RuntimeWorkspacePreparer(
         dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
         runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
+        comfyui_source_dir=trusted_core_dir,
         custom_node_materializer=_cached_node_materializer(),
         custom_node_source_files_dir=source_files_dir,
         custom_node_source_cache_dir=tmp_path / "source-cache",
@@ -1027,6 +1032,7 @@ async def test_cached_non_bundled_custom_node_stays_staged_until_smoke_passes(tm
     assert state.runner_workspace_path is not None
     runner_workspace = Path(state.runner_workspace_path)
     assert (runner_workspace / "custom_nodes" / "cached-node" / "node.py").exists()
+    assert not (trusted_core_dir / "custom_nodes" / "cached-node").exists()
     assert not workspace_preparer.runner_workspace_store.exists(capsule.runtime.runner_fingerprint)
 
 

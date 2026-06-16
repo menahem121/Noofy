@@ -20,7 +20,9 @@ import {
   fetchWorkflows,
   importWorkflowPackage,
   importModelFiles,
+  markImportHasNoCustomNodes,
   rebuildComfyUI,
+  resolveImportCustomNodesFromUrls,
   resolveBackendUrl,
   startModelDownload,
   updateComfyUI,
@@ -217,6 +219,38 @@ describe("noofyApi", () => {
     expect(exportWorkflowComfyJsonUrl("workflow 1")).toBe(
       "http://127.0.0.1:9123/api/workflows/workflow%201/export/comfyui-json?token=runtime%20secret",
     );
+  });
+
+  it("posts staged import custom-node resolution through the backend API", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ status: "ok" }))
+      .mockResolvedValueOnce(jsonResponse({ status: "ok" }));
+
+    await resolveImportCustomNodesFromUrls("import 1", {
+      MissingNode: "https://github.com/example/custom-node",
+    });
+    await markImportHasNoCustomNodes("import 1");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/workflows/import/import%201/custom-nodes/resolve-from-urls", {
+      body: JSON.stringify({
+        urls_by_node_type: {
+          MissingNode: "https://github.com/example/custom-node",
+        },
+      }),
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      method: "POST",
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/workflows/import/import%201/custom-nodes/no-custom-nodes", {
+      body: undefined,
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      method: "POST",
+    });
   });
 
   it("adds the runtime token to dashboard media URLs only when rendered", () => {

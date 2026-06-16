@@ -5,6 +5,7 @@ import {
   Loader2,
   X,
 } from "lucide-react";
+import { useMemo, useState } from "react";
 
 import {
   type ImportModelDownloadJobStatus,
@@ -34,9 +35,13 @@ export function WorkflowImportDialogs({
   onViewModels: () => void;
 }) {
   const { state } = importFlow;
+  const needsCustomNodeResolution = Boolean(
+    state.pendingImport?.custom_node_resolution &&
+    ["missing_custom_nodes", "needs_comfyui_update"].includes(state.pendingImport.custom_node_resolution.status),
+  );
   return (
     <>
-      {state.pendingImport?.duplicate_identity && !state.pendingImport.model_summary ? (
+      {state.pendingImport?.duplicate_identity && !state.pendingImport.model_summary && !needsCustomNodeResolution ? (
         <DuplicateWorkflowModal
           importResult={state.pendingImport}
           busy={state.importing}
@@ -45,7 +50,16 @@ export function WorkflowImportDialogs({
           onCancel={() => void importFlow.cancelImport()}
         />
       ) : null}
-      {state.pendingImport?.model_summary ? (
+      {needsCustomNodeResolution && state.pendingImport ? (
+        <RequiredCustomNodesModal
+          importResult={state.pendingImport}
+          busy={state.importing}
+          onResolveUrls={(urls) => void importFlow.resolveCustomNodesFromUrls(urls)}
+          onNoCustomNodes={() => void importFlow.markWorkflowHasNoCustomNodes()}
+          onCancel={() => void importFlow.cancelImport()}
+        />
+      ) : null}
+      {state.pendingImport?.model_summary && !needsCustomNodeResolution ? (
         <RequiredModelsModal
           importResult={state.pendingImport}
           busy={state.importing || state.downloadingModels}
@@ -63,6 +77,125 @@ export function WorkflowImportDialogs({
         />
       ) : null}
     </>
+  );
+}
+
+export function RequiredCustomNodesModal({
+  importResult,
+  busy,
+  onResolveUrls,
+  onNoCustomNodes,
+  onCancel,
+}: {
+  importResult: WorkflowImportResponse;
+  busy: boolean;
+  onResolveUrls: (urlsByNodeType: Record<string, string>) => void;
+  onNoCustomNodes: () => void;
+  onCancel: () => void;
+}) {
+  const resolution = importResult.custom_node_resolution;
+  const fields = resolution?.github_url_fields ?? [];
+  const [urlsByNodeType, setUrlsByNodeType] = useState<Record<string, string>>({});
+  const allNodeTypes = useMemo(() => {
+    const ambiguous = resolution?.ambiguous_node_types.map((item) => item.node_type) ?? [];
+    return [...new Set([...(resolution?.unresolved_node_types ?? []), ...ambiguous])].sort();
+  }, [resolution?.ambiguous_node_types, resolution?.unresolved_node_types]);
+  if (!resolution) return null;
+  const needsComfyUpdate = resolution.status === "needs_comfyui_update";
+  const canDownload = fields.length > 0 && fields.some((field) => urlsByNodeType[field.node_type]?.trim());
+
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="required-custom-nodes-title">
+      <section className="required-models-modal" aria-busy={busy}>
+        <header className="required-models-modal__header">
+          <div>
+            <p className="eyebrow">Required custom nodes</p>
+            <h2 id="required-custom-nodes-title">{workflowDisplayName(importResult.workflow)}</h2>
+            <p>{resolution.user_facing_message}</p>
+          </div>
+          <button className="icon-button" type="button" aria-label="Cancel import" disabled={busy} onClick={onCancel}>
+            <X size={18} aria-hidden="true" />
+          </button>
+        </header>
+
+        <div className="required-models-modal__body">
+          {needsComfyUpdate ? (
+            <div className="notice notice--warning" role="status">
+              <AlertCircle size={18} aria-hidden="true" />
+              <div>
+                <strong>Managed ComfyUI may be too old</strong>
+                <span>{resolution.update_guidance ?? "Update managed ComfyUI from Settings to a newer version, then retry preparation."}</span>
+              </div>
+            </div>
+          ) : (
+            <div className="notice notice--warning" role="status">
+              <AlertCircle size={18} aria-hidden="true" />
+              <div>
+                <strong>Noofy could not find these custom nodes</strong>
+                <span>Paste the GitHub repository URL for each required custom node so Noofy can prepare it in an isolated runner.</span>
+              </div>
+            </div>
+          )}
+
+          <div className="custom-node-list">
+            {allNodeTypes.map((nodeType) => (
+              <article className="custom-node-row" key={nodeType}>
+                <div className="custom-node-row__title">
+                  <strong>{nodeType}</strong>
+                  {resolution.ambiguous_node_types.some((item) => item.node_type === nodeType) ? (
+                    <span>Several registry packages match this node.</span>
+                  ) : (
+                    <span>No registry package was found for this node.</span>
+                  )}
+                </div>
+                {fields.some((field) => field.node_type === nodeType) ? (
+                  <label className="custom-node-row__url">
+                    <span>GitHub URL</span>
+                    <input
+                      type="url"
+                      value={urlsByNodeType[nodeType] ?? ""}
+                      placeholder="https://github.com/owner/repository"
+                      disabled={busy || needsComfyUpdate}
+                      onChange={(event) =>
+                        setUrlsByNodeType((current) => ({
+                          ...current,
+                          [nodeType]: event.target.value,
+                        }))
+                      }
+                    />
+                  </label>
+                ) : null}
+              </article>
+            ))}
+          </div>
+
+          {busy ? (
+            <div className="required-models-modal__processing" role="status" aria-live="polite">
+              <Loader2 className="spin" size={16} aria-hidden="true" />
+              <span>Checking custom nodes...</span>
+            </div>
+          ) : null}
+        </div>
+
+        <footer className="required-models-modal__footer">
+          <button
+            className="primary-button"
+            type="button"
+            disabled={busy || needsComfyUpdate || !canDownload}
+            onClick={() => onResolveUrls(urlsByNodeType)}
+          >
+            {busy && !needsComfyUpdate ? <Loader2 className="spin" size={16} aria-hidden="true" /> : <Download size={16} aria-hidden="true" />}
+            Download custom nodes from URLs
+          </button>
+          <button className="secondary-button" type="button" disabled={busy} onClick={onNoCustomNodes}>
+            This workflow has no custom nodes
+          </button>
+          <button className="ghost-button" type="button" disabled={busy} onClick={onCancel}>
+            Cancel Import
+          </button>
+        </footer>
+      </section>
+    </div>
   );
 }
 

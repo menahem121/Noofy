@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import type { RequiredModelAvailability, WorkflowImportResponse } from "../../lib/api/noofyApi";
-import { RequiredModelsModal } from "./WorkflowImportModals";
+import { RequiredCustomNodesModal, RequiredModelsModal } from "./WorkflowImportModals";
 
 const modelsCss = readFileSync(resolve(process.cwd(), "src/styles/models.css"), "utf8");
 
@@ -427,5 +427,80 @@ describe("RequiredModelsModal", () => {
     expect(screen.getByText("Show technical details")).toBeInTheDocument();
     expect(screen.getByText("Workflow nodes (3)")).toBeInTheDocument();
     expect(screen.getByText(/CheckpointLoaderSimple/)).toBeInTheDocument();
+  });
+});
+
+describe("RequiredCustomNodesModal", () => {
+  const customNodeImport = {
+    ...importResult,
+    model_summary: null,
+    status: "missing_custom_nodes",
+    custom_node_resolution: {
+      status: "missing_custom_nodes",
+      user_facing_message: "Noofy could not find the required custom nodes for this workflow.",
+      unresolved_node_types: ["MissingSampler"],
+      ambiguous_node_types: [{ node_type: "SharedNode", package_ids: ["first", "second"] }],
+      github_url_fields: [
+        { node_type: "MissingSampler", label: "MissingSampler" },
+        { node_type: "SharedNode", label: "SharedNode" },
+      ],
+      can_provide_github_urls: true,
+      can_mark_no_custom_nodes: true,
+      update_guidance: null,
+      developer_details: {},
+    },
+  } satisfies WorkflowImportResponse;
+
+  it("lists unresolved and ambiguous node types and submits GitHub URLs", () => {
+    const onResolveUrls = vi.fn();
+    render(
+      <RequiredCustomNodesModal
+        importResult={customNodeImport}
+        busy={false}
+        onResolveUrls={onResolveUrls}
+        onNoCustomNodes={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("MissingSampler")).toBeInTheDocument();
+    expect(screen.getByText("SharedNode")).toBeInTheDocument();
+    expect(screen.getByText("Several registry packages match this node.")).toBeInTheDocument();
+
+    const inputs = screen.getAllByPlaceholderText("https://github.com/owner/repository");
+    fireEvent.change(inputs[0], { target: { value: "https://github.com/example/missing" } });
+    fireEvent.click(screen.getByRole("button", { name: "Download custom nodes from URLs" }));
+
+    expect(onResolveUrls).toHaveBeenCalledWith({
+      MissingSampler: "https://github.com/example/missing",
+    });
+  });
+
+  it("shows update guidance when the user says the workflow has no custom nodes", () => {
+    const onNoCustomNodes = vi.fn();
+    render(
+      <RequiredCustomNodesModal
+        importResult={{
+          ...customNodeImport,
+          status: "needs_comfyui_update",
+          custom_node_resolution: {
+            ...customNodeImport.custom_node_resolution,
+            status: "needs_comfyui_update",
+            user_facing_message: "Update managed ComfyUI, then retry.",
+            update_guidance: "Update managed ComfyUI from Settings to a newer version, then retry preparation.",
+          },
+        }}
+        busy={false}
+        onResolveUrls={vi.fn()}
+        onNoCustomNodes={onNoCustomNodes}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Managed ComfyUI may be too old")).toBeInTheDocument();
+    expect(screen.getByText("Update managed ComfyUI from Settings to a newer version, then retry preparation.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Download custom nodes from URLs" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "This workflow has no custom nodes" }));
+    expect(onNoCustomNodes).toHaveBeenCalledTimes(1);
   });
 });

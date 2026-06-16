@@ -128,6 +128,7 @@ class WorkflowRunnerLifecycleService:
             else settings.workflow_lease_sweep_interval_seconds,
         )
         self._workflow_lease_sweeper_task: asyncio.Task[None] | None = None
+        self._workflow_preparation_tasks: dict[str, asyncio.Task[dict[str, object]]] = {}
 
     # ------------------------------------------------------------------
     # Queued start handoff and cancellation (existing)
@@ -701,6 +702,13 @@ class WorkflowRunnerLifecycleService:
                 await task
         self._closed_view_release_tasks.clear()
         self._closed_view_release_last_outcomes.clear()
+        prepare_tasks = list(self._workflow_preparation_tasks.values())
+        for task in prepare_tasks:
+            task.cancel()
+        for task in prepare_tasks:
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        self._workflow_preparation_tasks.clear()
 
     # ------------------------------------------------------------------
     # Install state queries
@@ -797,6 +805,29 @@ class WorkflowRunnerLifecycleService:
     # ------------------------------------------------------------------
 
     async def prepare_workflow(self, workflow_id: str) -> dict[str, object]:
+        cached = self._cached_ready_prepare_payload(workflow_id)
+        if cached is not None:
+            return cached
+        existing = self._workflow_preparation_tasks.get(workflow_id)
+        if existing is not None and not existing.done():
+            self.log_store.add(
+                "info",
+                "Joining existing workflow preparation",
+                "runtime.runners.lifecycle_service",
+                workflow_id=workflow_id,
+            )
+            return await existing
+        if existing is not None and existing.done():
+            self._workflow_preparation_tasks.pop(workflow_id, None)
+        task = asyncio.create_task(self._prepare_workflow_with_reservation(workflow_id))
+        self._workflow_preparation_tasks[workflow_id] = task
+        try:
+            return await task
+        finally:
+            if self._workflow_preparation_tasks.get(workflow_id) is task:
+                self._workflow_preparation_tasks.pop(workflow_id, None)
+
+    async def _prepare_workflow_with_reservation(self, workflow_id: str) -> dict[str, object]:
         if not self.runner_supervisor.begin_workflow_preparation(workflow_id):
             return {
                 "workflow_id": workflow_id,
@@ -809,6 +840,37 @@ class WorkflowRunnerLifecycleService:
             return await self._prepare_workflow(workflow_id)
         finally:
             self.runner_supervisor.end_workflow_preparation(workflow_id)
+
+    def _cached_ready_prepare_payload(self, workflow_id: str) -> dict[str, object] | None:
+        if self.capsule_loader is None or self.capsule_installer is None:
+            return None
+        capsule_lock = self._preparable_capsule_lock(workflow_id)
+        if capsule_lock is None:
+            return None
+        state = self.capsule_installer.get_state(capsule_lock)
+        if state.status not in {
+            InstallStatus.READY,
+            InstallStatus.PREPARED_NEEDS_INPUT_SETUP,
+        }:
+            return None
+        payload = self._install_payload(
+            workflow_id,
+            state,
+            capsule_lock=capsule_lock,
+            requires_preparation=bool(capsule_lock.custom_nodes),
+        )
+        payload["reused_cached_preparation"] = True
+        self.log_store.add(
+            "info",
+            "Reusing cached workflow preparation",
+            "runtime.runners.lifecycle_service",
+            workflow_id=workflow_id,
+            details={
+                "capsule_fingerprint": capsule_lock.runtime.capsule_fingerprint,
+                "install_status": state.status.value,
+            },
+        )
+        return payload
 
     async def _prepare_workflow(self, workflow_id: str) -> dict[str, object]:
         if self.capsule_loader is None or self.capsule_installer is None:

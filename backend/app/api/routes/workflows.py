@@ -50,6 +50,10 @@ class WorkflowImportCommitRequest(BaseModel):
     duplicate_action: str | None = Field(default=None)
 
 
+class WorkflowImportCustomNodeUrlsRequest(BaseModel):
+    urls_by_node_type: dict[str, str] = Field(default_factory=dict)
+
+
 class GalleryImageAssetCopyRequest(BaseModel):
     input_id: str
     gallery_item_id: str
@@ -303,6 +307,40 @@ async def commit_workflow_import(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except NoofyImportError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/workflows/import/{import_session_id}/custom-nodes/resolve-from-urls")
+async def resolve_import_custom_nodes_from_urls(
+    import_session_id: str,
+    request: WorkflowImportCustomNodeUrlsRequest,
+    import_orchestrator: WorkflowImportOrchestratorDep,
+):
+    try:
+        return import_orchestrator.resolve_import_custom_nodes_from_urls(
+            import_session_id,
+            urls_by_node_type=request.urls_by_node_type,
+        )
+    except ImportSessionExpiredError as exc:
+        raise HTTPException(status_code=410, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/workflows/import/{import_session_id}/custom-nodes/no-custom-nodes")
+async def mark_import_has_no_custom_nodes(
+    import_session_id: str,
+    import_orchestrator: WorkflowImportOrchestratorDep,
+):
+    try:
+        return import_orchestrator.mark_import_has_no_custom_nodes(import_session_id)
+    except ImportSessionExpiredError as exc:
+        raise HTTPException(status_code=410, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.delete("/workflows/import/{import_session_id}")

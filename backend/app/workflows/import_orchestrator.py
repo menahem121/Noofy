@@ -150,6 +150,62 @@ def _raw_comfyui_import_details(package: WorkflowPackage) -> dict[str, object]:
     return {"raw_comfyui_json": details}
 
 
+def _source_resolution_details(package: WorkflowPackage) -> dict[str, object]:
+    details = (
+        package.import_metadata.developer_details.get("source_resolution")
+        if package.import_metadata is not None
+        else None
+    )
+    return details if isinstance(details, dict) else {}
+
+
+def _custom_node_resolution_payload(package: WorkflowPackage) -> dict[str, object] | None:
+    status = package.import_metadata.status if package.import_metadata else None
+    source_resolution = _source_resolution_details(package)
+    if status not in {"missing_custom_nodes", "needs_comfyui_update"} and not source_resolution:
+        return None
+    unresolved_node_types = [
+        item for item in source_resolution.get("unresolved_node_types", [])
+        if isinstance(item, str)
+    ]
+    ambiguous_node_types = [
+        item for item in source_resolution.get("ambiguous_node_types", [])
+        if isinstance(item, dict)
+    ]
+    unresolved_from_ambiguous = [
+        item["node_type"] for item in ambiguous_node_types if isinstance(item.get("node_type"), str)
+    ]
+    fields = [
+        {"node_type": node_type, "label": node_type}
+        for node_type in sorted(set(unresolved_node_types + unresolved_from_ambiguous))
+    ]
+    if not fields and status not in {"missing_custom_nodes", "needs_comfyui_update"}:
+        return None
+    return {
+        "status": status or source_resolution.get("status", "missing_custom_nodes"),
+        "user_facing_message": (
+            package.import_metadata.user_facing_message
+            if package.import_metadata is not None
+            else "Noofy could not find the required custom nodes for this workflow."
+        ),
+        "unresolved_node_types": unresolved_node_types,
+        "ambiguous_node_types": ambiguous_node_types,
+        "github_url_fields": fields,
+        "can_provide_github_urls": bool(fields),
+        "can_mark_no_custom_nodes": bool(fields),
+        "update_guidance": source_resolution.get("update_guidance"),
+        "developer_details": source_resolution,
+    }
+
+
+def _import_needs_custom_node_resolution(package: WorkflowPackage) -> bool:
+    payload = _custom_node_resolution_payload(package)
+    return payload is not None and payload.get("status") in {
+        "missing_custom_nodes",
+        "needs_comfyui_update",
+    }
+
+
 class WorkflowImportOrchestrator:
     """Stateful orchestrator for staged workflow import and per-import model downloads."""
 
@@ -217,6 +273,9 @@ class WorkflowImportOrchestrator:
             "custom_node_count": len(package.custom_nodes),
             "unresolved_input_count": len(package.unresolved_runtime_inputs),
         }
+        custom_node_resolution = _custom_node_resolution_payload(package)
+        if custom_node_resolution is not None:
+            response["custom_node_resolution"] = custom_node_resolution
         if self.history_service is not None:
             self.history_service.record_workflow_imported(response["workflow"])
         self._schedule_post_import_preparation(package)
@@ -303,7 +362,11 @@ class WorkflowImportOrchestrator:
         )
         required_model_count = len(group_required_models(package.required_models))
         duplicate_identity = self._duplicate_identity_payload(package)
-        if not package.required_models and duplicate_identity is None:
+        if (
+            not package.required_models
+            and duplicate_identity is None
+            and not _import_needs_custom_node_resolution(package)
+        ):
             committed = self.import_workflow_archive(
                 data,
                 original_filename=original_filename,
@@ -356,7 +419,45 @@ class WorkflowImportOrchestrator:
             unresolved_input_count=len(package.unresolved_runtime_inputs),
             model_summary=model_summary,
             duplicate_identity=duplicate_identity,
+            custom_node_resolution=_custom_node_resolution_payload(package),
         )
+
+    def resolve_import_custom_nodes_from_urls(
+        self,
+        import_session_id: str,
+        *,
+        urls_by_node_type: dict[str, str],
+    ) -> StagedWorkflowImportResponse:
+        pending = self._pending_import_or_raise(import_session_id)
+        if self._has_active_import_download(pending):
+            raise RuntimeError("Model download is still running. Cancel it or wait for it to finish before continuing.")
+        pending.package = self.imported_package_store.resolve_custom_nodes_from_github_urls(
+            pending.package,
+            urls_by_node_type=urls_by_node_type,
+            allow_unverified_community_preparation=pending.allow_unverified_community_preparation,
+        )
+        pending.updated_at = datetime.now(UTC)
+        return self._pending_import_response(import_session_id, pending)
+
+    def mark_import_has_no_custom_nodes(
+        self,
+        import_session_id: str,
+    ) -> StagedWorkflowImportResponse:
+        pending = self._pending_import_or_raise(import_session_id)
+        if self._has_active_import_download(pending):
+            raise RuntimeError("Model download is still running. Cancel it or wait for it to finish before continuing.")
+        refreshed = self.imported_package_store.preview_archive(
+            pending.data,
+            original_filename=pending.original_filename,
+            allow_unverified_community_preparation=pending.allow_unverified_community_preparation,
+        )
+        if _import_needs_custom_node_resolution(refreshed):
+            refreshed = self.imported_package_store.mark_no_custom_nodes_guidance(
+                refreshed
+            )
+        pending.package = refreshed
+        pending.updated_at = datetime.now(UTC)
+        return self._pending_import_response(import_session_id, pending)
 
     def start_missing_model_download_for_import(
         self, import_session_id: str
@@ -470,6 +571,10 @@ class WorkflowImportOrchestrator:
         pending = self._pending_import_or_raise(import_session_id)
         if self._has_active_import_download(pending):
             raise RuntimeError("Model download is still running. Cancel it or wait for it to finish before continuing.")
+        if _import_needs_custom_node_resolution(pending.package):
+            raise RuntimeError(
+                "Noofy needs custom-node information before importing this workflow."
+            )
         if pending.duplicate_identity is not None and duplicate_action not in {"replace", "copy"}:
             raise DuplicateWorkflowIdentityError(
                 "This workflow is already in Noofy. Choose Replace existing workflow, Import as copy, or Cancel import."
@@ -535,6 +640,41 @@ class WorkflowImportOrchestrator:
             "import_session_id": import_session_id,
             "status": "canceled" if removed is not None else "not_found",
         }
+
+    def _pending_import_response(
+        self,
+        import_session_id: str,
+        pending: _PendingWorkflowImport,
+    ) -> StagedWorkflowImportResponse:
+        package = pending.package
+        status = package.import_metadata.status if package.import_metadata else "imported"
+        message = package.import_metadata.user_facing_message if package.import_metadata else "Imported"
+        if pending.duplicate_identity is not None:
+            status = "duplicate_identity"
+            message = "This workflow is already in Noofy. Choose how to import it."
+        model_summary = (
+            self._checking_model_summary(package)
+            if package.required_models and pending.active_verification_job_id is None
+            else None
+        )
+        if pending.active_verification_job_id is not None:
+            job = self._import_model_verification_jobs.get(
+                pending.active_verification_job_id
+            )
+            model_summary = job.model_summary if job is not None else model_summary
+        return StagedWorkflowImportResponse(
+            import_session_id=import_session_id,
+            workflow_id=package.metadata.id,
+            status=status,
+            user_facing_message=message,
+            workflow=self.workflow_library_service.workflow_summary(package),
+            required_model_count=len(group_required_models(package.required_models)),
+            custom_node_count=len(package.custom_nodes),
+            unresolved_input_count=len(package.unresolved_runtime_inputs),
+            model_summary=model_summary,
+            duplicate_identity=pending.duplicate_identity,
+            custom_node_resolution=_custom_node_resolution_payload(package),
+        )
 
     def _start_model_verification_for_import(self, import_session_id: str) -> None:
         pending = self._pending_import_or_raise(import_session_id)

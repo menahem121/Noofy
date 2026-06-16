@@ -468,7 +468,7 @@ describe("App workflow tabs", () => {
     expect(await screen.findByText("Home Drop was added to your local workflows.")).toBeInTheDocument();
   });
 
-  it("advertises only .noofy support in the global drop overlay", async () => {
+  it("advertises .noofy and raw .json support in the global drop overlay", async () => {
     render(<App />);
 
     expect(await screen.findByText("Built-in Workflows")).toBeInTheDocument();
@@ -477,7 +477,7 @@ describe("App workflow tabs", () => {
 
     expect(screen.getByText("Drop workflow package to import")).toBeInTheDocument();
     expect(screen.getByText(".noofy files use the normal Noofy import review.")).toBeInTheDocument();
-    expect(screen.queryByText(/\.json/i)).not.toBeInTheDocument();
+    expect(screen.getByText(".json")).toBeInTheDocument();
 
     fireEvent.dragLeave(window, { dataTransfer });
   });
@@ -611,15 +611,30 @@ describe("App workflow tabs", () => {
     }
   });
 
-  it("keeps raw ComfyUI .json drops on a friendly unsupported path", async () => {
+  it("sends raw ComfyUI .json drops through workflow import preview", async () => {
+    importPreviewResponses.set("raw-workflow.json", {
+      import_session_id: null,
+      workflow_id: "raw_workflow",
+      status: "needs_input_setup",
+      user_facing_message: "Needs input setup",
+      workflow: {
+        id: "raw_workflow",
+        name: "Raw Workflow",
+        version: "0.1.0",
+        description: "",
+      },
+      required_model_count: 0,
+      custom_node_count: 0,
+      unresolved_input_count: 1,
+      model_summary: null,
+    });
     render(<App />);
 
     await screen.findByText("Built-in Workflows");
     dropFiles([new File(["{}"], "raw-workflow.json", { type: "application/json" })]);
 
-    expect(await screen.findByText("Raw ComfyUI .json import is not ready yet. Import a .noofy workflow package for now."))
-      .toBeInTheDocument();
-    expect(importPreviewWasRequested()).toBe(false);
+    await waitFor(() => expect(importPreviewWasRequested("raw-workflow.json")).toBe(true));
+    expect(screen.queryByText(/not a supported workflow import file/i)).not.toBeInTheDocument();
   });
 
   it("ignores dashboard builder widget drags so global import does not intercept them", async () => {

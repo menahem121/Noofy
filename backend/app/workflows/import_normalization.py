@@ -756,6 +756,85 @@ def comfyui_workflow_node_types(workflow: dict[str, Any]) -> set[str]:
     return node_types
 
 
+def executable_comfyui_workflow_definition_node_types(
+    workflow: dict[str, Any],
+) -> set[str]:
+    """Return node types from UI definitions proven referenced by active nodes."""
+    active_definition_ids = _active_ui_definition_ids(workflow)
+    if not active_definition_ids:
+        return set()
+    node_types: set[str] = set()
+    for definition_id, definition in _iter_ui_workflow_definitions(workflow):
+        if definition_id not in active_definition_ids:
+            continue
+        for node in _iter_comfyui_workflow_nodes(definition):
+            node_type = optional_string_field(node, "type")
+            if node_type:
+                node_types.add(node_type)
+    return node_types
+
+
+def _active_ui_definition_ids(workflow: dict[str, Any]) -> set[str]:
+    active: set[str] = set()
+    nodes = workflow.get("nodes")
+    if not isinstance(nodes, list):
+        return active
+    available_ids = {definition_id for definition_id, _ in _iter_ui_workflow_definitions(workflow)}
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        node_type = optional_string_field(node, "type")
+        for candidate in _ui_node_definition_references(node):
+            if candidate in available_ids:
+                active.add(candidate)
+        if not node_type:
+            continue
+        for prefix in ("workflow/", "workflow>"):
+            if not node_type.startswith(prefix):
+                continue
+            candidate = node_type.removeprefix(prefix)
+            if candidate in available_ids:
+                active.add(candidate)
+    return active
+
+
+def _ui_node_definition_references(node: dict[str, Any]) -> set[str]:
+    references: set[str] = set()
+    for key in ("definition_id", "subgraph_id", "workflow_id", "subgraph"):
+        value = node.get(key)
+        if isinstance(value, str) and value.strip():
+            references.add(value.strip())
+    properties = node.get("properties")
+    if isinstance(properties, dict):
+        for key in ("definition_id", "subgraph_id", "workflow_id", "subgraph"):
+            value = properties.get(key)
+            if isinstance(value, str) and value.strip():
+                references.add(value.strip())
+    return references
+
+
+def _iter_ui_workflow_definitions(
+    workflow: dict[str, Any],
+) -> Iterator[tuple[str, dict[str, Any]]]:
+    definitions = workflow.get("definitions")
+    if not isinstance(definitions, dict):
+        return
+    for key, value in definitions.items():
+        if isinstance(value, dict):
+            yield str(key), value
+    subgraphs = definitions.get("subgraphs")
+    if isinstance(subgraphs, list):
+        for index, value in enumerate(subgraphs):
+            if not isinstance(value, dict):
+                continue
+            definition_id = (
+                optional_string_field(value, "id")
+                or optional_string_field(value, "name")
+                or str(index)
+            )
+            yield definition_id, value
+
+
 def is_comfyui_api_graph(value: Any) -> bool:
     if not isinstance(value, dict) or not value:
         return False

@@ -3,6 +3,9 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import urllib.error
+import urllib.parse
+import urllib.request
 import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -19,7 +22,10 @@ from app.archive_safety import (
 )
 from app.core.config import settings
 from app.diagnostics import DiagnosticsSink
-from app.runtime.dependencies.custom_nodes import load_core_node_manifest_catalog
+from app.runtime.dependencies.custom_nodes import (
+    core_node_manifest_catalog_for_runtime_profiles,
+    load_core_node_manifest_catalog,
+)
 from app.runtime.dependencies.isolation import CapsuleLock, HardwareObservations, ModelLock, TrustLevel
 from app.runtime.profiles import RuntimeProfileCatalog
 from app.runtime.node_registry import (
@@ -27,6 +33,7 @@ from app.runtime.node_registry import (
     CustomNodeSourceResolutionRequest,
     NodeRegistryResolutionError,
     NodeRegistryResolutionErrorCode,
+    NodeRegistrySourceKind,
     NodeRegistryResolver,
     NodeRegistrySource,
 )
@@ -95,6 +102,7 @@ from app.workflows.import_normalization import (
     comfyui_api_graph_from_ui_workflow,
     comfyui_workflow_node_types,
     detect_unresolved_runtime_inputs,
+    executable_comfyui_workflow_definition_node_types,
     filter_resolved_runtime_inputs,
     has_nonempty_launch_option,
     is_comfyui_ui_workflow,
@@ -154,6 +162,32 @@ class WorkflowDataImporter(Protocol):
     def extract_source_files(self, target_dir: Path) -> None: ...
 
 
+class GitHubCustomNodeUrlResolver(Protocol):
+    def resolve(self, url: str, *, node_type: str) -> tuple[str, NodeRegistrySource]: ...
+
+
+class GitHubCustomNodeUrlResolutionError(RuntimeError):
+    pass
+
+
+class DefaultGitHubCustomNodeUrlResolver:
+    """Resolve user-provided GitHub repository URLs into pinned archive facts."""
+
+    def resolve(self, url: str, *, node_type: str) -> tuple[str, NodeRegistrySource]:
+        owner, repo, requested_ref = _parse_github_repo_url(url)
+        commit_sha = _github_commit_sha(owner, repo, requested_ref)
+        archive_url = f"https://codeload.github.com/{owner}/{repo}/zip/{commit_sha}"
+        archive_hash = _sha256_url(archive_url)
+        package_id = safe_store_segment(f"github-{owner}-{repo}")
+        return package_id, NodeRegistrySource(
+            source_kind=NodeRegistrySourceKind.GIT_ZIP_ARCHIVE,
+            source_url=archive_url,
+            source_ref=commit_sha,
+            source_content_hash=f"sha256:{archive_hash}",
+            archive_subdir=f"{repo}-{commit_sha}",
+        )
+
+
 class ImportedWorkflowPackageStore:
     """Stores normalized imported workflow packages under workflow-store."""
 
@@ -165,6 +199,7 @@ class ImportedWorkflowPackageStore:
         dashboard_assets_dir: Path | None = None,
         node_registry_resolver: NodeRegistryResolver | None = None,
         custom_node_source_cache: CustomNodeSourceCache | None = None,
+        custom_node_github_resolver: GitHubCustomNodeUrlResolver | None = None,
         trust_verifier: TrustVerifier | None = None,
         runtime_profile_catalog_provider: Callable[[], RuntimeProfileCatalog] | None = None,
     ) -> None:
@@ -173,6 +208,9 @@ class ImportedWorkflowPackageStore:
         self.dashboard_assets_dir = dashboard_assets_dir or settings.paths.dashboard_assets_dir
         self.node_registry_resolver = node_registry_resolver
         self.custom_node_source_cache = custom_node_source_cache
+        self.custom_node_github_resolver = (
+            custom_node_github_resolver or DefaultGitHubCustomNodeUrlResolver()
+        )
         self.trust_verifier = trust_verifier or TrustVerifier()
         self.runtime_profile_catalog_provider = runtime_profile_catalog_provider
 
@@ -241,6 +279,147 @@ class ImportedWorkflowPackageStore:
         except Exception as exc:
             self._log_import_failure(original_filename, exc)
             raise
+
+    def resolve_custom_nodes_from_github_urls(
+        self,
+        package: WorkflowPackage,
+        *,
+        urls_by_node_type: dict[str, str],
+        allow_unverified_community_preparation: bool,
+    ) -> WorkflowPackage:
+        source_resolution = _source_resolution_details(package)
+        if not source_resolution:
+            return package
+        unresolved_node_types = [
+            item for item in source_resolution.get("unresolved_node_types", [])
+            if isinstance(item, str)
+        ]
+        ambiguous_node_types = [
+            item.get("node_type")
+            for item in source_resolution.get("ambiguous_node_types", [])
+            if isinstance(item, dict) and isinstance(item.get("node_type"), str)
+        ]
+        node_types = sorted(set(unresolved_node_types + ambiguous_node_types))
+        if not node_types:
+            return package
+
+        records_by_id = {record.id: record for record in package.custom_nodes}
+        resolved_reports: list[dict[str, object]] = []
+        still_unresolved: list[str] = []
+        failed: list[dict[str, object]] = []
+        for node_type in node_types:
+            raw_url = urls_by_node_type.get(node_type, "").strip()
+            if not raw_url:
+                still_unresolved.append(node_type)
+                continue
+            try:
+                package_id, source = self.custom_node_github_resolver.resolve(
+                    raw_url,
+                    node_type=node_type,
+                )
+            except Exception as exc:
+                failed.append(
+                    {
+                        "node_type": node_type,
+                        "url": raw_url,
+                        "error": str(exc),
+                    }
+                )
+                continue
+            existing = records_by_id.get(package_id)
+            if existing is None:
+                records_by_id[package_id] = WorkflowCustomNodeRecord(
+                    id=package_id,
+                    folder_name=package_id,
+                    source=source.source_url,
+                    included=False,
+                    node_types=[node_type],
+                    source_ref=source.source_ref,
+                    source_content_hash=source.source_content_hash,
+                    source_archive_subdir=source.archive_subdir,
+                    resolution_method="user_github_url",
+                )
+            else:
+                records_by_id[package_id] = existing.model_copy(
+                    update={
+                        "source": source.source_url,
+                        "included": False,
+                        "node_types": sorted(set(existing.node_types) | {node_type}),
+                        "source_ref": source.source_ref,
+                        "source_content_hash": source.source_content_hash,
+                        "source_archive_subdir": source.archive_subdir,
+                        "resolution_method": "user_github_url",
+                    }
+                )
+            resolved_reports.append(
+                {
+                    "node_type": node_type,
+                    "package_id": package_id,
+                    "source_ref": source.source_ref,
+                    "resolution_method": "user_github_url",
+                }
+            )
+
+        updated = package.model_copy(update={"custom_nodes": list(records_by_id.values())})
+        if still_unresolved or failed:
+            return _missing_raw_custom_nodes(
+                updated,
+                reason="user_github_url_resolution_failed",
+                unresolved_node_types=still_unresolved,
+                ambiguous_node_types=[],
+                resolved_custom_nodes=resolved_reports,
+                failed_custom_nodes=failed,
+            )
+
+        updated = _package_with_raw_custom_node_detection(
+            updated,
+            {
+                "status": "resolved_from_user_github_urls",
+                "required_custom_node_types": node_types,
+                "resolved_custom_nodes": resolved_reports,
+            },
+        )
+        updated = _package_with_source_policy(
+            updated,
+            community_preparation_opted_in=allow_unverified_community_preparation,
+            policy_status=_source_policy_status_for_import(updated),
+        )
+        return self._with_resolved_community_sources(
+            updated,
+            allow_unverified_community_preparation=allow_unverified_community_preparation,
+        )
+
+    def mark_no_custom_nodes_guidance(self, package: WorkflowPackage) -> WorkflowPackage:
+        source_resolution = _source_resolution_details(package)
+        unresolved = []
+        ambiguous = []
+        if source_resolution:
+            unresolved = [
+                item for item in source_resolution.get("unresolved_node_types", [])
+                if isinstance(item, str)
+            ]
+            ambiguous = [
+                item for item in source_resolution.get("ambiguous_node_types", [])
+                if isinstance(item, dict)
+            ]
+        return _package_with_import_resolution_status(
+            package,
+            status="needs_comfyui_update",
+            message=(
+                "Noofy could not find these nodes in the selected managed ComfyUI runtime. "
+                "Update managed ComfyUI from Settings to a newer version, then retry preparation."
+            ),
+            source_resolution={
+                "status": "needs_comfyui_update",
+                "reason": "user_asserted_no_custom_nodes",
+                "unresolved_node_types": unresolved,
+                "ambiguous_node_types": ambiguous,
+                "update_guidance": (
+                    "Update managed ComfyUI from Settings to a newer version, then retry preparation. "
+                    "If the nodes are still missing, provide the GitHub URL for the custom node repository."
+                ),
+            },
+        )
 
     def _persist_imported_archive(
         self,
@@ -466,16 +645,17 @@ class ImportedWorkflowPackageStore:
         if raw_details is None:
             return package
 
-        detected_node_types = _raw_comfyui_detected_node_types(package)
+        core_node_types = self._selected_core_runtime_node_types()
+        detected_node_types = _raw_comfyui_required_node_types(package)
         missing_node_types = sorted(
             node_type
             for node_type in detected_node_types
-            if node_type not in _core_runtime_node_types()
+            if node_type not in core_node_types
         )
         raw_details = {
             **raw_details,
-            "node_types": sorted(detected_node_types),
-            "core_node_count": len(_core_runtime_node_types()),
+            "executable_node_types": sorted(detected_node_types),
+            "core_node_count": len(core_node_types),
             "required_custom_node_types": missing_node_types,
         }
         package = _package_with_raw_comfyui_details(package, raw_details)
@@ -595,6 +775,29 @@ class ImportedWorkflowPackageStore:
                 "resolved_custom_nodes": resolved_reports,
             },
         )
+
+    def _selected_core_runtime_node_types(self) -> set[str]:
+        catalog = (
+            self.runtime_profile_catalog_provider()
+            if self.runtime_profile_catalog_provider is not None
+            else None
+        )
+        if catalog is None:
+            from app.runtime.profiles import load_runtime_profile_catalog
+            from app.runtime.profiles.profiles import DEFAULT_RUNTIME_PROFILE_CATALOG_PATH
+
+            catalog = load_runtime_profile_catalog(DEFAULT_RUNTIME_PROFILE_CATALOG_PATH)
+        core_catalog = core_node_manifest_catalog_for_runtime_profiles(
+            load_core_node_manifest_catalog(),
+            catalog,
+        )
+        profile, variant = _select_import_runtime_profile(catalog.profiles)
+        manifest = core_catalog.get(
+            runtime_profile_id=profile.runtime_profile_id,
+            runtime_profile_variant_id=variant.runtime_profile_variant_id,
+            runtime_profile_manifest_hash=profile.runtime_profile_manifest_hash,
+        )
+        return set(manifest.node_types)
 
     def _with_resolved_community_sources(
         self,
@@ -1107,6 +1310,11 @@ class RawComfyUIJsonImporter:
             if comfyui_workflow is not None
             else []
         )
+        executable_ui_node_types = (
+            sorted(executable_comfyui_workflow_definition_node_types(comfyui_workflow))
+            if comfyui_workflow is not None
+            else []
+        )
         all_node_types = sorted(set(api_node_types) | set(ui_node_types))
         dashboard = DashboardSchema(version=NOOFY_ARCHIVE_SCHEMA_VERSION, status="not_configured")
         unresolved_inputs = filter_resolved_runtime_inputs(
@@ -1161,6 +1369,7 @@ class RawComfyUIJsonImporter:
                 "required_model_count": len(unique_required_models(required_models)),
                 "api_node_types": api_node_types,
                 "ui_node_types": ui_node_types,
+                "executable_ui_node_types": executable_ui_node_types,
                 "node_types": all_node_types,
             }
         }
@@ -1310,6 +1519,15 @@ def _raw_comfyui_details(package: WorkflowPackage) -> dict[str, Any] | None:
     return details if isinstance(details, dict) else None
 
 
+def _source_resolution_details(package: WorkflowPackage) -> dict[str, Any] | None:
+    details = (
+        package.import_metadata.developer_details.get("source_resolution")
+        if package.import_metadata is not None
+        else None
+    )
+    return details if isinstance(details, dict) else None
+
+
 def _package_with_raw_comfyui_details(
     package: WorkflowPackage,
     raw_details: dict[str, object],
@@ -1336,10 +1554,10 @@ def _package_with_raw_custom_node_detection(
     return _package_with_raw_comfyui_details(package, raw_details)
 
 
-def _raw_comfyui_detected_node_types(package: WorkflowPackage) -> set[str]:
+def _raw_comfyui_required_node_types(package: WorkflowPackage) -> set[str]:
     raw_details = _raw_comfyui_details(package) or {}
     detected: set[str] = set(_graph_node_types(package.comfyui_graph))
-    for key in ("node_types", "api_node_types", "ui_node_types"):
+    for key in ("executable_ui_node_types",):
         value = raw_details.get(key)
         if not isinstance(value, list):
             continue
@@ -1347,6 +1565,38 @@ def _raw_comfyui_detected_node_types(package: WorkflowPackage) -> set[str]:
             if isinstance(item, str) and _is_resolvable_workflow_node_type(item):
                 detected.add(item)
     return detected
+
+
+def _missing_raw_custom_nodes(
+    package: WorkflowPackage,
+    *,
+    reason: str,
+    unresolved_node_types: list[str],
+    ambiguous_node_types: list[dict[str, object]] | None = None,
+    resolved_custom_nodes: list[dict[str, object]] | None = None,
+    failed_custom_nodes: list[dict[str, object]] | None = None,
+) -> WorkflowPackage:
+    source_resolution = {
+        "status": "failed",
+        "reason": reason,
+        "unresolved_node_types": sorted(unresolved_node_types),
+        "ambiguous_node_types": ambiguous_node_types or [],
+        "resolved_custom_nodes": resolved_custom_nodes or [],
+        "failed_custom_nodes": failed_custom_nodes or [],
+    }
+    package = _package_with_raw_custom_node_detection(
+        package,
+        {
+            "status": "missing_custom_nodes",
+            **source_resolution,
+        },
+    )
+    return _package_with_import_resolution_status(
+        package,
+        status="missing_custom_nodes",
+        message="Noofy could not find the required custom nodes for this workflow.",
+        source_resolution=source_resolution,
+    )
 
 
 def _unsupported_raw_custom_nodes(
@@ -1357,34 +1607,13 @@ def _unsupported_raw_custom_nodes(
     ambiguous_node_types: list[dict[str, object]] | None = None,
     resolved_custom_nodes: list[dict[str, object]] | None = None,
 ) -> WorkflowPackage:
-    source_resolution = {
-        "status": "failed",
-        "reason": reason,
-        "unresolved_node_types": sorted(unresolved_node_types),
-        "ambiguous_node_types": ambiguous_node_types or [],
-        "resolved_custom_nodes": resolved_custom_nodes or [],
-    }
-    package = _package_with_raw_custom_node_detection(
+    return _missing_raw_custom_nodes(
         package,
-        {
-            "status": "unsupported",
-            **source_resolution,
-        },
+        reason=reason,
+        unresolved_node_types=unresolved_node_types,
+        ambiguous_node_types=ambiguous_node_types,
+        resolved_custom_nodes=resolved_custom_nodes,
     )
-    return _package_with_import_resolution_status(
-        package,
-        status="unsupported",
-        message="Unsupported workflow",
-        source_resolution=source_resolution,
-    )
-
-
-def _core_runtime_node_types() -> set[str]:
-    catalog = load_core_node_manifest_catalog()
-    node_types: set[str] = set()
-    for manifest in catalog.manifests:
-        node_types.update(manifest.node_types)
-    return node_types
 
 
 def _import_status(
@@ -1412,6 +1641,73 @@ def _package_with_import_resolution_status(
         message=message,
         source_resolution=source_resolution,
     )
+
+
+def _parse_github_repo_url(url: str) -> tuple[str, str, str | None]:
+    parsed = urllib.parse.urlparse(url.strip())
+    if parsed.scheme != "https" or parsed.netloc.casefold() != "github.com":
+        raise GitHubCustomNodeUrlResolutionError(
+            "Paste a GitHub repository URL that starts with https://github.com/."
+        )
+    parts = [part for part in parsed.path.split("/") if part]
+    if len(parts) < 2:
+        raise GitHubCustomNodeUrlResolutionError(
+            "Paste the GitHub repository URL for this custom node."
+        )
+    owner, repo = parts[0], parts[1]
+    if owner in {".", ".."} or repo in {".", ".."}:
+        raise GitHubCustomNodeUrlResolutionError("GitHub repository URL is invalid.")
+    ref: str | None = None
+    if len(parts) >= 4 and parts[2] in {"tree", "commit"}:
+        ref = "/".join(parts[3:])
+    return owner, repo.removesuffix(".git"), ref
+
+
+def _github_commit_sha(owner: str, repo: str, ref: str | None) -> str:
+    if ref and _is_full_git_sha(ref):
+        return ref
+    api_url = (
+        f"https://api.github.com/repos/{owner}/{repo}/commits/{urllib.parse.quote(ref, safe='')}"
+        if ref
+        else f"https://api.github.com/repos/{owner}/{repo}/commits/HEAD"
+    )
+    try:
+        request = urllib.request.Request(
+            api_url,
+            headers={"Accept": "application/vnd.github+json"},
+        )
+        with urllib.request.urlopen(request, timeout=30) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        raise GitHubCustomNodeUrlResolutionError(
+            "Noofy could not resolve that GitHub repository to a pinned commit."
+        ) from exc
+    sha = payload.get("sha") if isinstance(payload, dict) else None
+    if not isinstance(sha, str) or not _is_full_git_sha(sha):
+        raise GitHubCustomNodeUrlResolutionError(
+            "Noofy could not resolve that GitHub repository to a pinned commit."
+        )
+    return sha
+
+
+def _sha256_url(url: str) -> str:
+    digest = hashlib.sha256()
+    try:
+        with urllib.request.urlopen(url, timeout=60) as response:
+            while True:
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                digest.update(chunk)
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise GitHubCustomNodeUrlResolutionError(
+            "Noofy could not download and verify the GitHub custom-node archive."
+        ) from exc
+    return digest.hexdigest()
+
+
+def _is_full_git_sha(value: str) -> bool:
+    return len(value) == 40 and all(char in "0123456789abcdefABCDEF" for char in value)
 
 
 def _package_with_trust_verification(
