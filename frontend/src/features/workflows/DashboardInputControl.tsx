@@ -1619,7 +1619,7 @@ function ImageMaskEditorModal({
 
         <footer className="mask-editor__footer">
           <button className="secondary-button" type="button" disabled={saving} onClick={onClose}>
-            Close
+            Cancel
           </button>
           <button className="primary-button" type="button" disabled={!ready || saving || Boolean(localError)} onClick={() => void saveMask()}>
             <Save size={16} aria-hidden="true" />
