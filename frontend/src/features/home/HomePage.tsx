@@ -794,7 +794,7 @@ export function HomePage({
                 <h2>Import any ComfyUI Workflow</h2>
                 <p>
                   Import a <span className="workflow-extension workflow-extension--json">.json</span> or{" "}
-                  <span className="workflow-extension workflow-extension--noofy">.noofy</span> ComfyUI workflow to run it through Noofy.
+                  <span className="workflow-extension workflow-extension--noofy">.noofy</span> workflow to run it through Noofy.
                 </p>
               </div>
               <label
