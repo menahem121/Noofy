@@ -28,6 +28,19 @@ function jsonResponse(data: unknown, status = 200) {
   });
 }
 
+function binaryResponse(data: string, contentType: string, status = 200) {
+  return new Response(new TextEncoder().encode(data), {
+    status,
+    headers: {
+      "Content-Type": contentType,
+    },
+  });
+}
+
+function imageResponse(data = "image", status = 200) {
+  return binaryResponse(data, "image/png", status);
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
@@ -6286,7 +6299,7 @@ describe("WorkflowRunPage", () => {
         });
       }
       if (/\/api\/assets\/[^/]+$/.test(url)) {
-        return new Response(new Blob(["asset"], { type: "application/octet-stream" }), { status: 200 });
+        return binaryResponse("asset", "application/octet-stream");
       }
       return undefined;
     });
@@ -6383,7 +6396,7 @@ describe("WorkflowRunPage", () => {
         });
       }
       if (url.endsWith(`/api/assets/${assetId}`)) {
-        return new Response(new Blob(["input"], { type: "image/png" }), { status: 200 });
+        return imageResponse("input");
       }
       return undefined;
     });
@@ -6658,11 +6671,11 @@ describe("WorkflowRunPage", () => {
           });
         }
         if (url.endsWith(`/api/assets/${maskedAssetId}`)) {
-          return new Response(new Blob(["masked"], { type: "image/png" }), { status: 200 });
+          return imageResponse("masked");
         }
         if (url.endsWith(`/api/assets/${sourceAssetId}`)) {
           nextObjectUrl = "blob:source-asset";
-          return new Response(new Blob(["source"], { type: "image/png" }), { status: 200 });
+          return imageResponse("source");
         }
         if (url.endsWith("/api/workflows/text_to_image_v0/user-state")) {
           return jsonResponse({
@@ -6985,7 +6998,7 @@ describe("WorkflowRunPage", () => {
       }
 
       if (url.endsWith("/api/jobs/job-canvas/outputs/view?filename=node-9-a.png&subfolder=&type=output")) {
-        return Promise.resolve(new Response(new Blob(["image"], { type: "image/png" }), { status: 200 }));
+        return Promise.resolve(imageResponse());
       }
 
       return Promise.reject(new Error(`Unexpected request: ${url}`));
@@ -7172,7 +7185,7 @@ describe("WorkflowRunPage", () => {
         );
       }
       if (url.endsWith(`/api/assets/${assetId}`)) {
-        return Promise.resolve(new Response(new Blob(["input"], { type: "image/png" }), { status: 200 }));
+        return Promise.resolve(imageResponse("input"));
       }
       if (url.endsWith("/api/workflows/text_to_image_v0/user-state")) {
         return Promise.resolve(

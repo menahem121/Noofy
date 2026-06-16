@@ -13,6 +13,13 @@ function jsonResponse(data: unknown, status = 200) {
   });
 }
 
+function imageResponse(data = "image", status = 200) {
+  return new Response(new TextEncoder().encode(data), {
+    status,
+    headers: { "Content-Type": "image/png" },
+  });
+}
+
 function mockMaskEditorCanvas({
   imageWidth = 2,
   imageHeight = 1,
@@ -146,7 +153,7 @@ function renderEditableImageWithMask({
         kind: "image",
       }));
     }
-    return Promise.resolve(new Response(new Blob(["image"], { type: "image/png" })));
+    return Promise.resolve(imageResponse());
   });
 
   const renderResult = render(
@@ -419,7 +426,7 @@ describe("DashboardInputControl", () => {
           }),
         );
       }
-      return Promise.resolve(new Response(new Blob(["image"], { type: "image/png" })));
+      return Promise.resolve(imageResponse());
     });
 
     render(
@@ -499,7 +506,7 @@ describe("DashboardInputControl", () => {
           kind: "image",
         }));
       }
-      return Promise.resolve(new Response(new Blob(["image"], { type: "image/png" })));
+      return Promise.resolve(imageResponse());
     });
 
     render(
@@ -536,7 +543,7 @@ describe("DashboardInputControl", () => {
           kind: "image",
         }));
       }
-      return Promise.resolve(new Response(new Blob(["image"], { type: "image/png" })));
+      return Promise.resolve(imageResponse());
     });
 
     render(
@@ -588,7 +595,7 @@ describe("DashboardInputControl", () => {
           kind: "image",
         }));
       }
-      return Promise.resolve(new Response(new Blob(["image"], { type: "image/png" })));
+      return Promise.resolve(imageResponse());
     });
 
     render(
@@ -662,7 +669,7 @@ describe("DashboardInputControl", () => {
           source_asset_id: "11111111-1111-1111-1111-111111111111.png",
         }));
       }
-      return Promise.resolve(new Response(new Blob(["image"], { type: "image/png" })));
+      return Promise.resolve(imageResponse());
     });
 
     render(
@@ -710,7 +717,7 @@ describe("DashboardInputControl", () => {
           source_asset_id: "11111111-1111-1111-1111-111111111111.png",
         }));
       }
-      return Promise.resolve(new Response(new Blob(["image"], { type: "image/png" })));
+      return Promise.resolve(imageResponse());
     });
 
     render(
