@@ -111,6 +111,8 @@ describe("App workflow tabs", () => {
   let leaseAvailable = false;
   let jobProgressStatus = "running";
   let workflowListSummary: typeof workflowSummary & Record<string, unknown> = workflowSummary;
+  let importedWorkflowSummaries: Array<typeof workflowSummary & Record<string, unknown>> = [];
+  let importPreviewResponses: Map<string, Record<string, unknown>> = new Map();
 
   beforeEach(() => {
     lastOpened = null;
@@ -119,6 +121,8 @@ describe("App workflow tabs", () => {
     leaseAvailable = false;
     jobProgressStatus = "running";
     workflowListSummary = workflowSummary;
+    importedWorkflowSummaries = [];
+    importPreviewResponses = new Map();
     window.localStorage.clear();
     window.sessionStorage.clear();
     vi.stubGlobal("fetch", fetchMock);
@@ -128,7 +132,22 @@ describe("App workflow tabs", () => {
       const method = init?.method ?? "GET";
       if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(runtime));
       if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse({ cpu: null, ram: null, vram: null }));
-      if (url.endsWith("/api/workflows")) return Promise.resolve(jsonResponse([{ ...workflowListSummary, last_opened: lastOpened }]));
+      if (url.endsWith("/api/workflows")) {
+        return Promise.resolve(jsonResponse([
+          { ...workflowListSummary, last_opened: lastOpened },
+          ...importedWorkflowSummaries,
+        ]));
+      }
+      if (url.includes("/api/workflows/import/preview") && method === "POST") {
+        const filename = queryParam(url, "filename");
+        const response = filename ? importPreviewResponses.get(filename) : null;
+        if (response) {
+          if (!response.import_session_id && response.workflow && typeof response.workflow === "object") {
+            upsertImportedWorkflow(response.workflow as typeof workflowSummary & Record<string, unknown>);
+          }
+          return Promise.resolve(jsonResponse(response));
+        }
+      }
       if (url.endsWith("/api/workflows/text_to_image_v0/open") && method === "POST") {
         lastOpened = "2026-05-29T12:00:00+00:00";
         return Promise.resolve(jsonResponse({
@@ -235,6 +254,114 @@ describe("App workflow tabs", () => {
     });
   });
 
+  function queryParam(url: string, key: string) {
+    return new URL(url, "http://localhost").searchParams.get(key);
+  }
+
+  function upsertImportedWorkflow(workflow: typeof workflowSummary & Record<string, unknown>) {
+    importedWorkflowSummaries = [
+      workflow,
+      ...importedWorkflowSummaries.filter((item) => item.id !== workflow.id),
+    ];
+  }
+
+  function importedWorkflow(id: string, name: string, overrides: Record<string, unknown> = {}) {
+    return {
+      ...workflowSummary,
+      id,
+      name,
+      description: "",
+      source_label: "Imported",
+      trust_level: "quarantined_community",
+      status: "imported",
+      status_label: "Imported",
+      can_remove: true,
+      ...overrides,
+    };
+  }
+
+  function importResponse(workflow: ReturnType<typeof importedWorkflow>, overrides: Record<string, unknown> = {}) {
+    return {
+      import_session_id: null,
+      workflow_id: workflow.id,
+      status: workflow.status,
+      user_facing_message: "Workflow imported",
+      workflow,
+      required_model_count: 0,
+      custom_node_count: 0,
+      unresolved_input_count: 0,
+      duplicate_identity: null,
+      model_summary: null,
+      ...overrides,
+    };
+  }
+
+  function missingModel(filename: string) {
+    return {
+      requirement_id: "checkpoint",
+      node_id: "1",
+      node_type: "CheckpointLoaderSimple",
+      input_name: "ckpt_name",
+      filename,
+      model_type: "Checkpoint",
+      folder: "checkpoints",
+      verification_level: "sha256_size",
+      size_bytes: 1024,
+      source_urls: ["https://example.test/model.safetensors"],
+      source_availability: "known",
+      status: "missing",
+      status_label: "Missing",
+      asset_ownership: "external_reference",
+      source_path: null,
+      matched_root: null,
+      matched_sha256: null,
+      matched_size_bytes: null,
+      reference_count: 1,
+      references: [],
+      dedup_uncertain: false,
+      message: "Noofy can try to resolve and download this model before the workflow runs.",
+    };
+  }
+
+  function fileDataTransfer(files: File[]) {
+    return {
+      types: ["Files"],
+      files,
+      items: files.map((file) => ({ kind: "file", type: file.type, getAsFile: () => file })),
+      dropEffect: "",
+      effectAllowed: "",
+    };
+  }
+
+  function internalWidgetDragDataTransfer() {
+    return {
+      types: ["text/plain"],
+      files: [],
+      items: [],
+      effectAllowed: "",
+      dropEffect: "",
+      setData: vi.fn(),
+      getData: vi.fn(),
+      clearData: vi.fn(),
+    };
+  }
+
+  function dropFiles(files: File[]) {
+    const dataTransfer = fileDataTransfer(files);
+    fireEvent.dragEnter(window, { dataTransfer });
+    fireEvent.dragOver(window, { dataTransfer });
+    fireEvent.drop(window, { dataTransfer });
+    return dataTransfer;
+  }
+
+  function importPreviewWasRequested(filename?: string) {
+    return fetchMock.mock.calls.some(([url]) => {
+      const value = String(url);
+      if (!value.includes("/api/workflows/import/preview")) return false;
+      return filename ? queryParam(value, "filename") === filename : true;
+    });
+  }
+
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
@@ -326,6 +453,137 @@ describe("App workflow tabs", () => {
     render(<App />);
 
     expect(await screen.findByRole("heading", { name: "Workflows" })).toBeInTheDocument();
+  });
+
+  it("starts the staged .noofy import flow when a workflow package is dropped on Home", async () => {
+    const workflow = importedWorkflow("home_drop", "Home Drop");
+    importPreviewResponses.set("home-drop.noofy", importResponse(workflow));
+
+    render(<App />);
+
+    expect(await screen.findByText("Built-in Workflows")).toBeInTheDocument();
+    dropFiles([new File(["archive"], "home-drop.noofy", { type: "application/octet-stream" })]);
+
+    await waitFor(() => expect(importPreviewWasRequested("home-drop.noofy")).toBe(true));
+    expect(await screen.findByText("Home Drop was added to your local workflows.")).toBeInTheDocument();
+  });
+
+  it("starts the staged .noofy import flow when a workflow package is dropped on a workflow run page", async () => {
+    const workflow = importedWorkflow("run_drop", "Run Drop");
+    importPreviewResponses.set("run-drop.noofy", importResponse(workflow));
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Open Text to Image" }));
+    expect(await screen.findByRole("button", { name: "Run workflow" })).toBeInTheDocument();
+
+    dropFiles([new File(["archive"], "run-drop.noofy", { type: "application/octet-stream" })]);
+
+    await waitFor(() => expect(importPreviewWasRequested("run-drop.noofy")).toBe(true));
+    expect(await screen.findByText("Run Drop was added to your local workflows.")).toBeInTheDocument();
+  });
+
+  it("shows the duplicate workflow modal for a dropped duplicate .noofy package", async () => {
+    const workflow = importedWorkflow("duplicate_drop", "Duplicate Drop");
+    importPreviewResponses.set(
+      "duplicate-drop.noofy",
+      importResponse(workflow, {
+        import_session_id: "duplicate-session",
+        status: "duplicate_identity",
+        duplicate_identity: {
+          existing_workflow: workflowSummary,
+          user_facing_message: "Noofy already has Text to Image.",
+        },
+      }),
+    );
+
+    render(<App />);
+
+    await screen.findByText("Built-in Workflows");
+    dropFiles([new File(["archive"], "duplicate-drop.noofy", { type: "application/octet-stream" })]);
+
+    expect(await screen.findByRole("dialog", { name: "Duplicate Drop" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Replace Existing Workflow" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Import as Copy" })).toBeInTheDocument();
+  });
+
+  it("shows the required-model modal for a dropped .noofy package with missing models", async () => {
+    const workflow = importedWorkflow("missing_model_drop", "Missing Model Drop");
+    const model = missingModel("missing-drop.safetensors");
+    importPreviewResponses.set(
+      "missing-model-drop.noofy",
+      importResponse(workflow, {
+        import_session_id: "missing-model-session",
+        status: "missing_models",
+        required_model_count: 1,
+        model_summary: {
+          workflow_id: workflow.id,
+          total_count: 1,
+          available_count: 0,
+          possible_match_count: 0,
+          missing_count: 1,
+          needs_manual_download_count: 0,
+          ready_to_run: false,
+          models: [model],
+        },
+      }),
+    );
+
+    render(<App />);
+
+    await screen.findByText("Built-in Workflows");
+    dropFiles([new File(["archive"], "missing-model-drop.noofy", { type: "application/octet-stream" })]);
+
+    expect(await screen.findByRole("dialog", { name: "Missing Model Drop" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Download Missing Models" })).toBeInTheDocument();
+    expect(screen.getByText("missing-drop.safetensors")).toBeInTheDocument();
+  });
+
+  it("rejects unsupported dropped files without starting workflow import", async () => {
+    render(<App />);
+
+    await screen.findByText("Built-in Workflows");
+    dropFiles([new File(["image"], "avatar.png", { type: "image/png" })]);
+
+    expect(await screen.findByText(/avatar\.png is not a supported workflow import file/i)).toBeInTheDocument();
+    expect(importPreviewWasRequested()).toBe(false);
+  });
+
+  it("keeps raw ComfyUI .json drops on a friendly unsupported path", async () => {
+    render(<App />);
+
+    await screen.findByText("Built-in Workflows");
+    dropFiles([new File(["{}"], "raw-workflow.json", { type: "application/json" })]);
+
+    expect(await screen.findByText("Raw ComfyUI .json import is not ready yet. Import a .noofy workflow package for now."))
+      .toBeInTheDocument();
+    expect(importPreviewWasRequested()).toBe(false);
+  });
+
+  it("ignores dashboard builder widget drags so global import does not intercept them", async () => {
+    workflowListSummary = {
+      ...workflowSummary,
+      status: "needs_input_setup",
+      status_label: "Needs input setup",
+      needs_setup: true,
+      dashboard_status: "not_configured",
+      dashboard_ready: false,
+    };
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Open Text to Image" }));
+    expect(await screen.findByRole("heading", { name: /Dashboard Builder/i })).toBeInTheDocument();
+    const widget = await screen.findByTestId("created-widget-ctrl-node-6-text");
+    const dataTransfer = internalWidgetDragDataTransfer();
+
+    fireEvent.dragStart(widget, { dataTransfer });
+    fireEvent.dragEnter(window, { dataTransfer });
+    fireEvent.dragOver(window, { dataTransfer });
+    fireEvent.drop(window, { dataTransfer });
+
+    expect(dataTransfer.setData).toHaveBeenCalledWith("text/plain", expect.any(String));
+    expect(screen.queryByText("Drop workflow package to import")).not.toBeInTheDocument();
+    expect(importPreviewWasRequested()).toBe(false);
   });
 
   it("restores a workflow route only when its persisted workflow tab still exists", async () => {

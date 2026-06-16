@@ -19,7 +19,7 @@ import { addPendingImportedSetupReminder } from "../home/pendingSetupBanners";
 import { useWorkflowLibrary } from "../home/WorkflowLibraryProvider";
 import { importNeedsConfiguration } from "./workflowImportUtils";
 
-interface WorkflowImportFlowState {
+export interface WorkflowImportFlowState {
   importing: boolean;
   downloadingModels: boolean;
   downloadJob: ImportModelDownloadJobStatus | null;
@@ -27,6 +27,45 @@ interface WorkflowImportFlowState {
   pendingImport: WorkflowImportResponse | null;
   importResult: WorkflowImportResponse | null;
   importError: string | null;
+}
+
+export interface WorkflowImportFlowController {
+  state: WorkflowImportFlowState;
+  startWorkflowImport: (file: File) => Promise<void>;
+  failImport: (message: string) => void;
+  downloadMissingModels: () => Promise<void>;
+  cancelModelDownload: () => Promise<void>;
+  continueImport: () => Promise<void>;
+  duplicateImport: (action: "replace" | "copy") => Promise<void>;
+  readyImportAction: () => Promise<void>;
+  cancelImport: () => Promise<void>;
+  dismissImportResult: () => void;
+  dismissImportError: () => void;
+}
+
+export const SUPPORTED_WORKFLOW_IMPORT_EXTENSIONS = [".noofy"] as const;
+
+export function workflowImportExtension(filename: string) {
+  const match = /\.[^.\\/]+$/.exec(filename.trim().toLowerCase());
+  return match?.[0] ?? "";
+}
+
+export function isSupportedWorkflowImportFile(file: { name: string }) {
+  return SUPPORTED_WORKFLOW_IMPORT_EXTENSIONS.includes(
+    workflowImportExtension(file.name) as (typeof SUPPORTED_WORKFLOW_IMPORT_EXTENSIONS)[number],
+  );
+}
+
+export function unsupportedWorkflowImportMessage(filename?: string | null) {
+  const name = filename?.trim();
+  if (name && workflowImportExtension(name) === ".json") {
+    // TODO: Add a backend raw-ComfyUI-JSON import path that stages an
+    // unverified local workflow and sends it through dashboard setup.
+    return "Raw ComfyUI .json import is not ready yet. Import a .noofy workflow package for now.";
+  }
+  return name
+    ? `Noofy can import .noofy workflow packages. ${name} is not a supported workflow import file.`
+    : "Noofy can import .noofy workflow packages here.";
 }
 
 const initialWorkflowImportFlowState: WorkflowImportFlowState = {
@@ -57,7 +96,7 @@ export function useWorkflowImportFlow({
   onConfigureDashboard?: (workflowId?: string, workflowName?: string) => void;
   allowUnverifiedCommunityPreparation?: boolean;
   deferConfigurationAfterDownloadedImport?: boolean;
-}) {
+}): WorkflowImportFlowController {
   const workflowLibrary = useWorkflowLibrary();
   const [state, setState] = useState<WorkflowImportFlowState>(initialWorkflowImportFlowState);
   const autoCommittedDownloadJobs = useRef(new Set<string>());
@@ -76,6 +115,10 @@ export function useWorkflowImportFlow({
   }, []);
 
   const startWorkflowImport = useCallback(async (file: File) => {
+    if (!isSupportedWorkflowImportFile(file)) {
+      failImport(unsupportedWorkflowImportMessage(file.name));
+      return;
+    }
     autoCommittedDownloadJobs.current.clear();
     setState((current) => ({
       ...current,
@@ -128,7 +171,7 @@ export function useWorkflowImportFlow({
         importError: error instanceof Error ? error.message : String(error),
       }));
     }
-  }, [allowUnverifiedCommunityPreparation, workflowLibrary.setWorkflowsFromResponse]);
+  }, [allowUnverifiedCommunityPreparation, failImport, workflowLibrary.setWorkflowsFromResponse]);
 
   const downloadMissingModels = useCallback(async () => {
     const sessionId = state.pendingImport?.import_session_id;
@@ -275,6 +318,10 @@ export function useWorkflowImportFlow({
 
   const dismissImportResult = useCallback(() => {
     setState((current) => (current.importResult ? { ...current, importResult: null } : current));
+  }, []);
+
+  const dismissImportError = useCallback(() => {
+    setState((current) => (current.importError ? { ...current, importError: null } : current));
   }, []);
 
   useEffect(() => {
@@ -433,5 +480,6 @@ export function useWorkflowImportFlow({
     readyImportAction,
     cancelImport,
     dismissImportResult,
+    dismissImportError,
   };
 }

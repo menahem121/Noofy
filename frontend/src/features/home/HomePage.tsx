@@ -38,8 +38,8 @@ import {
 } from "../dashboard-builder/dashboardBuilderContent";
 import type { WorkflowExportReviewModel } from "../../lib/workflowExport";
 import { buildDashboardSchemaForEditing } from "../workflows/dashboardEditing";
-import { DuplicateWorkflowModal, RequiredModelsModal } from "../workflows/WorkflowImportModals";
-import { useWorkflowImportFlow } from "../workflows/useWorkflowImportFlow";
+import { WorkflowImportDialogs } from "../workflows/WorkflowImportModals";
+import { useWorkflowImportFlow, type WorkflowImportFlowController } from "../workflows/useWorkflowImportFlow";
 import { importNeedsConfiguration } from "../workflows/workflowImportUtils";
 import { WorkflowActionMenu } from "../workflows/WorkflowActionMenu";
 import { WorkflowExportDialog } from "../workflows/WorkflowExportDialog";
@@ -347,6 +347,7 @@ interface PendingWorkflowRemoval {
 interface HomePageProps {
   onOpenWorkflow: (workflowId: string, workflowName?: string) => void;
   nativeImportRequest?: NativeWorkflowImportRequest | null;
+  workflowImportFlow?: WorkflowImportFlowController;
   onConfigureDashboard?: (workflowId?: string, workflowName?: string) => void;
   onEditWidgets?: (schema: DashboardSchema) => void;
   onEditDashboard?: (schema: DashboardSchema) => void;
@@ -356,28 +357,27 @@ interface HomePageProps {
 export function HomePage({
   onOpenWorkflow,
   nativeImportRequest,
+  workflowImportFlow,
   onConfigureDashboard,
   onEditWidgets,
   onEditDashboard,
   onNavigate,
 }: HomePageProps) {
   const workflowTabs = useOptionalWorkflowTabs();
-  const {
-    state: homeData,
-    startWorkflowImport,
-    failImport,
-    downloadMissingModels,
-    cancelModelDownload,
-    continueImport,
-    duplicateImport,
-    readyImportAction,
-    cancelImport,
-    dismissImportResult,
-  } = useWorkflowImportFlow({
+  const localImportFlow = useWorkflowImportFlow({
     onOpenWorkflow,
     onConfigureDashboard,
     deferConfigurationAfterDownloadedImport: true,
   });
+  const importFlowController = workflowImportFlow ?? localImportFlow;
+  const rendersOwnImportDialogs = !workflowImportFlow;
+  const {
+    state: homeData,
+    startWorkflowImport,
+    failImport,
+    cancelImport,
+    dismissImportResult,
+  } = importFlowController;
   const [menuOpenFor, setMenuOpenFor] = useState<string | null>(null);
   const [cardActionError, setCardActionError] = useState<string | null>(null);
   const [pendingRemoval, setPendingRemoval] = useState<PendingWorkflowRemoval | null>(null);
@@ -778,30 +778,9 @@ export function HomePage({
             </div>
           ) : null}
 
-          {homeData.pendingImport?.duplicate_identity && !homeData.pendingImport.model_summary ? (
-            <DuplicateWorkflowModal
-              importResult={homeData.pendingImport}
-              busy={homeData.importing}
-              onReplace={() => void duplicateImport("replace")}
-              onCopy={() => void duplicateImport("copy")}
-              onCancel={() => void cancelImport()}
-            />
-          ) : null}
-
-          {homeData.pendingImport?.model_summary ? (
-            <RequiredModelsModal
-              importResult={homeData.pendingImport}
-              busy={homeData.importing || homeData.downloadingModels}
-              importing={homeData.importing}
-              downloadJob={homeData.downloadJob}
-              verificationJob={homeData.verificationJob}
-              onDownload={() => void downloadMissingModels()}
-              onCancelDownload={() => void cancelModelDownload()}
-              onContinue={() => void continueImport()}
-              onReplace={() => void duplicateImport("replace")}
-              onCopy={() => void duplicateImport("copy")}
-              onReadyAction={() => void readyImportAction()}
-              onCancel={() => void cancelImport()}
+          {rendersOwnImportDialogs ? (
+            <WorkflowImportDialogs
+              importFlow={importFlowController}
               onViewModels={() => void handleViewModelsAfterImportDiskSpaceFailure()}
             />
           ) : null}
@@ -812,8 +791,8 @@ export function HomePage({
                 <FileUp size={26} aria-hidden="true" />
               </div>
               <div>
-                <h2>Open Any ComfyUI Workflow File</h2>
-                <p>import any .json or .noofy workflow and run it through Noofy.</p>
+                <h2>Import Workflow Package</h2>
+                <p>Import a .noofy workflow package and run it through Noofy.</p>
               </div>
               <label
                 className={`secondary-button action-card__button${homeData.importing ? " is-disabled" : ""}`}

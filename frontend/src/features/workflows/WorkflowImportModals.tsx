@@ -23,7 +23,48 @@ import { workflowDisplayName } from "../../lib/workflowNames";
 import { ModelReferenceDetails } from "./ModelReferenceDetails";
 import { ModelVerificationProgressPanel } from "./ModelVerificationProgressPanel";
 import { requiredModelTypeLabel } from "./requiredModelLabels";
+import type { WorkflowImportFlowController } from "./useWorkflowImportFlow";
 import { importNeedsConfiguration } from "./workflowImportUtils";
+
+export function WorkflowImportDialogs({
+  importFlow,
+  onViewModels,
+}: {
+  importFlow: WorkflowImportFlowController;
+  onViewModels: () => void;
+}) {
+  const { state } = importFlow;
+  return (
+    <>
+      {state.pendingImport?.duplicate_identity && !state.pendingImport.model_summary ? (
+        <DuplicateWorkflowModal
+          importResult={state.pendingImport}
+          busy={state.importing}
+          onReplace={() => void importFlow.duplicateImport("replace")}
+          onCopy={() => void importFlow.duplicateImport("copy")}
+          onCancel={() => void importFlow.cancelImport()}
+        />
+      ) : null}
+      {state.pendingImport?.model_summary ? (
+        <RequiredModelsModal
+          importResult={state.pendingImport}
+          busy={state.importing || state.downloadingModels}
+          importing={state.importing}
+          downloadJob={state.downloadJob}
+          verificationJob={state.verificationJob}
+          onDownload={() => void importFlow.downloadMissingModels()}
+          onCancelDownload={() => void importFlow.cancelModelDownload()}
+          onContinue={() => void importFlow.continueImport()}
+          onReplace={() => void importFlow.duplicateImport("replace")}
+          onCopy={() => void importFlow.duplicateImport("copy")}
+          onReadyAction={() => void importFlow.readyImportAction()}
+          onCancel={() => void importFlow.cancelImport()}
+          onViewModels={onViewModels}
+        />
+      ) : null}
+    </>
+  );
+}
 
 export function DuplicateWorkflowModal({
   importResult,

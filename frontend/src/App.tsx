@@ -15,8 +15,11 @@ import { removePendingImportedSetupReminder } from "./features/home/pendingSetup
 import { WorkflowLibraryProvider, useWorkflowLibrary } from "./features/home/WorkflowLibraryProvider";
 import { ModelsPage } from "./features/models/ModelsPage";
 import { FirstLaunchOnboarding } from "./features/onboarding/FirstLaunchOnboarding";
+import { WorkflowGlobalDropImport, WorkflowImportStatusNotice } from "./features/workflows/WorkflowGlobalImport";
+import { WorkflowImportDialogs } from "./features/workflows/WorkflowImportModals";
 import { WorkflowRunPage } from "./features/workflows/WorkflowRunPage";
 import { WorkflowsPage } from "./features/workflows/WorkflowsPage";
+import { useWorkflowImportFlow } from "./features/workflows/useWorkflowImportFlow";
 import { workflowNeedsConfiguration } from "./features/workflows/workflowSearch";
 import {
   cancelQueuedRunnerStart,
@@ -71,7 +74,13 @@ function AppContent() {
   const [route, setRoute] = useState<AppRoute>(() => loadStoredAppRoute(workflowTabs.tabs));
   const [closeDialog, setCloseDialog] = useState<WorkflowCloseDialogState | null>(null);
   const [nativeWorkflowImport, setNativeWorkflowImport] = useState<NativeWorkflowImportRequest | null>(null);
+  const [handledNativeImportId, setHandledNativeImportId] = useState<number | null>(null);
   const nativeWorkflowImportIdRef = useRef(0);
+  const workflowImportFlow = useWorkflowImportFlow({
+    onOpenWorkflow: openWorkflow,
+    onConfigureDashboard: configureDashboard,
+    deferConfigurationAfterDownloadedImport: true,
+  });
 
   useEffect(() => {
     const persisted = persistedAppRoute(route);
@@ -138,6 +147,24 @@ function AppContent() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!nativeWorkflowImport || handledNativeImportId === nativeWorkflowImport.id) return;
+    setHandledNativeImportId(nativeWorkflowImport.id);
+    if (nativeWorkflowImport.error || !nativeWorkflowImport.file) {
+      workflowImportFlow.failImport(
+        nativeWorkflowImport.error ??
+          `Noofy could not open ${nativeWorkflowImport.filename ?? "the selected workflow package"}.`,
+      );
+      return;
+    }
+    void workflowImportFlow.startWorkflowImport(nativeWorkflowImport.file);
+  }, [
+    handledNativeImportId,
+    nativeWorkflowImport,
+    workflowImportFlow.failImport,
+    workflowImportFlow.startWorkflowImport,
+  ]);
+
   function workflowNameFor(workflowId: string, providedName?: string) {
     if (providedName) return providedName;
     if (workflowId === "text_to_image_v0") return "Text to Image";
@@ -202,6 +229,14 @@ function AppContent() {
     setRoute({ name: "home" });
   }
 
+  function configureDashboard(workflowId?: string, workflowName?: string) {
+    setRoute({
+      name: "dashboard-builder",
+      workflowId: workflowId ?? undefined,
+      workflowName: workflowName ?? undefined,
+    });
+  }
+
   async function requestCloseWorkflowTab(workflowId: string) {
     const refreshed = await activeCloseState(workflowId, workflowTabs.runtimeByWorkflowId[workflowId]);
     if (refreshed) {
@@ -259,13 +294,7 @@ function AppContent() {
               initialSchema: schema,
             })
           }
-          onConfigureDashboard={(workflowId, workflowName) =>
-            setRoute({
-              name: "dashboard-builder",
-              workflowId: workflowId ?? undefined,
-              workflowName: workflowName ?? undefined,
-            })
-          }
+          onConfigureDashboard={configureDashboard}
           onNavigate={navigate}
         />
       );
@@ -328,13 +357,8 @@ function AppContent() {
         <WorkflowsPage
           onNavigate={navigate}
           onOpenWorkflow={openWorkflow}
-          onConfigureDashboard={(workflowId, workflowName) =>
-            setRoute({
-              name: "dashboard-builder",
-              workflowId: workflowId ?? undefined,
-              workflowName: workflowName ?? undefined,
-            })
-          }
+          workflowImportFlow={workflowImportFlow}
+          onConfigureDashboard={configureDashboard}
           onEditWidgets={(schema) =>
             setRoute({
               name: "dashboard-builder",
@@ -367,14 +391,8 @@ function AppContent() {
     return (
       <HomePage
         onOpenWorkflow={openWorkflow}
-        nativeImportRequest={nativeWorkflowImport}
-        onConfigureDashboard={(workflowId, workflowName) =>
-          setRoute({
-            name: "dashboard-builder",
-            workflowId: workflowId ?? undefined,
-            workflowName: workflowName ?? undefined,
-          })
-        }
+        workflowImportFlow={workflowImportFlow}
+        onConfigureDashboard={configureDashboard}
         onEditWidgets={(schema) =>
           setRoute({
             name: "dashboard-builder",
@@ -403,6 +421,18 @@ function AppContent() {
       onRequestCloseWorkflowTab={(workflowId) => void requestCloseWorkflowTab(workflowId)}
     >
       {renderPage()}
+      <WorkflowGlobalDropImport importFlow={workflowImportFlow} />
+      <WorkflowImportStatusNotice
+        importFlow={workflowImportFlow}
+        hidden={route.name === "home" || route.name === "workflows"}
+        onConfigureDashboard={configureDashboard}
+      />
+      <WorkflowImportDialogs
+        importFlow={workflowImportFlow}
+        onViewModels={() => {
+          void workflowImportFlow.cancelImport().then(() => navigate("models"));
+        }}
+      />
       {closeDialog ? (
         <WorkflowCloseDialog
           dialog={closeDialog}

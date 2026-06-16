@@ -45,8 +45,8 @@ import { dismissPendingImportedSetupReminder } from "../home/pendingSetupBanners
 import { buildDashboardSchemaForEditing } from "./dashboardEditing";
 import { WorkflowActionMenu } from "./WorkflowActionMenu";
 import { WorkflowExportDialog } from "./WorkflowExportDialog";
-import { DuplicateWorkflowModal, RequiredModelsModal } from "./WorkflowImportModals";
-import { useWorkflowImportFlow } from "./useWorkflowImportFlow";
+import { WorkflowImportDialogs } from "./WorkflowImportModals";
+import { useWorkflowImportFlow, type WorkflowImportFlowController } from "./useWorkflowImportFlow";
 import { cleanupRemovedWorkflowFrontendState } from "./workflowRemoval";
 import { importNeedsConfiguration } from "./workflowImportUtils";
 import {
@@ -63,6 +63,7 @@ import { searchWorkflows, workflowStatus, workflowStatusLabel } from "./workflow
 interface WorkflowsPageProps {
   onNavigate: (route: AppRouteId) => void;
   onOpenWorkflow: (workflowId: string, workflowName?: string) => void;
+  workflowImportFlow?: WorkflowImportFlowController;
   onConfigureDashboard?: (workflowId?: string, workflowName?: string) => void;
   onEditWidgets: (schema: DashboardSchema) => void;
   onEditDashboard: (schema: DashboardSchema) => void;
@@ -119,6 +120,7 @@ function formatBytes(bytes: number | null | undefined) {
 export function WorkflowsPage({
   onNavigate,
   onOpenWorkflow,
+  workflowImportFlow,
   onConfigureDashboard,
   onEditWidgets,
   onEditDashboard,
@@ -146,17 +148,15 @@ export function WorkflowsPage({
   const [detailsError, setDetailsError] = useState<string | null>(null);
   const [menuOpenFor, setMenuOpenFor] = useState<string | null>(null);
   const [showExportHelp, setShowExportHelp] = useState(false);
+  const localImportFlow = useWorkflowImportFlow({ onOpenWorkflow, onConfigureDashboard });
+  const importFlowController = workflowImportFlow ?? localImportFlow;
+  const rendersOwnImportDialogs = !workflowImportFlow;
   const {
     state: importFlow,
     startWorkflowImport,
-    downloadMissingModels,
-    cancelModelDownload,
-    continueImport,
-    duplicateImport,
-    readyImportAction,
     cancelImport,
     dismissImportResult,
-  } = useWorkflowImportFlow({ onOpenWorkflow, onConfigureDashboard });
+  } = importFlowController;
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [exportDialog, setExportDialog] = useState<{
@@ -792,29 +792,9 @@ Noofy hides the technical complexity, manages the workflow experience, and lets 
           onConfirm={() => void confirmWorkflowRemoval()}
         />
       ) : null}
-      {importFlow.pendingImport?.duplicate_identity && !importFlow.pendingImport.model_summary ? (
-        <DuplicateWorkflowModal
-          importResult={importFlow.pendingImport}
-          busy={importFlow.importing}
-          onReplace={() => void duplicateImport("replace")}
-          onCopy={() => void duplicateImport("copy")}
-          onCancel={() => void cancelImport()}
-        />
-      ) : null}
-      {importFlow.pendingImport?.model_summary ? (
-        <RequiredModelsModal
-          importResult={importFlow.pendingImport}
-          busy={importFlow.importing || importFlow.downloadingModels}
-          importing={importFlow.importing}
-          downloadJob={importFlow.downloadJob}
-          verificationJob={importFlow.verificationJob}
-          onDownload={() => void downloadMissingModels()}
-          onCancelDownload={() => void cancelModelDownload()}
-          onContinue={() => void continueImport()}
-          onReplace={() => void duplicateImport("replace")}
-          onCopy={() => void duplicateImport("copy")}
-          onReadyAction={() => void readyImportAction()}
-          onCancel={() => void cancelImport()}
+      {rendersOwnImportDialogs ? (
+        <WorkflowImportDialogs
+          importFlow={importFlowController}
           onViewModels={() => void handleViewModelsAfterImportDiskSpaceFailure()}
         />
       ) : null}
