@@ -4700,7 +4700,7 @@ describe("WorkflowRunPage", () => {
         expect(screen.getByRole("button", { name: "Run Workflow" })).toBeDisabled();
       } else {
         expect(screen.queryByRole("button", { name: "Run Workflow" })).not.toBeInTheDocument();
-        expect(document.querySelector(".workflow-values-loading--compact")).toBeInTheDocument();
+        expect(document.querySelector(".workflow-values-loading--compact")).not.toBeInTheDocument();
       }
 
       await act(async () => {

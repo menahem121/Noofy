@@ -2262,7 +2262,6 @@ export function WorkflowRunPage({
             valuesReady={dashboardValuesReady}
             loadingTitle={dashboardLoadingCopy.title}
             loadingMessage={dashboardLoadingCopy.message}
-            loadingFullCanvas={dashboardPackagePending}
             inputValues={inputValues}
             seedModes={seedModes}
             onSeedModeChange={handleSeedModeChange}
