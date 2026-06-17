@@ -4300,7 +4300,7 @@ describe("WorkflowRunPage", () => {
     expect(screen.queryByRole("button", { name: "Preview 3D model" })).not.toBeInTheDocument();
   });
 
-  it("routes 3D live previews into the display_3d canvas widget", async () => {
+  it("routes unmatched 3D live previews into the single display_3d canvas widget", async () => {
     const resultRequest = deferred<Response>();
     const livePreviewDataUrl = "data:image/png;base64,M2QtbGl2ZS1wcmV2aWV3";
     const threeDPackageData = {
@@ -4344,7 +4344,7 @@ describe("WorkflowRunPage", () => {
             data_url: livePreviewDataUrl,
             node_id: "7",
             prompt_id: "job-three-d-preview",
-            target_node_ids: ["30"],
+            target_node_ids: ["7"],
           },
         }));
       }

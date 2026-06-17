@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { describe, expect, it, vi } from "vitest";
 
-import { isGaussianSplatPlyData, prepareThreeDModelForPreview } from "./threeDScene";
+import { applyThreeDPreviewOrientation, isGaussianSplatPlyData, prepareThreeDModelForPreview } from "./threeDScene";
 
 function bytes(text: string): ArrayBuffer {
   const encoded = new TextEncoder().encode(text);
@@ -127,5 +127,29 @@ describe("isGaussianSplatPlyData", () => {
       "property list uchar int vertex_indices",
       "end_header",
     ].join("\n")))).toBe(false);
+  });
+});
+
+describe("applyThreeDPreviewOrientation", () => {
+  it("preserves a loaded model base rotation when changing the up axis", () => {
+    const model = new THREE.Object3D();
+    const baseRotation = new THREE.Euler(0, 0, Math.PI);
+
+    applyThreeDPreviewOrientation(model, baseRotation, "z");
+
+    expect(model.rotation.x).toBeCloseTo(-Math.PI / 2);
+    expect(model.rotation.y).toBeCloseTo(0);
+    expect(model.rotation.z).toBeCloseTo(Math.PI);
+  });
+
+  it("uses the base rotation for the default Y-up view", () => {
+    const model = new THREE.Object3D();
+    const baseRotation = new THREE.Euler(0, 0, Math.PI);
+
+    applyThreeDPreviewOrientation(model, baseRotation, "y");
+
+    expect(model.rotation.x).toBeCloseTo(0);
+    expect(model.rotation.y).toBeCloseTo(0);
+    expect(model.rotation.z).toBeCloseTo(Math.PI);
   });
 });

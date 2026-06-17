@@ -261,11 +261,21 @@ export function CanvasDashboardView({
   const livePreviewTargetNodeId = livePreview?.data_url && livePreview.target_node_ids.length === 1
     ? livePreview.target_node_ids[0]
     : null;
-  const livePreviewHasWidgetTarget = useMemo(
-    () => Boolean(livePreviewTargetNodeId && visualOutputWidgetNodeIds(topLevelItems, outputIndex).has(livePreviewTargetNodeId)),
-    [livePreviewTargetNodeId, outputIndex, topLevelItems],
+  const visualOutputNodeIds = useMemo(
+    () => visualOutputWidgetNodeIds(topLevelItems, outputIndex),
+    [outputIndex, topLevelItems],
   );
-  const showGeneralLivePreview = Boolean(livePreview?.data_url && !livePreviewHasWidgetTarget);
+  const livePreviewHasWidgetTarget = useMemo(
+    () => Boolean(livePreviewTargetNodeId && visualOutputNodeIds.has(livePreviewTargetNodeId)),
+    [livePreviewTargetNodeId, visualOutputNodeIds],
+  );
+  const livePreviewFallbackControlId = useMemo(
+    () => livePreview?.data_url && !livePreviewHasWidgetTarget
+      ? singleThreeDOutputControlId(topLevelItems, outputIndex)
+      : null,
+    [livePreview?.data_url, livePreviewHasWidgetTarget, outputIndex, topLevelItems],
+  );
+  const showGeneralLivePreview = Boolean(livePreview?.data_url && !livePreviewHasWidgetTarget && !livePreviewFallbackControlId);
 
   const requestedActionBarPosition = draggingActionBarPosition ?? actionBarPosition ?? null;
 
@@ -614,6 +624,7 @@ export function CanvasDashboardView({
                 outputFilesByNodeId={outputFilesByNodeId}
                 outputThreeDsByNodeId={outputThreeDsByNodeId}
                 livePreview={livePreview}
+                livePreviewFallbackControlId={livePreviewFallbackControlId}
                 comparisonBeforeImageUrl={comparisonBeforeImageUrl}
                 inputValues={inputValues}
                 outputPreferences={outputPreferences}
@@ -711,6 +722,7 @@ function CanvasWidgetCell({
   outputFilesByNodeId,
   outputThreeDsByNodeId,
   livePreview,
+  livePreviewFallbackControlId,
   comparisonBeforeImageUrl,
   inputValues,
   outputPreferences,
@@ -747,6 +759,7 @@ function CanvasWidgetCell({
   outputFilesByNodeId: Map<string, OutputFileMedia[]>;
   outputThreeDsByNodeId: Map<string, OutputThreeDMedia[]>;
   livePreview?: JobLivePreview | null;
+  livePreviewFallbackControlId?: string | null;
   comparisonBeforeImageUrl?: string | null;
   inputValues: Record<string, unknown>;
   outputPreferences: OutputPreferences;
@@ -899,6 +912,7 @@ function CanvasWidgetCell({
             outputFilesByNodeId={outputFilesByNodeId}
             outputThreeDsByNodeId={outputThreeDsByNodeId}
             livePreview={livePreview}
+            livePreviewFallbackControlId={livePreviewFallbackControlId}
             comparisonBeforeImageUrl={comparisonBeforeImageUrl}
             inputValues={inputValues}
             outputPreferences={outputPreferences}
@@ -933,6 +947,7 @@ function CanvasWidgetCell({
               outputFilesByNodeId={outputFilesByNodeId}
               outputThreeDsByNodeId={outputThreeDsByNodeId}
               livePreview={livePreview}
+              livePreviewFallbackControlId={livePreviewFallbackControlId}
               comparisonBeforeImageUrl={comparisonBeforeImageUrl}
               imagePreviewEnabled={!isEditingLayout}
             />
@@ -976,6 +991,7 @@ function GroupedCanvasControls({
   outputFilesByNodeId,
   outputThreeDsByNodeId,
   livePreview,
+  livePreviewFallbackControlId,
   comparisonBeforeImageUrl,
   inputValues,
   outputPreferences,
@@ -1006,6 +1022,7 @@ function GroupedCanvasControls({
   outputFilesByNodeId: Map<string, OutputFileMedia[]>;
   outputThreeDsByNodeId: Map<string, OutputThreeDMedia[]>;
   livePreview?: JobLivePreview | null;
+  livePreviewFallbackControlId?: string | null;
   comparisonBeforeImageUrl?: string | null;
   inputValues: Record<string, unknown>;
   outputPreferences: OutputPreferences;
@@ -1062,6 +1079,7 @@ function GroupedCanvasControls({
                   outputFilesByNodeId={outputFilesByNodeId}
                   outputThreeDsByNodeId={outputThreeDsByNodeId}
                   livePreview={livePreview}
+                  livePreviewFallbackControlId={livePreviewFallbackControlId}
                   comparisonBeforeImageUrl={comparisonBeforeImageUrl}
                   imagePreviewEnabled={!disabled}
                 />
@@ -1208,6 +1226,18 @@ function visualOutputWidgetNodeIds(
   return nodeIds;
 }
 
+function singleThreeDOutputControlId(
+  items: DashboardTopLevelControlItem[],
+  outputIndex: Map<string, WorkflowOutputDef>,
+): string | null {
+  const controls = outputControlsFromTopLevelItems(items).filter((control) => {
+    const output = control.output_id ? outputIndex.get(control.output_id) : null;
+    const kind = output?.kind ?? output?.type;
+    return control.type === "display_3d" || kind === "3d";
+  });
+  return controls.length === 1 ? controls[0].id : null;
+}
+
 function outputControlsFromTopLevelItems(items: DashboardTopLevelControlItem[]): DashboardControlDef[] {
   const controls: DashboardControlDef[] = [];
   for (const item of items) {
@@ -1339,6 +1369,7 @@ function OutputWidgetContent({
   outputFilesByNodeId,
   outputThreeDsByNodeId,
   livePreview,
+  livePreviewFallbackControlId,
   comparisonBeforeImageUrl,
   imagePreviewEnabled = true,
 }: {
@@ -1351,6 +1382,7 @@ function OutputWidgetContent({
   outputFilesByNodeId: Map<string, OutputFileMedia[]>;
   outputThreeDsByNodeId: Map<string, OutputThreeDMedia[]>;
   livePreview?: JobLivePreview | null;
+  livePreviewFallbackControlId?: string | null;
   comparisonBeforeImageUrl?: string | null;
   imagePreviewEnabled?: boolean;
 }) {
@@ -1371,8 +1403,10 @@ function OutputWidgetContent({
     livePreview?.data_url
       && output
       && isLivePreviewVisualOutput(outputKind, control.type)
-      && livePreview.target_node_ids.length === 1
-      && livePreview.target_node_ids[0] === output.node_id,
+      && (
+        livePreviewFallbackControlId === control.id
+        || (livePreview.target_node_ids.length === 1 && livePreview.target_node_ids[0] === output.node_id)
+      ),
   );
   const displayedImageUrls = livePreviewTargetsOutput && livePreview?.data_url
     ? [livePreview.data_url]

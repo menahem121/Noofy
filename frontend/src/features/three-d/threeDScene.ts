@@ -30,6 +30,7 @@ export interface ThreeDSceneController {
 
 interface LoadedThreeDModel {
   model: THREE.Object3D;
+  baseRotation?: THREE.Euler;
   replaceBareDefaultMaterials: boolean;
   isGaussianSplat?: boolean;
   dispose?: () => void;
@@ -83,6 +84,8 @@ export async function createThreeDScene(
     throw reason;
   }
   const { model } = loaded;
+  const baseRotation = loaded.baseRotation?.clone() ?? new THREE.Euler();
+  applyThreeDPreviewOrientation(model, baseRotation, "y");
   if (!loaded.isGaussianSplat) {
     prepareThreeDModelForPreview(model, { replaceBareDefaultMaterials: loaded.replaceBareDefaultMaterials });
   }
@@ -149,9 +152,7 @@ export async function createThreeDScene(
   }
   function setUpAxis(axis: ThreeDUpAxis) {
     upAxis = axis;
-    model.rotation.set(0, 0, 0);
-    if (axis === "z") model.rotation.x = -Math.PI / 2;
-    if (axis === "x") model.rotation.z = Math.PI / 2;
+    applyThreeDPreviewOrientation(model, baseRotation, axis);
     resetCamera();
   }
   function setCameraType(type: ThreeDCameraType) {
@@ -288,10 +289,14 @@ async function loadGaussianSplatModel(
     splat: SplatFileType.SPLAT,
     ksplat: SplatFileType.KSPLAT,
   }[extension];
-  const splat = new SplatMesh({ fileBytes, fileType, editable: false });
+  // Spark transfers loader buffers to its worker. Pass it an owned copy so retries
+  // and browser-specific detached-buffer behavior cannot poison Noofy's source data.
+  const splatFileBytes = new Uint8Array(fileBytes).slice();
+  const splat = new SplatMesh({ fileBytes: splatFileBytes, fileType, editable: false });
   await splat.initialized;
   return {
     model: splat as unknown as THREE.Object3D,
+    baseRotation: new THREE.Euler(0, 0, Math.PI),
     replaceBareDefaultMaterials: false,
     isGaussianSplat: true,
     dispose: () => splat.dispose(),
@@ -312,6 +317,16 @@ export function isGaussianSplatPlyData(data: ArrayBuffer): boolean {
         || propertyNames.has("f_dc_0")
       ),
   );
+}
+
+export function applyThreeDPreviewOrientation(
+  model: THREE.Object3D,
+  baseRotation: THREE.Euler,
+  axis: ThreeDUpAxis,
+) {
+  model.rotation.copy(baseRotation);
+  if (axis === "z") model.rotation.x -= Math.PI / 2;
+  if (axis === "x") model.rotation.z += Math.PI / 2;
 }
 
 function plyHeaderText(data: ArrayBuffer): string | null {
