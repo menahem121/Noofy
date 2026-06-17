@@ -5,6 +5,7 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { OBJLoader } from "three/examples/jsm/loaders/OBJLoader.js";
 import { PLYLoader } from "three/examples/jsm/loaders/PLYLoader.js";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
+import { USDZLoader } from "three/examples/jsm/loaders/USDZLoader.js";
 
 export type ThreeDMaterialMode = "original" | "standard" | "normal" | "wireframe";
 export type ThreeDUpAxis = "y" | "z" | "x";
@@ -30,7 +31,11 @@ export interface ThreeDSceneController {
 interface LoadedThreeDModel {
   model: THREE.Object3D;
   replaceBareDefaultMaterials: boolean;
+  isGaussianSplat?: boolean;
+  dispose?: () => void;
 }
+
+type GaussianSplatExtension = "ply" | "spz" | "splat" | "ksplat";
 
 export async function createThreeDScene(
   container: HTMLElement,
@@ -78,11 +83,15 @@ export async function createThreeDScene(
     throw reason;
   }
   const { model } = loaded;
-  prepareThreeDModelForPreview(model, { replaceBareDefaultMaterials: loaded.replaceBareDefaultMaterials });
+  if (!loaded.isGaussianSplat) {
+    prepareThreeDModelForPreview(model, { replaceBareDefaultMaterials: loaded.replaceBareDefaultMaterials });
+  }
   scene.add(model);
-  const skeleton = new THREE.SkeletonHelper(model);
-  skeleton.visible = false;
-  scene.add(skeleton);
+  const skeleton = loaded.isGaussianSplat ? null : new THREE.SkeletonHelper(model);
+  if (skeleton) {
+    skeleton.visible = false;
+    scene.add(skeleton);
+  }
   const originalMaterials = new Map<THREE.Mesh, THREE.Material | THREE.Material[]>();
   model.traverse((child) => {
     if (child instanceof THREE.Mesh) originalMaterials.set(child, child.material);
@@ -113,7 +122,7 @@ export async function createThreeDScene(
     orthographic.updateProjectionMatrix();
   }
   function resetCamera() {
-    const box = new THREE.Box3().setFromObject(model);
+    const box = boundingBoxForModel(model);
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
     const radius = Math.max(size.x, size.y, size.z, 1) * 0.8;
@@ -179,15 +188,18 @@ export async function createThreeDScene(
     observer.disconnect();
     controls.dispose();
     mixer?.stopAllAction();
-    model.traverse((child) => {
-      if (!(child instanceof THREE.Mesh)) return;
-      child.geometry?.dispose();
-      disposeMaterial(child.material);
-      const original = originalMaterials.get(child);
-      if (original && original !== child.material) disposeMaterial(original);
-    });
-    skeleton.geometry.dispose();
-    disposeMaterial(skeleton.material);
+    if (!loaded.isGaussianSplat) {
+      model.traverse((child) => {
+        if (!(child instanceof THREE.Mesh)) return;
+        child.geometry?.dispose();
+        disposeMaterial(child.material);
+        const original = originalMaterials.get(child);
+        if (original && original !== child.material) disposeMaterial(original);
+      });
+    }
+    loaded.dispose?.();
+    skeleton?.geometry.dispose();
+    if (skeleton) disposeMaterial(skeleton.material);
     grid.geometry.dispose();
     disposeMaterial(grid.material);
     renderer.dispose();
@@ -224,13 +236,16 @@ export async function createThreeDScene(
     setGridVisible: (visible) => { grid.visible = visible; },
     setLightIntensity: (intensity) => { ambient.intensity = intensity * 0.65; key.intensity = intensity; },
     setMaterialMode,
-    setSkeletonVisible: (visible) => { skeleton.visible = visible; },
+    setSkeletonVisible: (visible) => { if (skeleton) skeleton.visible = visible; },
     setUpAxis,
   };
 }
 
 async function loadModel(manager: THREE.LoadingManager, url: string, filename: string): Promise<LoadedThreeDModel> {
   const extension = filename.split(".").pop()?.toLowerCase();
+  if (extension === "spz" || extension === "splat" || extension === "ksplat") {
+    return loadGaussianSplatModel(extension, await loadArrayBuffer(manager, url));
+  }
   if (extension === "glb" || extension === "gltf") {
     const gltf = await new GLTFLoader(manager).loadAsync(url);
     gltf.scene.animations = gltf.animations;
@@ -242,8 +257,87 @@ async function loadModel(manager: THREE.LoadingManager, url: string, filename: s
   if (extension === "obj") return { model: await new OBJLoader(manager).loadAsync(url), replaceBareDefaultMaterials: false };
   if (extension === "fbx") return { model: await new FBXLoader(manager).loadAsync(url), replaceBareDefaultMaterials: false };
   if (extension === "stl") return { model: meshGroup(await new STLLoader(manager).loadAsync(url)), replaceBareDefaultMaterials: false };
-  if (extension === "ply") return { model: meshGroup(await new PLYLoader(manager).loadAsync(url)), replaceBareDefaultMaterials: false };
+  if (extension === "ply") return loadPlyModel(manager, url);
+  if (extension === "usdz") return { model: await new USDZLoader(manager).loadAsync(url), replaceBareDefaultMaterials: false };
   throw new Error("Interactive preview is not available for this 3D format. You can still open or download the model.");
+}
+
+async function loadPlyModel(manager: THREE.LoadingManager, url: string): Promise<LoadedThreeDModel> {
+  const data = await loadArrayBuffer(manager, url);
+  if (isGaussianSplatPlyData(data)) return loadGaussianSplatModel("ply", data);
+  return {
+    model: meshGroup(new PLYLoader(manager).parse(data)),
+    replaceBareDefaultMaterials: false,
+  };
+}
+
+function loadArrayBuffer(manager: THREE.LoadingManager, url: string): Promise<ArrayBuffer> {
+  const loader = new THREE.FileLoader(manager);
+  loader.setResponseType("arraybuffer");
+  return loader.loadAsync(url).then((data) => data as ArrayBuffer);
+}
+
+async function loadGaussianSplatModel(
+  extension: GaussianSplatExtension,
+  fileBytes: ArrayBuffer,
+): Promise<LoadedThreeDModel> {
+  const { SplatFileType, SplatMesh } = await import("@sparkjsdev/spark");
+  const fileType = {
+    ply: SplatFileType.PLY,
+    spz: SplatFileType.SPZ,
+    splat: SplatFileType.SPLAT,
+    ksplat: SplatFileType.KSPLAT,
+  }[extension];
+  const splat = new SplatMesh({ fileBytes, fileType, editable: false });
+  await splat.initialized;
+  return {
+    model: splat as unknown as THREE.Object3D,
+    replaceBareDefaultMaterials: false,
+    isGaussianSplat: true,
+    dispose: () => splat.dispose(),
+  };
+}
+
+export function isGaussianSplatPlyData(data: ArrayBuffer): boolean {
+  const header = plyHeaderText(data);
+  if (!header) return false;
+  const propertyNames = new Set(
+    Array.from(header.matchAll(/^property\s+\S+\s+([A-Za-z0-9_]+)\s*$/gm), (match) => match[1]?.toLowerCase()),
+  );
+  return Boolean(
+    propertyNames.has("opacity")
+      && (
+        propertyNames.has("scale_0")
+        || propertyNames.has("rot_0")
+        || propertyNames.has("f_dc_0")
+      ),
+  );
+}
+
+function plyHeaderText(data: ArrayBuffer): string | null {
+  const prefix = new Uint8Array(data, 0, Math.min(data.byteLength, 64 * 1024));
+  const text = new TextDecoder("ascii").decode(prefix);
+  const headerEnd = text.search(/end_header(?:\r\n|\n|\r|$)/);
+  if (!text.startsWith("ply") || headerEnd === -1) return null;
+  return text.slice(0, headerEnd);
+}
+
+function boundingBoxForModel(model: THREE.Object3D): THREE.Box3 {
+  model.updateWorldMatrix(true, true);
+  const box = new THREE.Box3().setFromObject(model);
+  if (!box.isEmpty()) return box;
+  const maybeSplat = model as THREE.Object3D & {
+    getBoundingBox?: (centersOnly?: boolean) => THREE.Box3;
+  };
+  if (typeof maybeSplat.getBoundingBox === "function") {
+    const splatBox = maybeSplat.getBoundingBox(false).clone();
+    splatBox.applyMatrix4(model.matrixWorld);
+    if (!splatBox.isEmpty()) return splatBox;
+  }
+  return new THREE.Box3(
+    new THREE.Vector3(-0.5, -0.5, -0.5),
+    new THREE.Vector3(0.5, 0.5, 0.5),
+  );
 }
 
 export function prepareThreeDModelForPreview(

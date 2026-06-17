@@ -42,7 +42,7 @@ FILE_INPUT_NAMES = frozenset(
 IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff", ".avif"})
 AUDIO_EXTENSIONS = frozenset({".wav", ".mp3", ".flac", ".ogg", ".oga", ".m4a", ".aac", ".aiff", ".aif", ".opus"})
 VIDEO_EXTENSIONS = frozenset({".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".gif"})
-THREE_D_EXTENSIONS = frozenset({".glb", ".gltf", ".obj", ".fbx", ".stl", ".ply", ".usdz", ".dae"})
+THREE_D_EXTENSIONS = frozenset({".glb", ".gltf", ".obj", ".fbx", ".stl", ".ply", ".usdz", ".dae", ".spz", ".splat", ".ksplat"})
 TEXT_EXTENSIONS = frozenset({".txt", ".md", ".json", ".csv", ".tsv", ".yaml", ".yml", ".xml", ".srt", ".vtt"})
 UNSUPPORTED_EXPORTED_LAUNCH_OPTION_KEYS = {
     "comfyui_launch_options",

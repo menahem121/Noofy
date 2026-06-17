@@ -312,6 +312,30 @@ def test_store_three_d_stream_accepts_embedded_gltf_json(tmp_path: Path) -> None
     assert svc.metadata(result["asset_id"])["extension"] == ".gltf"
 
 
+def test_store_three_d_stream_accepts_spz_splat_model(tmp_path: Path) -> None:
+    svc = DashboardAssetService(tmp_path / "assets")
+
+    result = svc.store_three_d_stream(BytesIO(b"spz-data"), "application/octet-stream", "model.spz")
+
+    assert result["asset_id"].endswith(".spz")
+    assert result["kind"] == "3d"
+    assert result["content_type"] == "application/octet-stream"
+    assert result["extension"] == ".spz"
+    assert svc.metadata(result["asset_id"])["extension"] == ".spz"
+
+
+def test_store_three_d_stream_accepts_usdz_model(tmp_path: Path) -> None:
+    svc = DashboardAssetService(tmp_path / "assets")
+
+    result = svc.store_three_d_stream(BytesIO(b"usdz-data"), "application/octet-stream", "scene.usdz")
+
+    assert result["asset_id"].endswith(".usdz")
+    assert result["kind"] == "3d"
+    assert result["content_type"] == "model/vnd.usdz+zip"
+    assert result["extension"] == ".usdz"
+    assert svc.metadata(result["asset_id"])["extension"] == ".usdz"
+
+
 def test_store_three_d_stream_rejects_nested_external_gltf_uri_and_cleans_upload(tmp_path: Path) -> None:
     svc = DashboardAssetService(tmp_path / "assets")
     gltf = json.dumps({"asset": {"version": "2.0"}, "extensions": {"vendor": {"uri": "remote.bin"}}}).encode()

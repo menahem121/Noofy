@@ -44,7 +44,8 @@ def test_gallery_media_reference_is_staged_once_but_applied_to_each_input(tmp_pa
     [
         ("load_video", "video", "clip.mp4", "video/mp4"),
         ("load_audio", "audio", "speech.wav", "audio/wav"),
-        ("load_3d", "3d", "mesh.glb", "model/gltf-binary"),
+        ("load_3d", "3d", "model.spz", "application/octet-stream"),
+        ("load_3d", "3d", "scene.usdz", "model/vnd.usdz+zip"),
     ],
 )
 def test_gallery_media_reference_stages_each_supported_picker_kind(

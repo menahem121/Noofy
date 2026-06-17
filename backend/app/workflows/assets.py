@@ -55,6 +55,7 @@ ALLOWED_THREE_D_MIME_TYPES = frozenset(
         "model/stl",
         "model/fbx",
         "model/ply",
+        "model/vnd.usdz+zip",
         "application/json",
         "application/octet-stream",
         "text/plain",
@@ -731,9 +732,9 @@ def _safe_original_filename(original_filename: str) -> str:
 
 def _validate_three_d_filename_extension(original_filename: str) -> str:
     suffix = Path(_safe_original_filename(original_filename)).suffix.lower()
-    if suffix not in {".glb", ".gltf", ".obj", ".stl", ".fbx", ".ply"}:
+    if suffix not in {".glb", ".gltf", ".obj", ".stl", ".fbx", ".ply", ".usdz", ".spz", ".splat", ".ksplat"}:
         raise AssetUploadError(
-            f"File extension '{suffix or '<missing>'}' is not supported. Use GLB, GLTF, OBJ, STL, FBX, or PLY."
+            f"File extension '{suffix or '<missing>'}' is not supported. Use GLB, GLTF, OBJ, STL, FBX, PLY, USDZ, SPZ, SPLAT, or KSPLAT."
         )
     return suffix
 
@@ -755,6 +756,7 @@ def _canonical_three_d_content_type(extension: str) -> str:
         ".stl": "model/stl",
         ".fbx": "model/fbx",
         ".ply": "model/ply",
+        ".usdz": "model/vnd.usdz+zip",
     }.get(extension, "application/octet-stream")
 
 

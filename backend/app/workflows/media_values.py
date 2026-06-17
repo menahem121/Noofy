@@ -18,7 +18,7 @@ _KIND_EXTENSIONS = {
     "image": IMAGE_EXTENSIONS,
     "audio": AUDIO_EXTENSIONS,
     "video": VIDEO_EXTENSIONS,
-    "3d": frozenset({".glb", ".gltf", ".obj", ".stl", ".fbx", ".ply"}),
+    "3d": frozenset({".glb", ".gltf", ".obj", ".stl", ".fbx", ".ply", ".usdz", ".spz", ".splat", ".ksplat"}),
 }
 
 

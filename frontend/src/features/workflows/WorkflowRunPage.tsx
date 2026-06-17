@@ -4631,7 +4631,7 @@ function mediaOutputKind(item: unknown, bucketName: string): "image" | "audio" |
     const filename = typeof record.filename === "string" ? record.filename.toLowerCase() : "";
     if (/\.(mp4|mov|webm|mkv)$/.test(filename)) return "video";
     if (/\.(wav|mp3|flac|ogg|m4a)$/.test(filename)) return "audio";
-    if (/\.(glb|gltf|obj|stl|fbx|ply|usdz|dae)$/.test(filename)) return "3d";
+    if (/\.(glb|gltf|obj|stl|fbx|ply|usdz|dae|spz|splat|ksplat)$/.test(filename)) return "3d";
     if (/\.[a-z0-9][a-z0-9._-]*$/.test(filename)) return "file";
   }
   if (bucketName === "audio") return "audio";

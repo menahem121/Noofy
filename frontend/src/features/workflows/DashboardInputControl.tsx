@@ -731,7 +731,8 @@ function ApiCredentialInput({
 const IMAGE_ACCEPTED_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp", ".gif"];
 const AUDIO_ACCEPTED_EXTENSIONS = [".wav", ".mp3", ".flac", ".ogg", ".m4a"];
 const VIDEO_ACCEPTED_EXTENSIONS = [".mp4", ".mov", ".webm", ".mkv"];
-const THREE_D_ACCEPTED_EXTENSIONS = [".glb", ".gltf", ".obj", ".stl", ".fbx", ".ply"];
+const THREE_D_ACCEPTED_EXTENSIONS = [".glb", ".gltf", ".obj", ".stl", ".fbx", ".ply", ".usdz", ".spz", ".splat", ".ksplat"];
+const THREE_D_ACCEPT_ATTRIBUTE = THREE_D_ACCEPTED_EXTENSIONS.join(",");
 
 function MediaSourceChooser({
   icon,
@@ -2376,7 +2377,7 @@ function AssetThreeDInput({
       className={`dashboard-three-d-input dashboard-three-d-input--${variant}${hasSelection ? " dashboard-three-d-input--selected" : ""}`}
       data-noofy-workflow-import-drop-ignore
     >
-      <input ref={inputRef} className="dashboard-image-input__file" type="file" accept=".glb,.gltf,.obj,.stl,.fbx,.ply" disabled={disabled || Boolean(progress)} onChange={(event) => void choose(event)} />
+      <input ref={inputRef} className="dashboard-image-input__file" type="file" accept={THREE_D_ACCEPT_ATTRIBUTE} disabled={disabled || Boolean(progress)} onChange={(event) => void choose(event)} />
       {galleryOpen ? (
         <GalleryPickerModal
           kind="3d"

@@ -411,9 +411,9 @@ describe("App workflow tabs", () => {
     render(<App />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Workflows" }));
-    const row = (await screen.findByText("Text to Image")).closest("article");
-    expect(row).toBeTruthy();
-    fireEvent.click(within(row as HTMLElement).getByRole("button", { name: "Open" }));
+    expect(await screen.findByRole("heading", { name: "Workflows" })).toBeInTheDocument();
+    await screen.findByText("Text to Image");
+    fireEvent.click(await screen.findByRole("button", { name: "Open" }));
 
     expect(await screen.findByRole("heading", { name: /Dashboard Builder/i })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Close Text to Image workspace tab" })).not.toBeInTheDocument();

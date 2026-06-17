@@ -1,24 +1,16 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 
 import type { AppNavigateOptions, AppRouteId } from "./features/app/AppLayout";
 import { SidebarProvider } from "./features/app/AppLayout";
 import { RuntimeStatusProvider } from "./features/app/RuntimeStatusProvider";
 import { WorkflowTabsProvider, WorkflowTabsRouteProvider, useWorkflowTabs, type WorkflowTabRuntimeState } from "./features/app/WorkflowTabs";
 import type { DashboardSchema } from "./features/dashboard-builder/dashboardBuilderContent";
-import { DashboardBuilderPage } from "./features/dashboard-builder/DashboardBuilderPage";
-import { DashboardBuilderLayoutPage } from "./features/dashboard-builder/DashboardBuilderLayoutPage";
-import { EngineSettingsPage } from "./features/settings/EngineSettingsPage";
-import { GalleryPage } from "./features/gallery/GalleryPage";
-import { HistoryPage } from "./features/history/HistoryPage";
-import { HomePage } from "./features/home/HomePage";
 import { removePendingImportedSetupReminder } from "./features/home/pendingSetupBanners";
+import { HomePage } from "./features/home/HomePage";
 import { WorkflowLibraryProvider, useWorkflowLibrary } from "./features/home/WorkflowLibraryProvider";
-import { ModelsPage } from "./features/models/ModelsPage";
 import { FirstLaunchOnboarding } from "./features/onboarding/FirstLaunchOnboarding";
 import { WorkflowGlobalDropImport, WorkflowImportStatusNotice } from "./features/workflows/WorkflowGlobalImport";
 import { WorkflowImportDialogs } from "./features/workflows/WorkflowImportModals";
-import { WorkflowRunPage } from "./features/workflows/WorkflowRunPage";
-import { WorkflowsPage } from "./features/workflows/WorkflowsPage";
 import { useWorkflowImportFlow } from "./features/workflows/useWorkflowImportFlow";
 import { workflowNeedsConfiguration } from "./features/workflows/workflowSearch";
 import {
@@ -38,6 +30,31 @@ import {
   type NativeWorkflowOpenPayload,
 } from "./lib/nativeWorkflowFiles";
 import { workflowDisplayName } from "./lib/workflowNames";
+
+const DashboardBuilderPage = lazy(() =>
+  import("./features/dashboard-builder/DashboardBuilderPage").then((module) => ({ default: module.DashboardBuilderPage })),
+);
+const DashboardBuilderLayoutPage = lazy(() =>
+  import("./features/dashboard-builder/DashboardBuilderLayoutPage").then((module) => ({ default: module.DashboardBuilderLayoutPage })),
+);
+const EngineSettingsPage = lazy(() =>
+  import("./features/settings/EngineSettingsPage").then((module) => ({ default: module.EngineSettingsPage })),
+);
+const GalleryPage = lazy(() =>
+  import("./features/gallery/GalleryPage").then((module) => ({ default: module.GalleryPage })),
+);
+const HistoryPage = lazy(() =>
+  import("./features/history/HistoryPage").then((module) => ({ default: module.HistoryPage })),
+);
+const ModelsPage = lazy(() =>
+  import("./features/models/ModelsPage").then((module) => ({ default: module.ModelsPage })),
+);
+const WorkflowRunPage = lazy(() =>
+  import("./features/workflows/WorkflowRunPage").then((module) => ({ default: module.WorkflowRunPage })),
+);
+const WorkflowsPage = lazy(() =>
+  import("./features/workflows/WorkflowsPage").then((module) => ({ default: module.WorkflowsPage })),
+);
 
 type AppRoute =
   | { name: "home" }
@@ -420,7 +437,7 @@ function AppContent() {
       onActivateWorkflowTab={openWorkflow}
       onRequestCloseWorkflowTab={(workflowId) => void requestCloseWorkflowTab(workflowId)}
     >
-      {renderPage()}
+      <Suspense fallback={<main className="app-route-loading" aria-busy="true" />}>{renderPage()}</Suspense>
       <WorkflowGlobalDropImport importFlow={workflowImportFlow} />
       <WorkflowImportStatusNotice
         importFlow={workflowImportFlow}

@@ -1,7 +1,12 @@
 import * as THREE from "three";
 import { describe, expect, it, vi } from "vitest";
 
-import { prepareThreeDModelForPreview } from "./threeDScene";
+import { isGaussianSplatPlyData, prepareThreeDModelForPreview } from "./threeDScene";
+
+function bytes(text: string): ArrayBuffer {
+  const encoded = new TextEncoder().encode(text);
+  return encoded.buffer.slice(encoded.byteOffset, encoded.byteOffset + encoded.byteLength);
+}
 
 function triangleGeometry() {
   const geometry = new THREE.BufferGeometry();
@@ -83,5 +88,44 @@ describe("prepareThreeDModelForPreview", () => {
     prepareThreeDModelForPreview(mesh, { replaceBareDefaultMaterials: true });
 
     expect((mesh.material as THREE.MeshStandardMaterial).vertexColors).toBe(true);
+  });
+});
+
+describe("isGaussianSplatPlyData", () => {
+  it("recognizes ComfyUI Gaussian splat PLY headers", () => {
+    expect(isGaussianSplatPlyData(bytes([
+      "ply",
+      "format binary_little_endian 1.0",
+      "element vertex 1",
+      "property float x",
+      "property float y",
+      "property float z",
+      "property float f_dc_0",
+      "property float f_dc_1",
+      "property float f_dc_2",
+      "property float opacity",
+      "property float scale_0",
+      "property float scale_1",
+      "property float scale_2",
+      "property float rot_0",
+      "property float rot_1",
+      "property float rot_2",
+      "property float rot_3",
+      "end_header",
+    ].join("\n")))).toBe(true);
+  });
+
+  it("keeps ordinary mesh PLY files on the mesh loader path", () => {
+    expect(isGaussianSplatPlyData(bytes([
+      "ply",
+      "format ascii 1.0",
+      "element vertex 3",
+      "property float x",
+      "property float y",
+      "property float z",
+      "element face 1",
+      "property list uchar int vertex_indices",
+      "end_header",
+    ].join("\n")))).toBe(false);
   });
 });

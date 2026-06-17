@@ -229,6 +229,40 @@ def test_result_from_history_recognizes_native_three_d_bucket(tmp_path: Path) ->
     assert model["url"].startswith("/api/jobs/job-three-d/outputs/view?")
 
 
+def test_result_from_history_recognizes_native_spz_three_d_bucket(tmp_path: Path) -> None:
+    adapter = ComfyUIEngineAdapter(
+        "http://127.0.0.1:8188", tmp_path, log_store=LogStore()
+    )
+
+    result = adapter._result_from_history(
+        "job-three-d-spz",
+        {
+            "status": {"completed": True, "status_str": "success"},
+            "outputs": {
+                "51": {
+                    "3d": [
+                        {
+                            "filename": "ComfyUI_TripoSplat_00001_.spz",
+                            "subfolder": "3d",
+                            "type": "output",
+                        }
+                    ]
+                }
+            },
+        },
+    )
+
+    model = result.outputs[0]["output"]["3d"][0]
+    assert model["kind"] == "3d"
+    assert model["type"] == "3d"
+    assert model["extension"] == ".spz"
+    assert model["mime_type"] == "application/octet-stream"
+    assert model["url"] == (
+        "/api/jobs/job-three-d-spz/outputs/view?"
+        "filename=ComfyUI_TripoSplat_00001_.spz&subfolder=3d&type=output"
+    )
+
+
 def test_result_from_history_normalizes_native_preview_three_d_result(tmp_path: Path) -> None:
     adapter = ComfyUIEngineAdapter(
         "http://127.0.0.1:8188", tmp_path, log_store=LogStore()

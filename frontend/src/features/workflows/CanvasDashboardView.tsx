@@ -1191,7 +1191,7 @@ function isGalleryOutputControlType(type: string): boolean {
 
 function isLivePreviewVisualOutput(outputKind: string | null | undefined, controlType: string): boolean {
   const kind = outputKind ?? (controlType === "display_video" ? "video" : null);
-  return kind === "image" || kind === "video" || controlType === "display_image" || controlType === "result_image";
+  return kind === "image" || kind === "video" || kind === "3d" || controlType === "display_image" || controlType === "result_image" || controlType === "display_3d";
 }
 
 function visualOutputWidgetNodeIds(
@@ -1622,7 +1622,7 @@ function OutputWidgetContent({
 
   return (
     <div className="widget-output-placeholder">
-      {wantsAudio ? <FileAudio size={36} aria-hidden="true" /> : wantsText ? <Type size={36} aria-hidden="true" /> : wantsVideo ? <Video size={36} aria-hidden="true" /> : wantsFile ? <FileIcon size={36} aria-hidden="true" /> : <ImageIcon size={36} aria-hidden="true" />}
+      {wantsAudio ? <FileAudio size={36} aria-hidden="true" /> : wantsText ? <Type size={36} aria-hidden="true" /> : wantsVideo ? <Video size={36} aria-hidden="true" /> : wantsThreeD ? <Box size={36} aria-hidden="true" /> : wantsFile ? <FileIcon size={36} aria-hidden="true" /> : <ImageIcon size={36} aria-hidden="true" />}
       <span>
         {wantsAudio
           ? "Your generated audio will appear here."
@@ -1630,6 +1630,8 @@ function OutputWidgetContent({
             ? "Your generated text will appear here."
           : wantsVideo
             ? "Your generated video will appear here."
+            : wantsThreeD
+              ? "Your generated 3D model will appear here."
             : wantsFile
               ? "Your generated file will appear here."
               : "Your generated image will appear here."}

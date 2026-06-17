@@ -989,7 +989,8 @@ describe("DashboardInputControl", () => {
   it.each([
     ["load_audio", "audio", "speech.wav", ".wav", "audio/wav"],
     ["load_video", "video", "clip.mp4", ".mp4", "video/mp4"],
-    ["load_3d", "3d", "mesh.glb", ".glb", "model/gltf-binary"],
+    ["load_3d", "3d", "model.spz", ".spz", "application/octet-stream"],
+    ["load_3d", "3d", "scene.usdz", ".usdz", "model/vnd.usdz+zip"],
   ] as const)("selects a Gallery %s reference through paged backend results", async (controlType, kind, filename, extension, mimeType) => {
     const onChange = vi.fn();
     fetchMock.mockImplementation((input: RequestInfo | URL) => {

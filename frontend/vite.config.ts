@@ -52,6 +52,8 @@ export default defineConfig({
   },
   build: {
     target: tauriPlatform === "windows" ? "chrome105" : "safari13",
+    // Three.js is intentionally isolated behind the lazy 3D viewer route.
+    chunkSizeWarningLimit: 560,
     minify: !tauriDebug,
     sourcemap: Boolean(tauriDebug),
   },
