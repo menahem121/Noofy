@@ -1217,6 +1217,13 @@
   min-height: 14px;
 }
 
+.preview-stack--dragging .preview-insert-zone {
+  z-index: 2;
+  flex-basis: 34px;
+  min-height: 34px;
+  margin-block: -10px;
+}
+
 .preview-insert-zone::before {
   content: "";
   position: absolute;
@@ -1236,6 +1243,12 @@
 .preview-insert-zone--compact {
   flex-basis: 10px;
   min-height: 10px;
+}
+
+.preview-stack--dragging .preview-insert-zone--compact {
+  flex-basis: 28px;
+  min-height: 28px;
+  margin-block: -9px;
 }
 
 .preview-insert-zone--active::before {

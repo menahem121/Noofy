@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DashboardBuilderPage } from "./DashboardBuilderPage";
@@ -946,6 +946,68 @@ describe("DashboardBuilderPage", () => {
     ]);
   });
 
+  it("applies the visible top-level insertion preview when dropping on a nearby widget", async () => {
+    const onContinue = await renderDragBuilder(dragSchema());
+    const source = screen.getByTestId("created-widget-ctrl-node-6-text");
+    const insertBeforeWidth = screen.getByTestId("created-insert-top-ctrl-node-5-width");
+    const nearbyWidthWidget = screen.getByTestId("created-widget-ctrl-node-5-width");
+    const dataTransfer = dragDataTransfer();
+
+    fireEvent.dragStart(source, { dataTransfer });
+    fireEvent.dragOver(insertBeforeWidth, { dataTransfer });
+    expect(insertBeforeWidth).toHaveClass("preview-insert-zone--active");
+    fireEvent.drop(nearbyWidthWidget, { dataTransfer });
+    fireEvent.dragEnd(source, { dataTransfer });
+
+    fireEvent.click(screen.getByRole("button", { name: /^continue$/i }));
+
+    expect(onContinue.mock.calls[0][0].groups).toEqual([]);
+    expect(onContinue.mock.calls[0][0].widgets.map((widget: { id: string }) => widget.id)).toEqual([
+      "ctrl-node-7-text",
+      "ctrl-node-6-text",
+      "ctrl-node-5-width",
+      "ctrl-node-5-height",
+    ]);
+  });
+
+  it("scrolls the created widgets panel only while dragging close to its lower edge", async () => {
+    await renderDragBuilder(dragSchema());
+    const source = screen.getByTestId("created-widget-ctrl-node-6-text");
+    const lowerInsertZone = screen.getByTestId("created-insert-top-ctrl-node-5-width");
+    const previewScroll = document.querySelector(".builder-preview__canvas") as HTMLElement;
+    const dataTransfer = dragDataTransfer();
+    const rectSpy = vi.spyOn(previewScroll, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 100,
+      top: 100,
+      left: 0,
+      right: 360,
+      bottom: 500,
+      width: 360,
+      height: 400,
+      toJSON: () => ({}),
+    });
+
+    try {
+      previewScroll.scrollTop = 120;
+      fireEvent.dragStart(source, { dataTransfer });
+      const outsideEdgeDragOver = createEvent.dragOver(lowerInsertZone, { dataTransfer });
+      Object.defineProperty(outsideEdgeDragOver, "clientY", { value: 430 });
+      fireEvent(lowerInsertZone, outsideEdgeDragOver);
+      expect(previewScroll.scrollTop).toBe(120);
+
+      const edgeDragOver = createEvent.dragOver(lowerInsertZone, { dataTransfer });
+      Object.defineProperty(edgeDragOver, "clientY", { value: 476 });
+      fireEvent(lowerInsertZone, edgeDragOver);
+      fireEvent.dragEnd(source, { dataTransfer });
+
+      expect(previewScroll.scrollTop).toBeGreaterThan(120);
+      expect(previewScroll.scrollTop).toBeLessThanOrEqual(125);
+    } finally {
+      rectSpy.mockRestore();
+    }
+  });
+
   it("groups widgets only when dropping onto another widget body", async () => {
     const onContinue = await renderDragBuilder(dragSchema());
     const source = screen.getByTestId("created-widget-ctrl-node-6-text");
@@ -1866,7 +1928,15 @@ describe("DashboardBuilderPage", () => {
       target: { files: [new File(["image"], "creator.png", { type: "image/png" })] },
     });
 
-    expect(await screen.findByText("creator.png saved as default.")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/workflows/wf-image/assets/image",
+        expect.objectContaining({ method: "POST" }),
+      );
+    }, { timeout: 3000 });
+    await waitFor(() => {
+      expect(screen.getByText("creator.png saved as default.")).toBeInTheDocument();
+    }, { timeout: 3000 });
 
     fireEvent.click(screen.getByRole("button", { name: /^continue$/i }));
     const payload = toBackendPayload(onContinue.mock.calls[0][0] as DashboardSchema);

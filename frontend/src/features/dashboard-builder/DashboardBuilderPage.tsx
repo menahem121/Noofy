@@ -96,6 +96,10 @@ type CreatedDropPreview =
   | { kind: "insert"; targetGroupId: string | null; beforeId: string | null }
   | null;
 
+const CREATED_DRAG_SCROLL_EDGE_PX = 56;
+const CREATED_DRAG_SCROLL_MAX_STEP_PX = 5;
+const CREATED_DRAG_SCROLL_MIN_PROXIMITY = 0.15;
+
 type PendingWidgetRemoval = { widget: DashboardWidget } | null;
 type WidgetScopedStatus = { widgetId: string; message: string };
 type HoveredValuePreview = {
@@ -462,8 +466,69 @@ export function DashboardBuilderPage({
     setCreatedDropPreview(null);
   }
 
+  function selectCreatedDrag(dropped: CreatedDragState) {
+    if (dropped.kind === "widget") handleSelectWidget(dropped.widgetId);
+    else handleSelectGroup(dropped.groupId);
+  }
+
+  function commitCreatedInsertPreview(dropped: CreatedDragState, preview: Extract<NonNullable<CreatedDropPreview>, { kind: "insert" }>) {
+    if (preview.targetGroupId === null) {
+      updateSchemaFromUser((current) => moveCreatedItemToTopLevelPosition(current, dropped, preview.beforeId));
+    } else {
+      if (dropped.kind !== "widget") return false;
+      const targetGroupId = preview.targetGroupId;
+      updateSchemaFromUser((current) => moveWidgetToGroupPosition(current, dropped.widgetId, targetGroupId, preview.beforeId));
+    }
+    selectCreatedDrag(dropped);
+    handleCreatedDragEnd();
+    return true;
+  }
+
+  function commitVisibleCreatedInsertPreview() {
+    if (!createdDrag || createdDropPreview?.kind !== "insert") return false;
+    return commitCreatedInsertPreview(createdDrag, createdDropPreview);
+  }
+
+  function scrollCreatedPreviewDuringDrag(event: DragEvent<HTMLElement>) {
+    if (!createdDrag) return;
+    const scrollElement = event.currentTarget.classList.contains("builder-preview__canvas")
+      ? event.currentTarget
+      : event.currentTarget.closest<HTMLElement>(".builder-preview__canvas");
+    if (!scrollElement) return;
+    const rect = scrollElement.getBoundingClientRect();
+    const distanceFromTop = event.clientY - rect.top;
+    const distanceFromBottom = rect.bottom - event.clientY;
+    let scrollDelta = 0;
+
+    if (distanceFromTop < CREATED_DRAG_SCROLL_EDGE_PX) {
+      const proximity = (CREATED_DRAG_SCROLL_EDGE_PX - Math.max(0, distanceFromTop)) / CREATED_DRAG_SCROLL_EDGE_PX;
+      scrollDelta = -Math.ceil(CREATED_DRAG_SCROLL_MAX_STEP_PX * Math.max(CREATED_DRAG_SCROLL_MIN_PROXIMITY, proximity));
+    } else if (distanceFromBottom < CREATED_DRAG_SCROLL_EDGE_PX) {
+      const proximity = (CREATED_DRAG_SCROLL_EDGE_PX - Math.max(0, distanceFromBottom)) / CREATED_DRAG_SCROLL_EDGE_PX;
+      scrollDelta = Math.ceil(CREATED_DRAG_SCROLL_MAX_STEP_PX * Math.max(CREATED_DRAG_SCROLL_MIN_PROXIMITY, proximity));
+    }
+
+    if (scrollDelta !== 0) {
+      event.preventDefault();
+      scrollElement.scrollTop += scrollDelta;
+    }
+  }
+
+  function handleCreatedPreviewDragOverCapture(event: DragEvent<HTMLDivElement>) {
+    if (event.target === event.currentTarget) scrollCreatedPreviewDuringDrag(event);
+    if (createdDrag && createdDropPreview?.kind === "insert") event.preventDefault();
+  }
+
+  function handleCreatedPreviewDrop(event: DragEvent<HTMLDivElement>) {
+    if (!createdDrag || createdDropPreview?.kind !== "insert") return;
+    event.preventDefault();
+    event.stopPropagation();
+    commitCreatedInsertPreview(createdDrag, createdDropPreview);
+  }
+
   function handleWidgetDragOver(event: DragEvent<HTMLElement>, targetWidgetId: string) {
     if (!createdDrag || createdDrag.kind !== "widget") return;
+    scrollCreatedPreviewDuringDrag(event);
     if (createdDrag.widgetId === targetWidgetId) {
       event.stopPropagation();
       return;
@@ -485,6 +550,7 @@ export function DashboardBuilderPage({
   function handleWidgetDrop(event: DragEvent<HTMLElement>, targetWidgetId: string) {
     event.preventDefault();
     event.stopPropagation();
+    if (commitVisibleCreatedInsertPreview()) return;
     if (!createdDrag || createdDrag.kind !== "widget" || createdDrag.widgetId === targetWidgetId) return;
     updateSchemaFromUser((current) => groupWidgetOnTarget(current, createdDrag.widgetId, targetWidgetId));
     handleSelectWidget(createdDrag.widgetId);
@@ -493,6 +559,7 @@ export function DashboardBuilderPage({
 
   function handleGroupDragOver(event: DragEvent<HTMLElement>, targetGroupId: string) {
     if (!createdDrag || createdDrag.kind !== "widget") return;
+    scrollCreatedPreviewDuringDrag(event);
     if (createdDrag.sourceGroupId === targetGroupId) {
       event.stopPropagation();
       return;
@@ -505,6 +572,7 @@ export function DashboardBuilderPage({
   function handleGroupDrop(event: DragEvent<HTMLElement>, targetGroupId: string) {
     event.preventDefault();
     event.stopPropagation();
+    if (commitVisibleCreatedInsertPreview()) return;
     if (!createdDrag || createdDrag.kind !== "widget") return;
     updateSchemaFromUser((current) => moveWidgetToGroup(current, createdDrag.widgetId, targetGroupId));
     handleSelectWidget(createdDrag.widgetId);
@@ -513,6 +581,7 @@ export function DashboardBuilderPage({
 
   function handleTopLevelInsertDragOver(event: DragEvent<HTMLElement>, beforeId: string | null) {
     if (!createdDrag) return;
+    scrollCreatedPreviewDuringDrag(event);
     if (
       (createdDrag.kind === "widget" && beforeId === createdDrag.widgetId) ||
       (createdDrag.kind === "group" && beforeId === createdDrag.groupId)
@@ -539,6 +608,7 @@ export function DashboardBuilderPage({
 
   function handleGroupInsertDragOver(event: DragEvent<HTMLElement>, targetGroupId: string, beforeWidgetId: string | null) {
     if (!createdDrag || createdDrag.kind !== "widget") return;
+    scrollCreatedPreviewDuringDrag(event);
     if (beforeWidgetId === createdDrag.widgetId) {
       event.stopPropagation();
       setCreatedDropPreview(null);
@@ -762,7 +832,11 @@ export function DashboardBuilderPage({
               </span>
             </header>
 
-            <div className="builder-pane__scroll builder-preview__canvas">
+            <div
+              className="builder-pane__scroll builder-preview__canvas"
+              onDragOverCapture={handleCreatedPreviewDragOverCapture}
+              onDrop={handleCreatedPreviewDrop}
+            >
               {schema.widgets.length === 0 ? (
                 <div className="builder-empty">
                   <div className="builder-empty__icon">
@@ -2499,12 +2573,13 @@ function CreatedWidgetsList({
   onGroupInsertDragOver: (event: DragEvent<HTMLElement>, targetGroupId: string, beforeWidgetId: string | null) => void;
   onGroupInsertDrop: (event: DragEvent<HTMLElement>, targetGroupId: string, beforeWidgetId: string | null) => void;
 }) {
+  const isDraggingCreatedItem = draggingWidgetId !== null || draggingGroupId !== null;
   return (
     <section className="preview-section">
       <header>
         <h4>Created widgets</h4>
       </header>
-      <div className="preview-stack">
+      <div className={`preview-stack ${isDraggingCreatedItem ? "preview-stack--dragging" : ""}`}>
         {items.map((item) => (
           <Fragment key={item.id}>
             <PreviewInsertDropZone
