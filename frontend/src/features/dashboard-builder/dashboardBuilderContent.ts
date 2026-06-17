@@ -635,7 +635,7 @@ export function suggestDescription(value: WorkflowNodeValue): string {
     negative: "Describe what to avoid in the result.",
     width: "Output width in pixels.",
     height: "Output height in pixels.",
-    seed: "Lock or change to get a different variation.",
+    seed: "Change the seed to get a different variation.",
     denoise: "Lower keeps your input. Higher allows bigger changes.",
     steps: "More passes can add detail but take longer.",
     cfg: "How strongly the prompt guides the image.",
@@ -1281,7 +1281,7 @@ function schemaHasOutputWidgetForRecords(
 
 export function addAutomaticDashboardWidgets(schema: DashboardSchema, workflow: MockWorkflow): DashboardSchema {
   let next = addAutomaticNoteWidgets(schema, workflow);
-  next = addAutomaticRequiredRuntimeTextInputWidgets(next, workflow);
+  next = ensureRequiredRuntimeInputWidgets(next, workflow);
   next = addAutomaticImageInputWidgets(next, workflow);
   next = addAutomaticAudioInputWidgets(next, workflow);
   next = addAutomaticVideoInputWidgets(next, workflow);
@@ -1295,24 +1295,58 @@ export function addAutomaticDashboardWidgets(schema: DashboardSchema, workflow: 
   return addAutomaticFileOutputWidget(next, workflow);
 }
 
-export function addAutomaticRequiredRuntimeTextInputWidgets(schema: DashboardSchema, workflow: MockWorkflow): DashboardSchema {
-  const existingValueIds = new Set(schema.widgets.map((widget) => widget.valueId));
-  const existingBindings = new Set(schema.widgets.map((widget) => `${widget.binding.nodeId}:${widget.binding.inputName}`));
-  const widgets = [...schema.widgets];
+export function ensureRequiredRuntimeInputWidgets(schema: DashboardSchema, workflow: MockWorkflow): DashboardSchema {
+  const normalized = normalizeDashboardSchema(schema);
+  const existingValueIds = new Set(normalized.widgets.map((widget) => widget.valueId));
+  const visibleBindings = new Set(normalized.widgets.map(widgetBindingKey));
+  const hiddenDefaults = new Set(
+    (normalized.hiddenWidgets ?? [])
+      .filter(hiddenWidgetHasUsableRequiredRuntimeDefault)
+      .map(widgetBindingKey),
+  );
+  const widgets = [...normalized.widgets];
 
   for (const node of workflow.nodes) {
     for (const value of node.values) {
-      if (!value.requiredRuntimeInput || value.valueKind !== "string" || existingValueIds.has(value.id)) continue;
+      if (!value.requiredRuntimeInput || isOutputValueKind(value.valueKind) || existingValueIds.has(value.id)) continue;
       const bindingKey = `${value.nodeId}:${value.inputName}`;
-      if (existingBindings.has(bindingKey)) continue;
-      const widget = createDashboardWidgetForValue(value, node);
-      widgets.push({ ...widget, widgetType: widget.widgetType === "textarea" ? "textarea" : "string_field", defaultValue: "" });
+      if (visibleBindings.has(bindingKey) || hiddenDefaults.has(bindingKey)) continue;
+      widgets.push(requiredRuntimeWidgetForValue(value, node));
       existingValueIds.add(value.id);
-      existingBindings.add(bindingKey);
+      visibleBindings.add(bindingKey);
     }
   }
 
-  return widgets.length === schema.widgets.length ? schema : { ...schema, widgets };
+  return widgets.length === normalized.widgets.length ? normalized : normalizeDashboardSchema({ ...normalized, widgets });
+}
+
+function hiddenWidgetHasUsableRequiredRuntimeDefault(widget: DashboardWidget): boolean {
+  if (isOutputWidgetType(widget.widgetType) || !hasExecutableWorkflowBinding(widget)) return false;
+  if (!widget.binding.nodeId || !widget.binding.inputName) return false;
+  if (isMediaInputWidgetType(widget.widgetType)) return isPersistedMediaValue(widget.defaultValue);
+  return widget.defaultPinned === true && widget.defaultValue !== null && widget.defaultValue !== undefined && widget.defaultValue !== "";
+}
+
+function requiredRuntimeWidgetForValue(value: WorkflowNodeValue, node: WorkflowNode): DashboardWidget {
+  const widget = createDashboardWidgetForValue(value, node);
+  if (value.valueKind === "string") {
+    return { ...widget, widgetType: widget.widgetType === "textarea" ? "textarea" : "string_field", defaultValue: "" };
+  }
+  if (value.valueKind === "image_input") return { ...widget, widgetType: "load_image", defaultValue: null, drawMask: undefined };
+  if (value.valueKind === "audio_input") return { ...widget, widgetType: "load_audio", defaultValue: null };
+  if (value.valueKind === "video_input") return { ...widget, widgetType: "load_video", defaultValue: null };
+  if (value.valueKind === "three_d_input") return { ...widget, widgetType: "load_3d", defaultValue: null };
+  if (value.valueKind === "file_input") return { ...widget, widgetType: "load_file", defaultValue: null };
+  return widget;
+}
+
+function isOutputValueKind(valueKind: WorkflowValueKind): boolean {
+  return valueKind === "image_output"
+    || valueKind === "audio_output"
+    || valueKind === "text_output"
+    || valueKind === "video_output"
+    || valueKind === "file_output"
+    || valueKind === "three_d_output";
 }
 
 export function addAutomaticTextOutputWidget(schema: DashboardSchema, workflow: MockWorkflow): DashboardSchema {

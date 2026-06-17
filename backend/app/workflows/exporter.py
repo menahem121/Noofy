@@ -153,6 +153,10 @@ class WorkflowExporter:
                 export_package,
                 input_values=input_values,
             )
+            dashboard_data = self._dashboard_with_user_setup(
+                dashboard_data,
+                export_package,
+            )
             dashboard_data = self._portable_dashboard(dashboard_data)
             self._write_dashboard_package_assets(
                 zf,
@@ -257,6 +261,54 @@ class WorkflowExporter:
             value = _export_safe_user_value(values[workflow_input.id])
             item["default"] = value
             item["default_pinned"] = True
+        return exported
+
+    def _dashboard_with_user_setup(
+        self,
+        dashboard_data: dict[str, Any],
+        package: WorkflowPackage,
+    ) -> dict[str, Any]:
+        if self.user_state_service is None:
+            return dashboard_data
+
+        user_state = self.user_state_service.get(package.metadata.id)
+        if not user_state.layout_overrides and user_state.presentation_overrides.action_bar is None:
+            return dashboard_data
+
+        exported = json.loads(json.dumps(dashboard_data))
+        layout_overrides = {
+            control_id: override.model_dump(mode="json")
+            for control_id, override in user_state.layout_overrides.items()
+        }
+        for section in exported.get("sections") or []:
+            if not isinstance(section, dict):
+                continue
+            for control in section.get("controls") or []:
+                if not isinstance(control, dict):
+                    continue
+                control_id = control.get("id")
+                if isinstance(control_id, str) and control_id in layout_overrides:
+                    control["layout"] = _portable_layout_override(
+                        layout_overrides[control_id],
+                        existing=control.get("layout"),
+                    )
+            for group in section.get("groups") or []:
+                if not isinstance(group, dict):
+                    continue
+                group_id = group.get("id")
+                if isinstance(group_id, str) and group_id in layout_overrides:
+                    group["layout"] = _portable_layout_override(
+                        layout_overrides[group_id],
+                        existing=group.get("layout"),
+                    )
+
+        action_bar = user_state.presentation_overrides.action_bar
+        if action_bar is not None:
+            presentation = exported.get("presentation")
+            if not isinstance(presentation, dict):
+                presentation = {}
+                exported["presentation"] = presentation
+            presentation["action_bar"] = action_bar.model_dump(mode="json")
         return exported
 
     # ------------------------------------------------------------------
@@ -1290,6 +1342,25 @@ def _export_safe_user_value(value: Any, *, credential: bool = False) -> Any:
             and isinstance(item, str)
         }
     return value
+
+
+def _portable_layout_override(
+    override: dict[str, Any],
+    *,
+    existing: Any,
+) -> dict[str, Any]:
+    layout = {
+        "x": override["x"],
+        "y": override["y"],
+        "w": override["w"],
+        "h": override["h"],
+    }
+    if isinstance(existing, dict):
+        for key in ("min_w", "min_h"):
+            value = existing.get(key)
+            if isinstance(value, int):
+                layout[key] = value
+    return layout
 
 
 def _local_media_default_path(value: Any) -> Path | None:

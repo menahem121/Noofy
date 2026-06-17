@@ -180,6 +180,66 @@ function imageWorkflowBindableInputsResponse() {
   };
 }
 
+function requiredTextPathBindableInputsResponse() {
+  return {
+    nodes: [
+      {
+        node_id: "22:4",
+        node_type: "LoadText",
+        node_title: "Load first text file",
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "image",
+            current_value: "/creator/input-a.txt",
+            kind: "string",
+            suggested_widget_type: "string_field",
+            widget_types: ["string_field", "textarea"],
+            required_runtime_input: true,
+            required_runtime_kind: "text",
+          },
+        ],
+      },
+      {
+        node_id: "22:5",
+        node_type: "LoadText",
+        node_title: "Load second text file",
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "image",
+            current_value: "/creator/input-b.txt",
+            kind: "string",
+            suggested_widget_type: "string_field",
+            widget_types: ["string_field", "textarea"],
+            required_runtime_input: true,
+            required_runtime_kind: "text",
+          },
+        ],
+      },
+      {
+        node_id: "9",
+        node_type: "PreviewImage",
+        node_title: "Preview result",
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "output_image",
+            current_value: null,
+            kind: "image_output",
+            suggested_widget_type: "display_image",
+            widget_types: ["display_image"],
+            auto_select: true,
+          },
+        ],
+      },
+    ],
+  };
+}
+
 function optionalMediaAndTextOutputBindableInputsResponse() {
   return {
     nodes: [
@@ -1624,6 +1684,77 @@ describe("DashboardBuilderPage", () => {
         expect.objectContaining({ id: "note-1", title: "Updated draft title" }),
       ]);
     });
+  });
+
+  it("repairs a failed-save draft missing required text-path widgets before continuing", async () => {
+    const brokenDraft: DashboardSchema = {
+      version: 1,
+      workflowId: "wf-text-path",
+      workflowName: "Text path workflow",
+      layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      groups: [],
+      widgets: [
+        {
+          id: "note-1",
+          valueId: "note:note-1",
+          binding: { nodeId: "", inputName: "" },
+          widgetType: "note",
+          title: "Instructions",
+          description: "A previous failed save left this draft without required inputs.",
+          defaultValue: null,
+        },
+      ],
+    };
+    saveDashboardDraft(brokenDraft, dashboardSchemaFingerprint(brokenDraft));
+    const onContinue = vi.fn();
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/workflows/wf-text-path/bindable-inputs")) {
+        return Promise.resolve(jsonResponse(requiredTextPathBindableInputsResponse()));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(
+      <DashboardBuilderPage
+        workflowId="wf-text-path"
+        workflowName="Text path workflow"
+        initialSchema={brokenDraft}
+        onBack={vi.fn()}
+        onContinue={onContinue}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      const stored = JSON.parse(window.localStorage.getItem(dashboardDraftKey("wf-text-path")) ?? "{}") as DashboardSchema;
+      expect(stored.widgets).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: "ctrl-node-22:4-image", defaultValue: "" }),
+          expect.objectContaining({ id: "ctrl-node-22:5-image", defaultValue: "" }),
+        ]),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /^continue$/i }));
+
+    const payload = toBackendPayload(onContinue.mock.calls[0][0] as DashboardSchema);
+    expect(payload.inputs).toEqual([
+      expect.objectContaining({
+        id: "ctrl-node-22:4-image",
+        binding: { node_id: "22:4", input_name: "image" },
+        control: "string_field",
+        default: "",
+      }),
+      expect.objectContaining({
+        id: "ctrl-node-22:5-image",
+        binding: { node_id: "22:5", input_name: "image" },
+        control: "string_field",
+        default: "",
+      }),
+    ]);
+    expect(payload.dashboard.outputs ?? []).toEqual([]);
   });
 
   it("preserves a removed input image widget as a hidden workflow input", async () => {

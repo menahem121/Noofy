@@ -727,8 +727,13 @@ def test_save_dashboard_rejects_hidden_required_text_path_inputs_with_empty_defa
         ],
     }
 
-    with pytest.raises(DashboardAuthoringError, match="required input"):
+    with pytest.raises(DashboardAuthoringError, match="required input") as exc_info:
         service.save_dashboard(workflow_id, inputs, dashboard)
+
+    message = str(exc_info.value)
+    assert 'Text file input "Image" on node 22:4' in message
+    assert 'Text file input "Image" on node 22:5' in message
+    assert "Image (text input" not in message
 
 
 def test_save_dashboard_rejects_hidden_required_runtime_input_without_default(

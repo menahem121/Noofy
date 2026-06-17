@@ -55,6 +55,7 @@ import {
   WIDGET_TYPE_LABELS,
   buildInitialDashboard,
   clearDashboardDraft,
+  ensureRequiredRuntimeInputWidgets,
   normalizeDashboardSchema,
   removeDashboardWidgetsFromSchema,
   resolveBuilderSchemaSource,
@@ -75,6 +76,7 @@ interface DashboardBuilderLayoutPageProps {
   workflowId?: string;
   workflowName?: string;
   initialSchema?: DashboardSchema;
+  workflow?: MockWorkflow;
   onBackToWidgets: (schema: DashboardSchema) => void;
   onSaveComplete: (workflowId: string) => void;
   onNavigate: (route: AppRouteId) => void;
@@ -113,6 +115,7 @@ export function DashboardBuilderLayoutPage({
   workflowId,
   workflowName,
   initialSchema,
+  workflow: providedWorkflow,
   onBackToWidgets,
   onSaveComplete,
   onNavigate,
@@ -126,6 +129,7 @@ export function DashboardBuilderLayoutPage({
   const draftActiveRef = useRef(false);
 
   const workflow: MockWorkflow = useMemo(() => {
+    if (providedWorkflow?.id === activeWorkflowId) return providedWorkflow;
     return {
       ...MOCK_WORKFLOW,
       id: activeWorkflowId,
@@ -133,14 +137,17 @@ export function DashboardBuilderLayoutPage({
       source: workflowId ? "imported_noofy_package" : MOCK_WORKFLOW.source,
       nodes: workflowId ? [] : MOCK_WORKFLOW.nodes,
     };
-  }, [activeWorkflowId, activeWorkflowName, workflowId]);
+  }, [activeWorkflowId, activeWorkflowName, workflowId, providedWorkflow]);
 
   const [schema, setSchema] = useState<DashboardSchema>(
     () => {
       const source = resolveBuilderSchemaSource(activeWorkflowId, scopedInitialSchema);
       draftBaseKeyRef.current = source.baseKey;
       draftActiveRef.current = source.fromDraft;
-      return normalizeDashboardSchema(source.schema ?? buildInitialDashboard(workflow));
+      return ensureRequiredRuntimeInputWidgets(
+        normalizeDashboardSchema(source.schema ?? buildInitialDashboard(workflow)),
+        workflow,
+      );
     },
   );
   const schemaRef = useRef(schema);
@@ -175,7 +182,10 @@ export function DashboardBuilderLayoutPage({
     const source = resolveBuilderSchemaSource(activeWorkflowId, scopedInitialSchema);
     draftBaseKeyRef.current = source.baseKey;
     draftActiveRef.current = source.fromDraft;
-    const nextSchema = normalizeDashboardSchema(source.schema ?? buildInitialDashboard(workflow));
+    const nextSchema = ensureRequiredRuntimeInputWidgets(
+      normalizeDashboardSchema(source.schema ?? buildInitialDashboard(workflow)),
+      workflow,
+    );
     setSchema(nextSchema);
     setSelectedItemId(null);
     setActiveDragItemId(null);
@@ -495,15 +505,20 @@ export function DashboardBuilderLayoutPage({
 
   function handleSaveDraft() {
     if (!schemaReady) return;
+    const nextSchema = ensureRequiredRuntimeInputWidgets(schema, workflow);
     draftActiveRef.current = true;
-    saveDashboardDraft(schema, draftBaseKeyRef.current);
+    saveDashboardDraft(nextSchema, draftBaseKeyRef.current);
+    setSchema(nextSchema);
     setSaveError(null);
     setSavedFlash("draft");
     window.setTimeout(() => setSavedFlash(null), 2400);
   }
 
   function handleBackToWidgets() {
-    const nextSchema = schemaReady ? schema : buildInitialDashboard(workflow);
+    const nextSchema = ensureRequiredRuntimeInputWidgets(
+      schemaReady ? schema : buildInitialDashboard(workflow),
+      workflow,
+    );
     if (schemaReady && draftActiveRef.current) {
       saveDashboardDraft(nextSchema, draftBaseKeyRef.current);
     }
@@ -514,7 +529,8 @@ export function DashboardBuilderLayoutPage({
     if (!schemaReady || !allWidgetsPlaced || isSavingDashboard) return;
     const targetId = activeWorkflowId;
     const saveSequence = ++saveSequenceRef.current;
-    const payload = toBackendPayload(schema);
+    const saveSchema = ensureRequiredRuntimeInputWidgets(schema, workflow);
+    const payload = toBackendPayload(saveSchema);
     setIsSavingDashboard(true);
     setSaveError(null);
     setSavedFlash(null);
@@ -529,7 +545,9 @@ export function DashboardBuilderLayoutPage({
       .catch((error) => {
         if (saveSequence !== saveSequenceRef.current || activeWorkflowIdRef.current !== targetId) return;
         draftActiveRef.current = true;
-        saveDashboardDraft({ ...schema, workflowId: targetId }, draftBaseKeyRef.current);
+        const draftSchema = { ...saveSchema, workflowId: targetId };
+        setSchema(draftSchema);
+        saveDashboardDraft(draftSchema, draftBaseKeyRef.current);
         setSavedFlash(null);
         setSaveError(
           error instanceof Error

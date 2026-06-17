@@ -46,6 +46,7 @@ import {
   clearDashboardDraft,
   createDashboardWidgetForValue,
   defaultNumericRangeForValue,
+  ensureRequiredRuntimeInputWidgets,
   isOutputWidgetType,
   normalizeDashboardSchema,
   removeDashboardWidgetsFromSchema,
@@ -75,7 +76,7 @@ interface DashboardBuilderPageProps {
   initialSchema?: DashboardSchema;
   onBack: () => void;
   onCancelEdit?: () => void;
-  onContinue: (schema: DashboardSchema) => void;
+  onContinue: (schema: DashboardSchema, workflow?: MockWorkflow) => void;
   onNavigate: (route: AppRouteId) => void;
 }
 
@@ -246,10 +247,12 @@ export function DashboardBuilderPage({
     draftBaseKeyRef.current = source.baseKey;
     draftActiveRef.current = source.fromDraft;
     const sourceSchema = source.schema ?? buildInitialDashboard(workflow);
+    const reconciled = reconcileDashboardSchemaForWorkflow(sourceSchema, workflow);
     const nextSchema = normalizeDashboardSchema(
-      source.fromDraft
-        ? reconcileDashboardSchemaForWorkflow(sourceSchema, workflow)
-        : addAutomaticDashboardWidgets(reconcileDashboardSchemaForWorkflow(sourceSchema, workflow), workflow),
+      ensureRequiredRuntimeInputWidgets(
+        source.fromDraft ? reconciled : addAutomaticDashboardWidgets(reconciled, workflow),
+        workflow,
+      ),
     );
     setSchema(nextSchema);
     const firstWidget = nextSchema.widgets[0];
@@ -582,7 +585,12 @@ export function DashboardBuilderPage({
   function handleContinue() {
     if (!builderReady || schema.widgets.length === 0 || hasValidationErrors) return;
     if (draftActiveRef.current) saveDashboardDraft(schema, draftBaseKeyRef.current);
-    onContinue(schema);
+    const nextSchema = ensureRequiredRuntimeInputWidgets(schema, workflow);
+    if (onContinue.length >= 2) {
+      onContinue(nextSchema, workflow);
+    } else {
+      onContinue(nextSchema);
+    }
   }
 
   return (

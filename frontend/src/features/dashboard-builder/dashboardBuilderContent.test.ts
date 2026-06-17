@@ -12,6 +12,7 @@ import {
   clearDashboardDraft,
   dashboardDraftKey,
   dashboardSchemaFingerprint,
+  ensureRequiredRuntimeInputWidgets,
   loadDashboardDraft,
   loadDashboardDraftEntry,
   resolveBuilderSchemaSource,
@@ -1036,6 +1037,244 @@ describe("workflowFromBindableInputs", () => {
         default: "",
       }),
     ]);
+  });
+
+  it("repairs a draft missing backend-marked required runtime text widgets", () => {
+    const workflow = workflowFromBindableInputs("wf-required-text", "Required Text Workflow", [
+      {
+        node_id: "22:4",
+        node_type: "LoadText",
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "image",
+            current_value: "/creator/input-a.txt",
+            kind: "string",
+            suggested_widget_type: "string_field",
+            widget_types: ["string_field", "textarea"],
+            required_runtime_input: true,
+            required_runtime_kind: "text",
+          },
+        ],
+      },
+      {
+        node_id: "22:5",
+        node_type: "LoadText",
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "image",
+            current_value: "/creator/input-b.txt",
+            kind: "string",
+            suggested_widget_type: "string_field",
+            widget_types: ["string_field", "textarea"],
+            required_runtime_input: true,
+            required_runtime_kind: "text",
+          },
+        ],
+      },
+    ]);
+    const brokenDraft: DashboardSchema = {
+      version: 1,
+      workflowId: "wf-required-text",
+      workflowName: "Required Text Workflow",
+      layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      groups: [],
+      widgets: [
+        {
+          id: "note-1",
+          valueId: "note:note-1",
+          binding: { nodeId: "", inputName: "" },
+          widgetType: "note",
+          title: "Instructions",
+          description: "",
+          defaultValue: null,
+        },
+      ],
+    };
+
+    const repaired = ensureRequiredRuntimeInputWidgets(brokenDraft, workflow);
+
+    expect(repaired.widgets).toEqual([
+      expect.objectContaining({ id: "note-1" }),
+      expect.objectContaining({
+        id: "ctrl-node-22:4-image",
+        binding: { nodeId: "22:4", inputName: "image" },
+        widgetType: "string_field",
+        defaultValue: "",
+      }),
+      expect.objectContaining({
+        id: "ctrl-node-22:5-image",
+        binding: { nodeId: "22:5", inputName: "image" },
+        widgetType: "string_field",
+        defaultValue: "",
+      }),
+    ]);
+  });
+
+  it("repairs required media and file runtime inputs with empty dashboard defaults", () => {
+    const workflow = workflowFromBindableInputs("wf-required-media", "Required Media Workflow", [
+      {
+        node_id: "10",
+        node_type: "LoadImage",
+        is_image_node: true,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "image",
+            current_value: "/creator/image.png",
+            kind: "image_input",
+            suggested_widget_type: "load_image",
+            widget_types: ["load_image"],
+            required_runtime_input: true,
+            required_runtime_kind: "image",
+          },
+        ],
+      },
+      {
+        node_id: "11",
+        node_type: "LoadAudio",
+        is_image_node: false,
+        is_audio_node: true,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "audio",
+            current_value: "/creator/audio.wav",
+            kind: "audio_input",
+            suggested_widget_type: "load_audio",
+            widget_types: ["load_audio"],
+            required_runtime_input: true,
+            required_runtime_kind: "audio",
+          },
+        ],
+      },
+      {
+        node_id: "12",
+        node_type: "LoadVideo",
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "video",
+            current_value: "/creator/video.mp4",
+            kind: "video_input",
+            suggested_widget_type: "load_video",
+            widget_types: ["load_video"],
+            required_runtime_input: true,
+            required_runtime_kind: "video",
+          },
+        ],
+      },
+      {
+        node_id: "13",
+        node_type: "Load3D",
+        is_image_node: false,
+        is_three_d_node: true,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "model",
+            current_value: "/creator/model.glb",
+            kind: "three_d_input",
+            suggested_widget_type: "load_3d",
+            widget_types: ["load_3d"],
+            required_runtime_input: true,
+            required_runtime_kind: "3d",
+          },
+        ],
+      },
+      {
+        node_id: "14",
+        node_type: "LoadFile",
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "file",
+            current_value: "/creator/data.json",
+            kind: "file_input",
+            suggested_widget_type: "load_file",
+            widget_types: ["load_file"],
+            required_runtime_input: true,
+            required_runtime_kind: "file",
+          },
+        ],
+      },
+    ]);
+
+    const repaired = ensureRequiredRuntimeInputWidgets({
+      version: 1,
+      workflowId: "wf-required-media",
+      workflowName: "Required Media Workflow",
+      layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      groups: [],
+      widgets: [],
+    }, workflow);
+
+    expect(repaired.widgets).toEqual([
+      expect.objectContaining({ widgetType: "load_image", defaultValue: null }),
+      expect.objectContaining({ widgetType: "load_audio", defaultValue: null }),
+      expect.objectContaining({ widgetType: "load_video", defaultValue: null }),
+      expect.objectContaining({ widgetType: "load_3d", defaultValue: null }),
+      expect.objectContaining({ widgetType: "load_file", defaultValue: null }),
+    ]);
+  });
+
+  it("does not re-add intentionally removed optional output widgets while repairing a draft", () => {
+    const workflow = workflowFromBindableInputs("wf-required-text", "Required Text Workflow", [
+      {
+        node_id: "22:4",
+        node_type: "LoadText",
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "image",
+            current_value: "/creator/input-a.txt",
+            kind: "string",
+            suggested_widget_type: "string_field",
+            widget_types: ["string_field", "textarea"],
+            required_runtime_input: true,
+            required_runtime_kind: "text",
+          },
+        ],
+      },
+      {
+        node_id: "9",
+        node_type: "PreviewImage",
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "output_image",
+            current_value: null,
+            kind: "image_output",
+            suggested_widget_type: "display_image",
+            widget_types: ["display_image"],
+            auto_select: true,
+          },
+        ],
+      },
+    ]);
+
+    const repaired = ensureRequiredRuntimeInputWidgets({
+      version: 1,
+      workflowId: "wf-required-text",
+      workflowName: "Required Text Workflow",
+      layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      groups: [],
+      widgets: [],
+    }, workflow);
+
+    expect(repaired.widgets).toEqual([
+      expect.objectContaining({ id: "ctrl-node-22:4-image", widgetType: "string_field" }),
+    ]);
+    expect(repaired.widgets).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ widgetType: "display_image" })]),
+    );
   });
 
   it("auto-creates generic file widgets with accepted extension validation", () => {

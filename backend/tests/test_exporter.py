@@ -776,7 +776,7 @@ def test_export_backfills_dashboard_inputs_when_stored_dashboard_lost_them(tmp_p
     assert [item["id"] for item in exported_dashboard["inputs"]] == ["prompt"]
 
 
-def test_exported_archive_promotes_user_state_values_to_creator_defaults(tmp_path: Path) -> None:
+def test_exported_archive_promotes_user_state_values_and_layout_to_creator_defaults(tmp_path: Path) -> None:
     user_state_service = UserStateService(tmp_path / "user-state")
     exporter, workflow_id, _ = _setup_with_configured_dashboard(
         tmp_path,
@@ -802,12 +802,14 @@ def test_exported_archive_promotes_user_state_values_to_creator_defaults(tmp_pat
     assert dashboard_data["inputs"][0]["default_pinned"] is True
     assert graph_data["1"]["inputs"]["text"] == "hi"
     first_control = dashboard_data["sections"][0]["controls"][0]
-    assert "layout" not in first_control
+    assert first_control["layout"] == {"x": 2, "y": 3, "w": 10, "h": 5}
     second_control = dashboard_data["sections"][0]["controls"][1]
     assert "show_download" not in second_control
 
 
-def test_exported_archive_keeps_creator_group_layouts_not_user_overrides(tmp_path: Path) -> None:
+def test_exported_archive_overlays_user_control_and_group_layouts_without_mutating_store(
+    tmp_path: Path,
+) -> None:
     user_state_service = UserStateService(tmp_path / "user-state")
     exporter, workflow_id, _ = _setup_with_configured_dashboard(
         tmp_path,
@@ -816,6 +818,7 @@ def test_exported_archive_keeps_creator_group_layouts_not_user_overrides(tmp_pat
     package_dir = exporter._find_package_dir(workflow_id)
     assert package_dir is not None
     dashboard_file = package_dir / "dashboard.json"
+    source_archive_file = package_dir / "source-archive.noofy"
     dashboard_data = json.loads(dashboard_file.read_text(encoding="utf-8"))
     dashboard_data["sections"][0]["groups"] = [
         {
@@ -827,6 +830,8 @@ def test_exported_archive_keeps_creator_group_layouts_not_user_overrides(tmp_pat
         }
     ]
     dashboard_file.write_text(json.dumps(dashboard_data), encoding="utf-8")
+    dashboard_before = dashboard_file.read_bytes()
+    source_archive_before = source_archive_file.read_bytes()
     user_state_service.save(
         WorkflowUserState(
             workflow_id=workflow_id,
@@ -844,11 +849,18 @@ def test_exported_archive_keeps_creator_group_layouts_not_user_overrides(tmp_pat
         exported_dashboard = json.loads(zf.read("dashboard.json"))
 
     group = exported_dashboard["sections"][0]["groups"][0]
-    assert group["layout"] == {"x": 0, "y": 0, "w": 16, "h": 10}
-    assert "layout" not in exported_dashboard["sections"][0]["controls"][0]
+    assert group["layout"] == {"x": 4, "y": 5, "w": 18, "h": 12}
+    assert exported_dashboard["sections"][0]["controls"][0]["layout"] == {
+        "x": 20,
+        "y": 20,
+        "w": 4,
+        "h": 4,
+    }
+    assert dashboard_file.read_bytes() == dashboard_before
+    assert source_archive_file.read_bytes() == source_archive_before
 
 
-def test_exported_archive_keeps_creator_action_bar_position_not_user_override(tmp_path: Path) -> None:
+def test_exported_archive_overlays_user_action_bar_position(tmp_path: Path) -> None:
     user_state_service = UserStateService(tmp_path / "user-state")
     exporter, workflow_id, _ = _setup_with_configured_dashboard(
         tmp_path,
@@ -875,7 +887,7 @@ def test_exported_archive_keeps_creator_action_bar_position_not_user_override(tm
     with zipfile.ZipFile(io.BytesIO(archive_bytes)) as zf:
         exported_dashboard = json.loads(zf.read("dashboard.json"))
 
-    assert exported_dashboard["presentation"]["action_bar"] == {"x": 32, "y": 24}
+    assert exported_dashboard["presentation"]["action_bar"] == {"x": 300, "y": 90}
 
 
 def test_exported_archive_applies_explicit_dashboard_values_without_mutating_store(tmp_path: Path) -> None:
@@ -1972,7 +1984,7 @@ def test_raw_json_round_trip_exports_portable_resolved_models_and_custom_nodes(
     assert reimported_model.source_urls[0].endswith("token=%5Bredacted%5D")
 
 
-def test_export_supports_bundled_workflow_without_user_preferences(tmp_path: Path) -> None:
+def test_export_supports_bundled_workflow_with_user_setup(tmp_path: Path) -> None:
     user_state_service = UserStateService(tmp_path / "user-state")
     loader = WorkflowPackageLoader(Path(__file__).resolve().parents[1] / "app/workflows/packages")
     exporter = WorkflowExporter(
@@ -2006,5 +2018,5 @@ def test_export_supports_bundled_workflow_without_user_preferences(tmp_path: Pat
     assert package_data["required_models"][0]["verification_level"] == "sha256_size"
     assert dashboard_data["inputs"][0]["default"] == "native export prompt"
     assert dashboard_data["inputs"][0]["default_pinned"] is True
-    assert dashboard_data["sections"][0]["controls"][0]["layout"] == {"x": 0, "y": 0, "w": 32, "h": 6}
+    assert dashboard_data["sections"][0]["controls"][0]["layout"] == {"x": 1, "y": 2, "w": 20, "h": 5}
     assert graph_data["6"]["inputs"]["text"] == "a cinematic photo of a mountain lake"

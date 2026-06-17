@@ -8,6 +8,7 @@ import {
   dashboardDraftKey,
   dashboardSchemaFingerprint,
   saveDashboardDraft,
+  workflowFromBindableInputs,
   type DashboardSchema,
 } from "./dashboardBuilderContent";
 
@@ -199,6 +200,74 @@ describe("DashboardBuilderLayoutPage", () => {
     ).toMatchObject({
       widgets: [expect.objectContaining({ defaultValue: "current edited value" })],
     });
+  });
+
+  it("repairs a failed-save local draft before saving it again", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+    const workflow = workflowFromBindableInputs("wf-1", "Workflow", [
+      {
+        node_id: "22:4",
+        node_type: "LoadText",
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "image",
+            current_value: "/creator/input-a.txt",
+            kind: "string",
+            suggested_widget_type: "string_field",
+            widget_types: ["string_field", "textarea"],
+            required_runtime_input: true,
+            required_runtime_kind: "text",
+          },
+        ],
+      },
+      {
+        node_id: "22:5",
+        node_type: "LoadText",
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "image",
+            current_value: "/creator/input-b.txt",
+            kind: "string",
+            suggested_widget_type: "string_field",
+            widget_types: ["string_field", "textarea"],
+            required_runtime_input: true,
+            required_runtime_kind: "text",
+          },
+        ],
+      },
+    ]);
+    saveDashboardDraft(placedSchema, dashboardSchemaFingerprint(placedSchema));
+
+    render(
+      <DashboardBuilderLayoutPage
+        workflowId="wf-1"
+        workflowName="Workflow"
+        initialSchema={placedSchema}
+        workflow={workflow}
+        onBackToWidgets={vi.fn()}
+        onSaveComplete={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      const stored = JSON.parse(window.localStorage.getItem(dashboardDraftKey("wf-1")) ?? "{}") as DashboardSchema;
+      expect(stored.widgets).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: "ctrl-node-22:4-image", defaultValue: "" }),
+          expect.objectContaining({ id: "ctrl-node-22:5-image", defaultValue: "" }),
+        ]),
+      );
+    });
+    expect(screen.getByRole("button", { name: /save dashboard/i })).toBeDisabled();
   });
 
   it("discards a stale draft when the saved dashboard widgets changed", async () => {

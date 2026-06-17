@@ -4,7 +4,7 @@ import type { AppNavigateOptions, AppRouteId } from "./features/app/AppLayout";
 import { SidebarProvider } from "./features/app/AppLayout";
 import { RuntimeStatusProvider } from "./features/app/RuntimeStatusProvider";
 import { WorkflowTabsProvider, WorkflowTabsRouteProvider, useWorkflowTabs, type WorkflowTabRuntimeState } from "./features/app/WorkflowTabs";
-import type { DashboardSchema } from "./features/dashboard-builder/dashboardBuilderContent";
+import type { DashboardSchema, MockWorkflow } from "./features/dashboard-builder/dashboardBuilderContent";
 import { removePendingImportedSetupReminder } from "./features/home/pendingSetupBanners";
 import { HomePage } from "./features/home/HomePage";
 import { WorkflowLibraryProvider, useWorkflowLibrary } from "./features/home/WorkflowLibraryProvider";
@@ -71,7 +71,7 @@ type AppRoute =
       initialSchema?: DashboardSchema;
       returnToRunOnCancel?: boolean;
     }
-  | { name: "dashboard-builder-layout"; workflowId?: string; workflowName?: string; initialSchema?: DashboardSchema };
+  | { name: "dashboard-builder-layout"; workflowId?: string; workflowName?: string; initialSchema?: DashboardSchema; workflow?: MockWorkflow };
 
 type PersistedAppRoute = Exclude<AppRoute, { name: "dashboard-builder" } | { name: "dashboard-builder-layout" }>;
 
@@ -338,12 +338,13 @@ function AppContent() {
               ? () => openWorkflow(cancelWorkflowId, route.workflowName, { skipDashboardSetupGuard: true })
               : undefined
           }
-          onContinue={(schema) =>
+          onContinue={(schema, workflow) =>
             setRoute({
               name: "dashboard-builder-layout",
               workflowId: route.workflowId,
               workflowName: route.workflowName,
               initialSchema: schema,
+              workflow,
             })
           }
           onNavigate={navigate}
@@ -357,6 +358,7 @@ function AppContent() {
           workflowId={route.workflowId}
           workflowName={route.workflowName}
           initialSchema={route.initialSchema}
+          workflow={route.workflow}
           onBackToWidgets={(schema) =>
             setRoute({
               name: "dashboard-builder",

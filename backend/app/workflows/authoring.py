@@ -606,17 +606,26 @@ def _annotate_required_runtime_inputs(
 def _format_missing_required_inputs_error(
     missing: list[UnresolvedRuntimeInput],
 ) -> str:
-    descriptions = [
-        f"{_friendly_runtime_input_label(item)} "
-        f"({item.expected_kind or 'file'} input on node {item.node_id})"
-        for item in missing
-    ]
+    descriptions = [_required_runtime_input_description(item) for item in missing]
     return (
         "Add a widget for the required input(s) below before saving so people "
         "can provide them when they run the workflow: "
         + "; ".join(descriptions)
         + "."
     )
+
+
+def _required_runtime_input_description(item: UnresolvedRuntimeInput) -> str:
+    label = _friendly_runtime_input_label(item)
+    kind_label = {
+        "image": "Image",
+        "audio": "Audio",
+        "video": "Video",
+        "3d": "3D model",
+        "text": "Text file",
+        "file": "File",
+    }.get(item.expected_kind or "file", "File")
+    return f'{kind_label} input "{label}" on node {item.node_id}'
 
 
 def _friendly_runtime_input_label(item: UnresolvedRuntimeInput) -> str:
