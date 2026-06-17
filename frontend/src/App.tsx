@@ -64,7 +64,13 @@ type AppRoute =
   | { name: "models" }
   | { name: "settings" }
   | { name: "workflow"; workflowId: string }
-  | { name: "dashboard-builder"; workflowId?: string; workflowName?: string; initialSchema?: DashboardSchema }
+  | {
+      name: "dashboard-builder";
+      workflowId?: string;
+      workflowName?: string;
+      initialSchema?: DashboardSchema;
+      returnToRunOnCancel?: boolean;
+    }
   | { name: "dashboard-builder-layout"; workflowId?: string; workflowName?: string; initialSchema?: DashboardSchema };
 
 type PersistedAppRoute = Exclude<AppRoute, { name: "dashboard-builder" } | { name: "dashboard-builder-layout" }>;
@@ -309,6 +315,7 @@ function AppContent() {
               workflowId: schema.workflowId,
               workflowName: schema.workflowName,
               initialSchema: schema,
+              returnToRunOnCancel: true,
             })
           }
           onConfigureDashboard={configureDashboard}
@@ -318,12 +325,18 @@ function AppContent() {
     }
 
     if (route.name === "dashboard-builder") {
+      const cancelWorkflowId = route.returnToRunOnCancel ? route.workflowId : undefined;
       return (
         <DashboardBuilderPage
           workflowId={route.workflowId}
           workflowName={route.workflowName}
           initialSchema={route.initialSchema}
           onBack={() => setRoute({ name: "home" })}
+          onCancelEdit={
+            cancelWorkflowId
+              ? () => openWorkflow(cancelWorkflowId, route.workflowName, { skipDashboardSetupGuard: true })
+              : undefined
+          }
           onContinue={(schema) =>
             setRoute({
               name: "dashboard-builder-layout",
@@ -382,6 +395,7 @@ function AppContent() {
               workflowId: schema.workflowId,
               workflowName: schema.workflowName,
               initialSchema: schema,
+              returnToRunOnCancel: true,
             })
           }
           onEditDashboard={(schema) =>
@@ -416,6 +430,7 @@ function AppContent() {
             workflowId: schema.workflowId,
             workflowName: schema.workflowName,
             initialSchema: schema,
+            returnToRunOnCancel: true,
           })
         }
         onEditDashboard={(schema) =>

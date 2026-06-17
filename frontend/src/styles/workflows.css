@@ -223,6 +223,11 @@
   cursor: pointer;
 }
 
+.workflow-export-icon-tile:not(.workflow-export-icon-tile--import, .workflow-export-icon-tile--custom) > svg {
+  width: 32px;
+  height: 32px;
+}
+
 .workflow-export-icon-tile:hover,
 .workflow-export-icon-tile:focus-visible {
   color: var(--text-primary);
@@ -244,8 +249,8 @@
 }
 
 .workflow-export-icon-tile--custom img {
-  width: 30px;
-  height: 30px;
+  width: 38px;
+  height: 38px;
   object-fit: contain;
   border-radius: 8px;
 }

@@ -43,6 +43,7 @@ import {
   addAutomaticDashboardWidgets,
   buildInitialDashboard,
   canPreserveWidgetAsHiddenInput,
+  clearDashboardDraft,
   createDashboardWidgetForValue,
   defaultNumericRangeForValue,
   isOutputWidgetType,
@@ -73,6 +74,7 @@ interface DashboardBuilderPageProps {
   workflowName?: string;
   initialSchema?: DashboardSchema;
   onBack: () => void;
+  onCancelEdit?: () => void;
   onContinue: (schema: DashboardSchema) => void;
   onNavigate: (route: AppRouteId) => void;
 }
@@ -145,6 +147,7 @@ export function DashboardBuilderPage({
   workflowName,
   initialSchema,
   onBack,
+  onCancelEdit,
   onContinue,
   onNavigate,
 }: DashboardBuilderPageProps) {
@@ -569,6 +572,13 @@ export function DashboardBuilderPage({
     window.setTimeout(() => setSavedFlash(null), 2400);
   }
 
+  function handleCancelEdit() {
+    if (!builderReady) return;
+    clearDashboardDraft(activeWorkflowId);
+    draftActiveRef.current = false;
+    onCancelEdit?.();
+  }
+
   function handleContinue() {
     if (!builderReady || schema.widgets.length === 0 || hasValidationErrors) return;
     if (draftActiveRef.current) saveDashboardDraft(schema, draftBaseKeyRef.current);
@@ -596,10 +606,17 @@ export function DashboardBuilderPage({
               <span>{savedFlash === "saved" ? "Dashboard saved" : "Draft dashboard"}</span>
             </div>
             <div className="button-row">
-              <button className="secondary-button" type="button" onClick={handleSaveDraft} disabled={!builderReady}>
-                <Save size={15} aria-hidden="true" />
-                Save as draft
-              </button>
+              {onCancelEdit ? (
+                <button className="secondary-button" type="button" onClick={handleCancelEdit} disabled={!builderReady}>
+                  <X size={15} aria-hidden="true" />
+                  Cancel
+                </button>
+              ) : (
+                <button className="secondary-button" type="button" onClick={handleSaveDraft} disabled={!builderReady}>
+                  <Save size={15} aria-hidden="true" />
+                  Save as draft
+                </button>
+              )}
               <button
                 className="primary-button primary-button--compact"
                 type="button"

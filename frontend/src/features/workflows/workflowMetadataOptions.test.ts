@@ -31,4 +31,19 @@ describe("workflow metadata category options", () => {
       expect.objectContaining({ id: "video", label: "Video" }),
     ]));
   });
+
+  it("includes native workflow icons for additional workflow modalities", () => {
+    for (const id of ["model3d", "audio", "text", "highDefinition", "upscale", "editing"]) {
+      expect(WORKFLOW_ICONS[id]).toBeDefined();
+    }
+    expect(NATIVE_WORKFLOW_ICON_OPTIONS).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "model3d", label: "3D model" }),
+      expect.objectContaining({ id: "audio", label: "Audio" }),
+      expect.objectContaining({ id: "text", label: "Text" }),
+      expect.objectContaining({ id: "maximize", label: "Outpainting" }),
+      expect.objectContaining({ id: "highDefinition", label: "High definition" }),
+      expect.objectContaining({ id: "upscale", label: "Upscale" }),
+      expect.objectContaining({ id: "editing", label: "Editing" }),
+    ]));
+  });
 });

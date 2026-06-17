@@ -594,6 +594,37 @@ describe("DashboardBuilderPage", () => {
     expect(within(valuesPanel).getByText("No controls match your search.")).toBeInTheDocument();
   });
 
+  it("shows cancel instead of save draft when editing saved dashboard widgets and discards local edits", async () => {
+    const onCancelEdit = vi.fn();
+    mockDragWorkflowFetch();
+    render(
+      <DashboardBuilderPage
+        workflowId="wf-drag"
+        workflowName="Drag workflow"
+        initialSchema={dragSchema()}
+        onBack={vi.fn()}
+        onCancelEdit={onCancelEdit}
+        onContinue={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    const widget = await screen.findByTestId("created-widget-ctrl-node-6-text");
+    expect(screen.queryByRole("button", { name: /save as draft/i })).not.toBeInTheDocument();
+    const cancelButton = screen.getByRole("button", { name: /^cancel$/i });
+
+    fireEvent.doubleClick(within(widget).getByText("Prompt"));
+    fireEvent.change(within(widget).getByRole("textbox", { name: "Edit widget name" }), {
+      target: { value: "Canceled prompt" },
+    });
+    await waitFor(() => expect(window.localStorage.getItem(dashboardDraftKey("wf-drag"))).not.toBeNull());
+
+    fireEvent.click(cancelButton);
+
+    expect(window.localStorage.getItem(dashboardDraftKey("wf-drag"))).toBeNull();
+    expect(onCancelEdit).toHaveBeenCalledOnce();
+  });
+
   it("edits a widget name inline from the created widgets list without changing its description", async () => {
     const onContinue = await renderDragBuilder(dragSchema());
     const widget = screen.getByTestId("created-widget-ctrl-node-6-text");

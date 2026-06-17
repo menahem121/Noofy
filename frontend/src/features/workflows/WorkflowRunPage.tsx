@@ -327,6 +327,7 @@ export function WorkflowRunPage({
   const trackedRunsRef = useRef<TrackedRun[]>([]);
   const livePreviewRef = useRef<StoredLivePreview | null>(null);
   const trackedRunPollInFlightRef = useRef<Set<string>>(new Set());
+  const runtimeResultRecoveryInFlightRef = useRef<string | null>(null);
   const runSubmissionInFlightCountRef = useRef(0);
   const modelVerificationStartInFlightRef = useRef(false);
   const comparisonSourceResolutionSequenceRef = useRef(0);
@@ -355,6 +356,7 @@ export function WorkflowRunPage({
   const workflowTabs = useOptionalWorkflowTabs();
   const workflowRuntime = workflowTabs?.runtimeByWorkflowId[workflowId] ?? null;
   const runtimeProgress = progressFromWorkflowRuntime(workflowRuntime);
+  const terminalRuntimeProgress = terminalProgressFromWorkflowRuntime(workflowRuntime);
   const remainingTrackedRunCount = trackedRuns.filter(isTrackedRunActive).length;
   const currentTrackedRun = selectCurrentTrackedRun(trackedRuns);
   const displayedProgress = progressFromTrackedRun(currentTrackedRun, state.progress ?? runtimeProgress) ?? state.progress ?? runtimeProgress;
@@ -842,6 +844,42 @@ export function WorkflowRunPage({
       window.clearInterval(interval);
     };
   }, [isSubmittingRun, remainingTrackedRunCount]);
+
+  useEffect(() => {
+    if (!terminalRuntimeProgress) return undefined;
+    if (remainingTrackedRunCount > 0) return undefined;
+    const jobId = terminalRuntimeProgress.job_id;
+    if (state.result?.job_id === jobId) return undefined;
+    if (runtimeResultRecoveryInFlightRef.current === jobId) return undefined;
+
+    let stopped = false;
+    runtimeResultRecoveryInFlightRef.current = jobId;
+    fetchJobResult(jobId)
+      .then((result) => {
+        if (stopped || activeWorkflowIdRef.current !== workflowId) return;
+        if (isEngineJob(result)) {
+          if (isTrackableJob(result)) addTrackedRun(trackedRunFromJob(result));
+          return;
+        }
+        handleRecoveredRuntimeResult(result);
+      })
+      .catch((error) => {
+        if (stopped || activeWorkflowIdRef.current !== workflowId) return;
+        setState((current) => ({
+          ...current,
+          error: error instanceof Error ? error.message : "Could not load the completed workflow result.",
+        }));
+      })
+      .finally(() => {
+        if (runtimeResultRecoveryInFlightRef.current === jobId) {
+          runtimeResultRecoveryInFlightRef.current = null;
+        }
+      });
+
+    return () => {
+      stopped = true;
+    };
+  }, [remainingTrackedRunCount, state.result?.job_id, terminalRuntimeProgress?.job_id, terminalRuntimeProgress?.status, workflowId]);
 
   function startRunPreparationStatusPolling() {
     let stopped = false;
@@ -1557,6 +1595,30 @@ export function WorkflowRunPage({
       recordWorkflowTerminalResult(result);
     }
     pollNextTrackedRunAfterTerminal();
+  }
+
+  function handleRecoveredRuntimeResult(result: JobResult) {
+    setState((current) => ({
+      ...current,
+      result,
+      progress: null,
+      error: result.status === "failed" ? current.error : null,
+    }));
+    if (livePreviewRef.current?.handle === result.job_id) {
+      clearLivePreview();
+    }
+    if (result.status === "failed") {
+      recordTrackedFailure(
+        result.job_id,
+        result.job_id,
+        result.error ?? "ComfyUI could not finish this run.",
+        result.error_code,
+        result.user_message,
+        result.developer_details,
+        result.memory_requirement,
+      );
+    }
+    recordWorkflowTerminalResult(result);
   }
 
   function pollNextTrackedRunAfterTerminal() {
@@ -3420,6 +3482,13 @@ function progressFromWorkflowRuntime(runtime: WorkflowTabRuntimeState | null): J
     current_node: null,
     message: "Starting this workflow...",
   };
+}
+
+function terminalProgressFromWorkflowRuntime(runtime: WorkflowTabRuntimeState | null): JobProgress | null {
+  const progress = runtime?.activeJobProgress;
+  const status = runtime?.activeJobStatus ?? progress?.status;
+  if (!progress?.job_id || (status !== "completed" && status !== "failed")) return null;
+  return progress.status === status ? progress : { ...progress, status };
 }
 
 function optimisticProgress(): JobProgress {

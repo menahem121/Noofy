@@ -398,6 +398,24 @@ describe("App workflow tabs", () => {
     expect(await screen.findByText("Built-in Workflows")).toBeInTheDocument();
   });
 
+  it("returns to the run page when canceling saved widget edits", async () => {
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Open Text to Image" }));
+    expect(await screen.findByRole("button", { name: "Run workflow" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /workflow options/i }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /edit widgets/i }));
+
+    expect(await screen.findByRole("heading", { name: /Dashboard Builder/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /save as draft/i })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+
+    expect(await screen.findByRole("button", { name: "Run workflow" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /Dashboard Builder/i })).not.toBeInTheDocument();
+  });
+
   it("routes workflows that need input setup to the dashboard builder instead of opening the run view", async () => {
     workflowListSummary = {
       ...workflowSummary,

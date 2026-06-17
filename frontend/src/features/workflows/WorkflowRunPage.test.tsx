@@ -4300,6 +4300,74 @@ describe("WorkflowRunPage", () => {
     expect(screen.queryByRole("button", { name: "Preview 3D model" })).not.toBeInTheDocument();
   });
 
+  it("loads a completed 3D result when returning from the dashboard builder after the run finished", async () => {
+    const threeDPackageData = {
+      ...configuredPackageData,
+      outputs: [{ id: "model", label: "3D model", node_id: "30", type: "3d", kind: "3d" }],
+      dashboard: {
+        ...configuredPackageData.dashboard,
+        sections: [{
+          id: "main",
+          title: "Main",
+          controls: [{
+            id: "result-3d",
+            type: "display_3d",
+            label: "3D result",
+            output_id: "model",
+            layout: { x: 0, y: 0, w: 16, h: 14 },
+          }],
+        }],
+      },
+    };
+    mockConfiguredDashboardFetch(fetchMock, readyRuntime, threeDPackageData);
+    const configuredFetch = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/jobs/job-builder-finished/result")) {
+        return Promise.resolve(jsonResponse({
+          job_id: "job-builder-finished",
+          status: "completed",
+          outputs: [{
+            node_id: "30",
+            output: {
+              "3d": [{
+                filename: "preview3d_finished.spz",
+                kind: "3d",
+                type: "3d",
+                output_type: "output",
+                mime_type: "application/octet-stream",
+                size: 3072,
+                url: "/api/jobs/job-builder-finished/outputs/view?filename=preview3d_finished.spz&subfolder=&type=output",
+              }],
+            },
+          }],
+          error: null,
+        }));
+      }
+      return configuredFetch(input, init);
+    });
+
+    renderRunPageWithWorkflowRuntime({
+      activeJobId: null,
+      activeJobStatus: "completed",
+      activeJobProgress: {
+        job_id: "job-builder-finished",
+        status: "completed",
+        value: 1,
+        max: 1,
+        current_node: null,
+        message: "Execution completed",
+      },
+      activeJobUpdatedAt: Date.now(),
+      handleSource: null,
+      queueId: null,
+    });
+
+    await waitFor(() => expect(document.querySelector(".widget-output-three-d .three-d-viewer")).toBeInTheDocument());
+    expect(fetchMock).toHaveBeenCalledWith("/api/jobs/job-builder-finished/result", expect.anything());
+    expect(screen.queryByRole("button", { name: "Preview 3D model" })).not.toBeInTheDocument();
+  });
+
   it("routes unmatched 3D live previews into the single display_3d canvas widget", async () => {
     const resultRequest = deferred<Response>();
     const livePreviewDataUrl = "data:image/png;base64,M2QtbGl2ZS1wcmV2aWV3";
