@@ -95,6 +95,7 @@ class DashboardAuthoringService:
             object_info=object_info,
             widget_metadata=package.comfyui_widget_metadata,
         )
+        nodes = _annotate_required_runtime_inputs(nodes, _required_runtime_inputs(package))
         nodes, filter_events = filter_bindable_input_nodes_for_architecture(package, nodes)
         self._log_architecture_filter_events(workflow_id, filter_events)
         return {
@@ -554,6 +555,52 @@ def _required_runtime_inputs(
         seen.add(key)
         merged.append(runtime_input)
     return merged
+
+
+def _annotate_required_runtime_inputs(
+    nodes: list[dict[str, Any]],
+    required_inputs: list[UnresolvedRuntimeInput],
+) -> list[dict[str, Any]]:
+    required_by_binding = {
+        (runtime_input.node_id, runtime_input.input_name): runtime_input
+        for runtime_input in required_inputs
+        if runtime_input.required
+    }
+    if not required_by_binding:
+        return nodes
+
+    annotated_nodes: list[dict[str, Any]] = []
+    for node in nodes:
+        node_id = str(node.get("node_id", ""))
+        inputs = node.get("inputs")
+        if not isinstance(inputs, list):
+            annotated_nodes.append(node)
+            continue
+        annotated_inputs: list[dict[str, Any]] = []
+        changed = False
+        for input_record in inputs:
+            if not isinstance(input_record, dict):
+                annotated_inputs.append(input_record)
+                continue
+            input_name = str(input_record.get("input_name", ""))
+            runtime_input = required_by_binding.get((node_id, input_name))
+            if runtime_input is None:
+                annotated_inputs.append(input_record)
+                continue
+            annotated = {
+                **input_record,
+                "required_runtime_input": True,
+                "required_runtime_kind": runtime_input.expected_kind,
+                "required_runtime_reason": runtime_input.reason,
+            }
+            if runtime_input.extension_hint:
+                annotated["extension_hint"] = runtime_input.extension_hint
+            if runtime_input.mime_type_hint:
+                annotated["mime_type_hint"] = runtime_input.mime_type_hint
+            annotated_inputs.append(annotated)
+            changed = True
+        annotated_nodes.append({**node, "inputs": annotated_inputs} if changed else node)
+    return annotated_nodes
 
 
 def _format_missing_required_inputs_error(

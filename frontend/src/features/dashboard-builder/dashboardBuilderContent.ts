@@ -78,6 +78,8 @@ export interface WorkflowNodeValue {
   options?: string[];
   autoSelect?: boolean;
   technical?: boolean;
+  requiredRuntimeInput?: boolean;
+  requiredRuntimeKind?: string | null;
 }
 
 export type NodeIconKind = "text" | "note" | "sampler" | "image" | "image-input" | "audio" | "video" | "file" | "3d" | "lora" | "tune" | "output" | "save";
@@ -655,9 +657,11 @@ export function createDashboardWidgetForValue(value: WorkflowNodeValue, node: Wo
   const widgetType = suggestWidgetType(value);
   const numericRange = widgetType === "slider" ? defaultNumericRangeForValue(value) : value.numberRange;
   const defaultValue =
-    widgetType === "slider" && isRefinementLevelValue(value)
-      ? refinementLevelDefaultValue(value.rawValue)
-      : value.rawValue;
+    value.requiredRuntimeInput && value.valueKind === "string"
+      ? ""
+      : widgetType === "slider" && isRefinementLevelValue(value)
+        ? refinementLevelDefaultValue(value.rawValue)
+        : value.rawValue;
   return {
     id: `ctrl-${value.id}`,
     valueId: value.id,
@@ -958,6 +962,8 @@ export function workflowFromBindableInputs(
       hint?: string;
       auto_select?: boolean;
       suggested_label?: string;
+      required_runtime_input?: boolean;
+      required_runtime_kind?: string | null;
     }>;
   }>
 ): MockWorkflow {
@@ -1014,6 +1020,8 @@ export function workflowFromBindableInputs(
       hint: inp.hint,
       options: inp.options,
       autoSelect: inp.auto_select,
+      requiredRuntimeInput: inp.required_runtime_input === true,
+      requiredRuntimeKind: inp.required_runtime_kind,
       technical: ["steps", "cfg", "denoise", "batch_size", "scheduler", "sampler_name", "filename_prefix"].includes(
         inp.input_name
       ),
@@ -1273,6 +1281,7 @@ function schemaHasOutputWidgetForRecords(
 
 export function addAutomaticDashboardWidgets(schema: DashboardSchema, workflow: MockWorkflow): DashboardSchema {
   let next = addAutomaticNoteWidgets(schema, workflow);
+  next = addAutomaticRequiredRuntimeTextInputWidgets(next, workflow);
   next = addAutomaticImageInputWidgets(next, workflow);
   next = addAutomaticAudioInputWidgets(next, workflow);
   next = addAutomaticVideoInputWidgets(next, workflow);
@@ -1284,6 +1293,26 @@ export function addAutomaticDashboardWidgets(schema: DashboardSchema, workflow: 
   next = addAutomaticVideoOutputWidget(next, workflow);
   next = addAutomaticThreeDOutputWidget(next, workflow);
   return addAutomaticFileOutputWidget(next, workflow);
+}
+
+export function addAutomaticRequiredRuntimeTextInputWidgets(schema: DashboardSchema, workflow: MockWorkflow): DashboardSchema {
+  const existingValueIds = new Set(schema.widgets.map((widget) => widget.valueId));
+  const existingBindings = new Set(schema.widgets.map((widget) => `${widget.binding.nodeId}:${widget.binding.inputName}`));
+  const widgets = [...schema.widgets];
+
+  for (const node of workflow.nodes) {
+    for (const value of node.values) {
+      if (!value.requiredRuntimeInput || value.valueKind !== "string" || existingValueIds.has(value.id)) continue;
+      const bindingKey = `${value.nodeId}:${value.inputName}`;
+      if (existingBindings.has(bindingKey)) continue;
+      const widget = createDashboardWidgetForValue(value, node);
+      widgets.push({ ...widget, widgetType: widget.widgetType === "textarea" ? "textarea" : "string_field", defaultValue: "" });
+      existingValueIds.add(value.id);
+      existingBindings.add(bindingKey);
+    }
+  }
+
+  return widgets.length === schema.widgets.length ? schema : { ...schema, widgets };
 }
 
 export function addAutomaticTextOutputWidget(schema: DashboardSchema, workflow: MockWorkflow): DashboardSchema {

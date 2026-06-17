@@ -104,6 +104,7 @@ function AppContent() {
     onConfigureDashboard: configureDashboard,
     deferConfigurationAfterDownloadedImport: true,
   });
+  const importStatusHidden = shouldHideImportStatusNotice(route, workflowImportFlow.state.importResult?.workflow.id);
 
   useEffect(() => {
     const persisted = persistedAppRoute(route);
@@ -456,7 +457,7 @@ function AppContent() {
       <WorkflowGlobalDropImport importFlow={workflowImportFlow} />
       <WorkflowImportStatusNotice
         importFlow={workflowImportFlow}
-        hidden={route.name === "home" || route.name === "workflows"}
+        hidden={importStatusHidden}
         onConfigureDashboard={configureDashboard}
       />
       <WorkflowImportDialogs
@@ -517,6 +518,18 @@ function persistedAppRoute(route: AppRoute): PersistedAppRoute | null {
     return null;
   }
   return route;
+}
+
+function shouldHideImportStatusNotice(route: AppRoute, importedWorkflowId?: string) {
+  if (route.name === "home" || route.name === "workflows") return true;
+  if (
+    importedWorkflowId &&
+    (route.name === "dashboard-builder" || route.name === "dashboard-builder-layout") &&
+    route.workflowId === importedWorkflowId
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function workflowNeedsDashboardSetup(workflow: WorkflowSummary | null | undefined) {

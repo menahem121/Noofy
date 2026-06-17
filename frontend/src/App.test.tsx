@@ -655,6 +655,37 @@ describe("App workflow tabs", () => {
     expect(screen.queryByText(/not a supported workflow import file/i)).not.toBeInTheDocument();
   });
 
+  it("hides the global setup import notice while configuring that workflow", async () => {
+    importPreviewResponses.set("raw-workflow.json", {
+      import_session_id: null,
+      workflow_id: "raw_workflow",
+      status: "needs_input_setup",
+      user_facing_message: "Needs input setup",
+      workflow: importedWorkflow("raw_workflow", "Raw Workflow", {
+        status: "needs_input_setup",
+        status_label: "Needs input setup",
+        needs_setup: true,
+        dashboard_status: "not_configured",
+        dashboard_ready: false,
+      }),
+      required_model_count: 0,
+      custom_node_count: 0,
+      unresolved_input_count: 1,
+      model_summary: null,
+    });
+    render(<App />);
+
+    await screen.findByText("Built-in Workflows");
+    dropFiles([new File(["{}"], "raw-workflow.json", { type: "application/json" })]);
+    await waitFor(() => expect(importPreviewWasRequested("raw-workflow.json")).toBe(true));
+
+    fireEvent.click(screen.getByRole("button", { name: "Open settings" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Configure dashboard" }));
+
+    expect(await screen.findByRole("heading", { name: /Dashboard Builder/i })).toBeInTheDocument();
+    expect(screen.queryByText("Raw Workflow was added to your local workflows.")).not.toBeInTheDocument();
+  });
+
   it("ignores dashboard builder widget drags so global import does not intercept them", async () => {
     workflowListSummary = {
       ...workflowSummary,

@@ -77,7 +77,7 @@ KNOWN_GRAPH_MODEL_SELECTOR_INPUTS: dict[tuple[str, str], tuple[str, str]] = {
     ),
     ("CheckpointLoader", "ckpt_name"): ("checkpoints", "checkpoint"),
     ("CheckpointLoaderSimple", "ckpt_name"): ("checkpoints", "checkpoint"),
-    ("CLIPLoader", "clip_name"): ("clip", "clip"),
+    ("CLIPLoader", "clip_name"): ("text_encoders", "text_encoder"),
     ("CLIPLoaderGGUF", "clip_name"): ("clip", "clip"),
     ("CLIPVisionLoader", "clip_name"): ("clip_vision", "clip_vision"),
     ("ControlNetLoader", "control_net_name"): ("controlnet", "controlnet"),

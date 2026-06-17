@@ -601,6 +601,11 @@ export interface BindableInputEntry {
   options?: string[];
   hint?: string;
   auto_select?: boolean;
+  required_runtime_input?: boolean;
+  required_runtime_kind?: string | null;
+  required_runtime_reason?: string;
+  extension_hint?: string;
+  mime_type_hint?: string;
 }
 
 export interface BindableNode {

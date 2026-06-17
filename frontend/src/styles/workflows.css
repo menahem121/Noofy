@@ -224,8 +224,8 @@
 }
 
 .workflow-export-icon-tile:not(.workflow-export-icon-tile--import, .workflow-export-icon-tile--custom) > svg {
-  width: 32px;
-  height: 32px;
+  width: 24px;
+  height: 24px;
 }
 
 .workflow-export-icon-tile:hover,

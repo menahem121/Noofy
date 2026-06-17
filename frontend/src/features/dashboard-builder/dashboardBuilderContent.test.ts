@@ -946,6 +946,98 @@ describe("workflowFromBindableInputs", () => {
     ]);
   });
 
+  it("auto-creates empty text widgets for backend-marked required runtime string inputs", () => {
+    const workflow = workflowFromBindableInputs("wf-required-text", "Required Text Workflow", [
+      {
+        node_id: "22:4",
+        node_type: "LoadText",
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "image",
+            current_value: "/creator/input-a.txt",
+            kind: "string",
+            suggested_widget_type: "string_field",
+            widget_types: ["string_field", "textarea"],
+            required_runtime_input: true,
+            required_runtime_kind: "text",
+          },
+        ],
+      },
+      {
+        node_id: "22:5",
+        node_type: "LoadText",
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "image",
+            current_value: "/creator/input-b.txt",
+            kind: "string",
+            suggested_widget_type: "string_field",
+            widget_types: ["string_field", "textarea"],
+            required_runtime_input: true,
+            required_runtime_kind: "text",
+          },
+        ],
+      },
+      {
+        node_id: "9",
+        node_type: "PreviewImage",
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "output_image",
+            current_value: null,
+            kind: "image_output",
+            suggested_widget_type: "display_image",
+            widget_types: ["display_image"],
+            auto_select: true,
+          },
+        ],
+      },
+    ]);
+
+    const schema = buildInitialDashboard(workflow);
+
+    expect(schema.widgets).toEqual([
+      expect.objectContaining({
+        id: "ctrl-node-22:4-image",
+        binding: { nodeId: "22:4", inputName: "image" },
+        widgetType: "string_field",
+        title: "Input image",
+        defaultValue: "",
+      }),
+      expect.objectContaining({
+        id: "ctrl-node-22:5-image",
+        binding: { nodeId: "22:5", inputName: "image" },
+        widgetType: "string_field",
+        title: "Input image",
+        defaultValue: "",
+      }),
+      expect.objectContaining({
+        id: "ctrl-node-9-output_image",
+        widgetType: "display_image",
+      }),
+    ]);
+    expect(toBackendPayload(schema).inputs).toEqual([
+      expect.objectContaining({
+        id: "ctrl-node-22:4-image",
+        binding: { node_id: "22:4", input_name: "image" },
+        control: "string_field",
+        default: "",
+      }),
+      expect.objectContaining({
+        id: "ctrl-node-22:5-image",
+        binding: { node_id: "22:5", input_name: "image" },
+        control: "string_field",
+        default: "",
+      }),
+    ]);
+  });
+
   it("auto-creates generic file widgets with accepted extension validation", () => {
     const workflow = workflowFromBindableInputs("wf-file", "File Workflow", [
       {
@@ -991,6 +1083,59 @@ describe("workflowFromBindableInputs", () => {
     });
     expect(toBackendPayload(schema).dashboard.outputs).toEqual([
       { id: "file", label: "Result", node_id: "20", type: "file", kind: "file" },
+    ]);
+  });
+
+  it("keeps visible empty text input widgets in the backend save payload", () => {
+    const schema: DashboardSchema = {
+      version: 1,
+      workflowId: "wf-empty-text-inputs",
+      workflowName: "Empty Text Inputs",
+      layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      groups: [],
+      widgets: [
+        {
+          id: "ctrl-node-22-4-image",
+          valueId: "node-22:4-image",
+          binding: { nodeId: "22:4", inputName: "image" },
+          widgetType: "string_field",
+          title: "Image",
+          description: "Choose a value when running the workflow.",
+          defaultValue: "",
+          layout: { x: 0, y: 0, w: 16, h: 4 },
+        },
+        {
+          id: "ctrl-node-22-5-image",
+          valueId: "node-22:5-image",
+          binding: { nodeId: "22:5", inputName: "image" },
+          widgetType: "string_field",
+          title: "Image",
+          description: "Choose a value when running the workflow.",
+          defaultValue: "",
+          layout: { x: 16, y: 0, w: 16, h: 4 },
+        },
+      ],
+    };
+
+    const payload = toBackendPayload(schema);
+
+    expect(payload.inputs).toEqual([
+      expect.objectContaining({
+        id: "ctrl-node-22-4-image",
+        binding: { node_id: "22:4", input_name: "image" },
+        control: "string_field",
+        default: "",
+      }),
+      expect.objectContaining({
+        id: "ctrl-node-22-5-image",
+        binding: { node_id: "22:5", input_name: "image" },
+        control: "string_field",
+        default: "",
+      }),
+    ]);
+    expect(payload.dashboard.sections[0].controls).toEqual([
+      expect.objectContaining({ id: "ctrl-node-22-4-image", input_id: "ctrl-node-22-4-image" }),
+      expect.objectContaining({ id: "ctrl-node-22-5-image", input_id: "ctrl-node-22-5-image" }),
     ]);
   });
 

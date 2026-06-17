@@ -966,13 +966,59 @@ def test_noofy_importer_adds_graph_only_model_without_source_for_provider_fallba
     package = NoofyArchiveImporter(archive).normalize()
 
     model = package.required_models[0]
-    assert model.folder == "clip"
+    assert model.folder == "text_encoders"
     assert model.filename == "qwen_2.5_vl_7b_fp8_scaled.safetensors"
+    assert model.model_type == "text_encoder"
     assert model.node_id == "14"
     assert model.node_type == "CLIPLoader"
     assert model.input_name == "clip_name"
     assert model.source_urls == []
     assert model.verification_level == "filename_only"
+
+
+def test_noofy_importer_does_not_duplicate_cliploader_text_encoder_from_capsule() -> None:
+    archive = _archive_bytes_with_graph_update(
+        {
+            "22:2": {
+                "class_type": "CLIPLoader",
+                "inputs": {
+                    "clip_name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+                    "device": "default",
+                    "type": "longcat_image",
+                },
+            }
+        },
+        archive_bytes=_archive_bytes_with_capsule_update(
+            {
+                "models": [
+                    {
+                        "comfyui_folder": "text_encoders",
+                        "filename": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+                        "input_name": "clip_name",
+                        "model_type": "text_encoder",
+                        "node_id": "22:2",
+                        "node_type": "CLIPLoader",
+                        "sha256": "cb5636d852a0ea6a9075ab1bef496c0db7aef13c02350571e388aea959c5c0b4",
+                        "size_bytes": 9384670680,
+                    }
+                ]
+            },
+            archive_bytes=_small_archive_bytes(),
+        ),
+    )
+
+    package = NoofyArchiveImporter(archive).normalize()
+
+    assert [
+        (model.folder, model.filename, model.verification_level)
+        for model in package.required_models
+    ] == [
+        (
+            "text_encoders",
+            "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+            "sha256_size",
+        )
+    ]
 
 
 def test_noofy_importer_preserves_phase6_signature_metadata() -> None:

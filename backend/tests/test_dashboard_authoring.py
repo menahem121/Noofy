@@ -471,6 +471,16 @@ def _graph_with_required_image_input() -> dict[str, Any]:
     }
 
 
+def _graph_with_required_text_path_inputs() -> dict[str, Any]:
+    return {
+        "1": {"class_type": "CLIPTextEncode", "inputs": {"text": "hello", "clip": ["4", 0]}},
+        "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "v1.safetensors"}},
+        "22:4": {"class_type": "LoadText", "inputs": {"image": "/creator/input-a.txt"}},
+        "22:5": {"class_type": "LoadText", "inputs": {"image": "/creator/input-b.txt"}},
+        "9": {"class_type": "SaveImage", "inputs": {"images": ["5", 0], "filename_prefix": "out"}},
+    }
+
+
 def _prompt_input() -> dict[str, Any]:
     return {
         "id": "prompt",
@@ -488,6 +498,22 @@ def _image_input(default: Any = None) -> dict[str, Any]:
         "label": "Image",
         "control": "load_image",
         "binding": {"node_id": "10", "input_name": "image"},
+        "default": default,
+        "validation": {},
+    }
+
+
+def _text_path_input(
+    input_id: str,
+    node_id: str,
+    *,
+    default: Any = "",
+) -> dict[str, Any]:
+    return {
+        "id": input_id,
+        "label": "Image",
+        "control": "string_field",
+        "binding": {"node_id": node_id, "input_name": "image"},
         "default": default,
         "validation": {},
     }
@@ -608,6 +634,101 @@ def test_save_dashboard_allows_hidden_required_runtime_input(
     reloaded = loader.get_package(workflow_id)
     assert any(workflow_input.id == "img" for workflow_input in reloaded.inputs)
     assert all(control.input_id != "img" for section in reloaded.dashboard.sections for control in section.controls)
+
+
+def test_save_dashboard_allows_visible_required_text_path_inputs_with_empty_defaults(
+    tmp_path: Path,
+) -> None:
+    archive = _make_minimal_archive(graph=_graph_with_required_text_path_inputs())
+    service, workflow_id = _import_and_setup(tmp_path, archive)
+
+    inputs = [
+        _prompt_input(),
+        _text_path_input("text_path_a", "22:4"),
+        _text_path_input("text_path_b", "22:5"),
+    ]
+    dashboard = {
+        "version": "0.1.0",
+        "status": "not_configured",
+        "outputs": [{"id": "image", "label": "Image", "node_id": "9", "type": "image"}],
+        "sections": [
+            {
+                "id": "main",
+                "title": "Controls",
+                "controls": [
+                    {"id": "c_prompt", "type": "textarea", "label": "Prompt", "input_id": "prompt"},
+                    {"id": "c_text_path_a", "type": "string_field", "label": "Image", "input_id": "text_path_a"},
+                    {"id": "c_text_path_b", "type": "string_field", "label": "Image", "input_id": "text_path_b"},
+                    {"id": "c_result", "type": "display_image", "label": "Result", "output_id": "image"},
+                ],
+            }
+        ],
+    }
+
+    result = service.save_dashboard(workflow_id, inputs, dashboard)
+
+    assert result["status"] == "configured"
+    loader = WorkflowPackageLoader(
+        Path("missing-bundled"),
+        imported_packages_dir=tmp_path / "packages",
+    )
+    reloaded = loader.get_package(workflow_id)
+    assert not reloaded.unresolved_runtime_inputs
+    assert [
+        workflow_input.default
+        for workflow_input in reloaded.inputs
+        if workflow_input.id in {"text_path_a", "text_path_b"}
+    ] == ["", ""]
+
+
+def test_bindable_inputs_mark_required_runtime_text_path_inputs(
+    tmp_path: Path,
+) -> None:
+    archive = _make_minimal_archive(graph=_graph_with_required_text_path_inputs())
+    service, workflow_id = _import_and_setup(tmp_path, archive)
+
+    result = service.get_bindable_inputs(workflow_id)
+
+    inputs_by_binding = {
+        (node["node_id"], input_record["input_name"]): input_record
+        for node in result["nodes"]
+        for input_record in node["inputs"]
+    }
+    assert inputs_by_binding[("22:4", "image")]["required_runtime_input"] is True
+    assert inputs_by_binding[("22:4", "image")]["required_runtime_kind"] == "text"
+    assert inputs_by_binding[("22:5", "image")]["required_runtime_input"] is True
+    assert inputs_by_binding[("22:5", "image")]["required_runtime_kind"] == "text"
+
+
+def test_save_dashboard_rejects_hidden_required_text_path_inputs_with_empty_defaults(
+    tmp_path: Path,
+) -> None:
+    archive = _make_minimal_archive(graph=_graph_with_required_text_path_inputs())
+    service, workflow_id = _import_and_setup(tmp_path, archive)
+
+    inputs = [
+        _prompt_input(),
+        _text_path_input("text_path_a", "22:4"),
+        _text_path_input("text_path_b", "22:5"),
+    ]
+    dashboard = {
+        "version": "0.1.0",
+        "status": "not_configured",
+        "outputs": [{"id": "image", "label": "Image", "node_id": "9", "type": "image"}],
+        "sections": [
+            {
+                "id": "main",
+                "title": "Controls",
+                "controls": [
+                    {"id": "c_prompt", "type": "textarea", "label": "Prompt", "input_id": "prompt"},
+                    {"id": "c_result", "type": "display_image", "label": "Result", "output_id": "image"},
+                ],
+            }
+        ],
+    }
+
+    with pytest.raises(DashboardAuthoringError, match="required input"):
+        service.save_dashboard(workflow_id, inputs, dashboard)
 
 
 def test_save_dashboard_rejects_hidden_required_runtime_input_without_default(
