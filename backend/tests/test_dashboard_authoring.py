@@ -1083,6 +1083,14 @@ def test_classify_graph_inputs_labels_clip_text_from_downstream_prompt_role() ->
         if node["node_type"] == "CLIPTextEncode"
     }
     assert labels == {"1": "Positive prompt", "2": "Negative prompt"}
+    negative_prompt_input = next(
+        input_record
+        for node in nodes
+        for input_record in node["inputs"]
+        if node["node_id"] == "2" and input_record["input_name"] == "text"
+    )
+    assert negative_prompt_input["suggested_widget_type"] == "textarea"
+    assert negative_prompt_input["widget_types"] == ["textarea", "string_field"]
 
 
 def test_classify_graph_inputs_labels_basic_guider_conditioning_as_positive() -> None:

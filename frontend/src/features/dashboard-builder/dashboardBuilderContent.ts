@@ -73,6 +73,7 @@ export interface WorkflowNodeValue {
   label: string;
   valueKind: WorkflowValueKind;
   rawValue: unknown;
+  preferredWidgetType?: WidgetType;
   hint?: string;
   numberRange?: { min: number; max: number; step?: number };
   options?: string[];
@@ -406,6 +407,10 @@ export const WIDGET_TYPE_LABELS: Record<WidgetType, string> = {
   select: "Dropdown",
 };
 
+function parseWidgetType(value: string): WidgetType | undefined {
+  return Object.prototype.hasOwnProperty.call(WIDGET_TYPE_LABELS, value) ? (value as WidgetType) : undefined;
+}
+
 const INPUT_WIDGET_TYPES: WidgetType[] = [
   "slider",
   "int_field",
@@ -493,6 +498,7 @@ export function widgetTypesForKind(kind: WorkflowValueKind): WidgetType[] {
 }
 
 export function suggestWidgetType(value: WorkflowNodeValue): WidgetType {
+  if (value.preferredWidgetType && value.valueKind !== "number") return value.preferredWidgetType;
   if (value.valueKind === "note") return "note";
   if (value.valueKind === "image_output") return "display_image";
   if (value.valueKind === "image_input") return "load_image";
@@ -1017,6 +1023,7 @@ export function workflowFromBindableInputs(
       label: inp.suggested_label ?? inp.input_name,
       valueKind: valueKindFromString(inp.kind),
       rawValue: inp.current_value,
+      preferredWidgetType: parseWidgetType(inp.suggested_widget_type),
       hint: inp.hint,
       options: inp.options,
       autoSelect: inp.auto_select,

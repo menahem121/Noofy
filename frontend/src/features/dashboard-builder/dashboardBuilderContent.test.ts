@@ -787,6 +787,33 @@ describe("workflowFromBindableInputs", () => {
     expect(buildInitialDashboard(workflow).widgets[0].title).toBe("Positive prompt");
   });
 
+  it("uses the backend-suggested multiline widget for negative prompts by default", () => {
+    const workflow = workflowFromBindableInputs("wf-1", "Workflow", [
+      {
+        node_id: "7",
+        node_type: "CLIPTextEncode",
+        node_title: "Negative prompt",
+        is_image_node: false,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "text",
+            current_value: "",
+            kind: "string",
+            suggested_widget_type: "textarea",
+            widget_types: ["textarea", "string_field"],
+            suggested_label: "Negative prompt",
+          },
+        ],
+      },
+    ]);
+
+    expect(createDashboardWidgetForValue(workflow.nodes[0].values[0], workflow.nodes[0])).toMatchObject({
+      title: "Negative prompt",
+      widgetType: "textarea",
+    });
+  });
+
   it("preselects detected ComfyUI Note nodes as dashboard-only note cards", () => {
     const workflow = workflowFromBindableInputs("wf-1", "Workflow", [
       {
