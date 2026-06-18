@@ -42,7 +42,8 @@ from app.runtime.models.model_store import ModelStore, http_streaming_downloader
 from app.runtime.node_registry import (
     CustomNodeSourceCache,
     NodeRegistryResolver,
-    NoofyNodeRegistry,
+    load_node_type_mapping_catalog,
+    load_noofy_node_registry,
 )
 from app.runtime.profiles import (
     ActiveRuntimeProfileState,
@@ -322,7 +323,8 @@ def create_default_engine_service() -> EngineService:
         log_store=log_store,
         trust_verifier=trust_verifier,
         node_registry_resolver=NodeRegistryResolver(
-            registry=NoofyNodeRegistry(registry_id="noofy-empty-local-registry"),
+            registry=load_noofy_node_registry(),
+            mappings=load_node_type_mapping_catalog(),
             log_store=log_store,
         ),
         custom_node_source_cache=CustomNodeSourceCache(

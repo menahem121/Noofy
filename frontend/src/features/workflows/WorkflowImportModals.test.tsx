@@ -4,9 +4,14 @@ import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import type { RequiredModelAvailability, WorkflowImportResponse } from "../../lib/api/noofyApi";
+import { openExternalUrl } from "../../lib/openExternalUrl";
 import { RequiredCustomNodesModal, RequiredModelsModal } from "./WorkflowImportModals";
 
 const modelsCss = readFileSync(resolve(process.cwd(), "src/styles/models.css"), "utf8");
+
+vi.mock("../../lib/openExternalUrl", () => ({
+  openExternalUrl: vi.fn(),
+}));
 
 const missingModel = {
   requirement_id: "vae/flux2-vae.safetensors",
@@ -437,15 +442,21 @@ describe("RequiredCustomNodesModal", () => {
     status: "missing_custom_nodes",
     custom_node_resolution: {
       status: "missing_custom_nodes",
+      mode: "manual_url",
       user_facing_message: "Noofy could not find the required custom nodes for this workflow.",
+      missing_custom_node: { package_id: "comfyui-missing", node_types: ["MissingSampler"] },
+      package_id: "comfyui-missing",
       unresolved_node_types: ["MissingSampler"],
       ambiguous_node_types: [{ node_type: "SharedNode", package_ids: ["first", "second"] }],
+      automatic_resolution_failures: ["No reliable candidate found."],
+      failed_custom_nodes: [],
+      candidate: null,
       github_url_fields: [
         { node_type: "MissingSampler", label: "MissingSampler" },
         { node_type: "SharedNode", label: "SharedNode" },
       ],
       can_provide_github_urls: true,
-      can_mark_no_custom_nodes: true,
+      can_mark_no_custom_nodes: false,
       update_guidance: null,
       developer_details: {},
     },
@@ -458,18 +469,22 @@ describe("RequiredCustomNodesModal", () => {
         importResult={customNodeImport}
         busy={false}
         onResolveUrls={onResolveUrls}
+        onApproveCandidate={vi.fn()}
         onNoCustomNodes={vi.fn()}
         onCancel={vi.fn()}
       />,
     );
 
+    expect(screen.getByText("comfyui-missing")).toBeInTheDocument();
+    expect(screen.getByText("No reliable candidate found.")).toBeInTheDocument();
     expect(screen.getByText("MissingSampler")).toBeInTheDocument();
     expect(screen.getByText("SharedNode")).toBeInTheDocument();
     expect(screen.getByText("Several registry packages match this node.")).toBeInTheDocument();
+    expect(screen.getByText("Only use extensions from sources you trust.")).toBeInTheDocument();
 
     const inputs = screen.getAllByPlaceholderText("https://github.com/owner/repository");
     fireEvent.change(inputs[0], { target: { value: "https://github.com/example/missing" } });
-    fireEvent.click(screen.getByRole("button", { name: "Download custom nodes from URLs" }));
+    fireEvent.click(screen.getByRole("button", { name: "Use GitHub URL" }));
 
     expect(onResolveUrls).toHaveBeenCalledWith({
       MissingSampler: "https://github.com/example/missing",
@@ -492,6 +507,7 @@ describe("RequiredCustomNodesModal", () => {
         }}
         busy={false}
         onResolveUrls={vi.fn()}
+        onApproveCandidate={vi.fn()}
         onNoCustomNodes={onNoCustomNodes}
         onCancel={vi.fn()}
       />,
@@ -499,8 +515,53 @@ describe("RequiredCustomNodesModal", () => {
 
     expect(screen.getByText("Managed ComfyUI may be too old")).toBeInTheDocument();
     expect(screen.getByText("Update managed ComfyUI from Settings to a newer version, then retry preparation.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Download custom nodes from URLs" })).toBeDisabled();
-    fireEvent.click(screen.getByRole("button", { name: "This workflow has no custom nodes" }));
+    expect(screen.getByRole("button", { name: "Use GitHub URL" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Check after ComfyUI update" }));
     expect(onNoCustomNodes).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows a medium-confidence GitHub candidate and lets the user approve or enter another URL", () => {
+    const onApproveCandidate = vi.fn();
+    render(
+      <RequiredCustomNodesModal
+        importResult={{
+          ...customNodeImport,
+          custom_node_resolution: {
+            ...customNodeImport.custom_node_resolution,
+            mode: "candidate_approval",
+            user_facing_message: "Noofy found a possible workflow extension.",
+            candidate: {
+              candidate_id: "candidate-1",
+              owner: "example",
+              repo: "ComfyUI-Missing",
+              repo_url: "https://github.com/example/ComfyUI-Missing",
+              description: "Missing sampler nodes",
+              stars: 42,
+              updated_at: "2026-06-01T00:00:00Z",
+              evidence: ["NODE_CLASS_MAPPINGS found in Python source"],
+              confidence: "medium",
+            },
+          },
+        }}
+        busy={false}
+        onResolveUrls={vi.fn()}
+        onApproveCandidate={onApproveCandidate}
+        onNoCustomNodes={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    expect(screen.getAllByText("Noofy found a possible workflow extension.")).toHaveLength(2);
+    expect(screen.getByText("example/ComfyUI-Missing")).toBeInTheDocument();
+    expect(screen.getByText("NODE_CLASS_MAPPINGS found in Python source")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open Repository" }));
+    expect(openExternalUrl).toHaveBeenCalledWith("https://github.com/example/ComfyUI-Missing");
+
+    fireEvent.click(screen.getByRole("button", { name: "Use this repo" }));
+    expect(onApproveCandidate).toHaveBeenCalledWith("candidate-1");
+
+    fireEvent.click(screen.getByRole("button", { name: "Enter another GitHub URL manually" }));
+    expect(screen.getByRole("button", { name: "Use GitHub URL" })).toBeInTheDocument();
   });
 });

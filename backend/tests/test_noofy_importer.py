@@ -68,6 +68,7 @@ from app.workflows import importer as importer_module
 from app.workflows import import_runtime_profile as import_runtime_profile_module
 from app.workflows.import_normalization import normalized_display_name
 from app.workflows.importer import (
+    GitHubCustomNodeCandidate,
     ImportedWorkflowPackageStore,
     NoofyArchiveImporter,
     NoofyImportError,
@@ -108,6 +109,24 @@ class FakeGitHubCustomNodeUrlResolver:
     def resolve(self, url: str, *, node_type: str) -> tuple[str, NodeRegistrySource]:
         self.calls.append((node_type, url))
         return f"github-{node_type.casefold()}", self.source
+
+
+class FakeGitHubCustomNodeSearchResolver(FakeGitHubCustomNodeUrlResolver):
+    def __init__(
+        self,
+        source: NodeRegistrySource,
+        candidates: list[GitHubCustomNodeCandidate],
+    ) -> None:
+        super().__init__(source)
+        self.candidates = candidates
+        self.search_targets: list[importer_module.GitHubCustomNodeSearchTarget] = []
+
+    def find_candidates(
+        self,
+        target: importer_module.GitHubCustomNodeSearchTarget,
+    ) -> list[GitHubCustomNodeCandidate]:
+        self.search_targets.append(target)
+        return self.candidates
 
 
 @pytest.fixture(autouse=True)
@@ -770,6 +789,139 @@ def test_raw_comfyui_json_import_keeps_unresolved_github_failures_actionable(
             "error": "bad url",
         }
     ]
+
+
+def test_raw_comfyui_json_import_auto_resolves_high_confidence_github_candidate(
+    tmp_path: Path,
+) -> None:
+    commit_sha = "a" * 40
+    archive = _source_archive_bytes(
+        {
+            f"comfyui-manual-{commit_sha}/node.py": (
+                "NODE_CLASS_MAPPINGS = {'ManualNode': object}\n"
+            )
+        }
+    )
+    archive_digest = hashlib.sha256(archive).hexdigest()
+    source = NodeRegistrySource(
+        source_kind=NodeRegistrySourceKind.GIT_ZIP_ARCHIVE,
+        source_url=f"https://codeload.github.com/example/comfyui-manual/zip/{commit_sha}",
+        source_ref=commit_sha,
+        source_content_hash=f"sha256:{archive_digest}",
+        archive_subdir=f"comfyui-manual-{commit_sha}",
+        source_repo_url="https://github.com/example/comfyui-manual",
+    )
+    fetcher = FakeSourceFetcher(archive)
+    resolver = FakeGitHubCustomNodeSearchResolver(
+        source,
+        [_github_candidate(source, repo="comfyui-manual", confidence="high")],
+    )
+    store = ImportedWorkflowPackageStore(
+        tmp_path / "packages",
+        log_store=LogStore(),
+        node_registry_resolver=NodeRegistryResolver(
+            registry=NoofyNodeRegistry(registry_id="empty-test-registry"),
+            log_store=LogStore(),
+        ),
+        custom_node_source_cache=CustomNodeSourceCache(
+            cache_dir=tmp_path / "custom-node-cache",
+            fetcher=fetcher,
+            log_store=LogStore(),
+        ),
+        custom_node_github_resolver=resolver,
+    )
+
+    package = store.preview_archive(
+        json.dumps({"1": {"class_type": "ManualNode", "inputs": {}}}).encode("utf-8"),
+        original_filename="manual-node.json",
+        allow_unverified_community_preparation=True,
+    )
+
+    assert resolver.search_targets
+    assert fetcher.urls == [source.source_url]
+    assert package.import_metadata is not None
+    assert package.import_metadata.status == "needs_input_setup"
+    record = package.custom_nodes[0]
+    assert record.included is True
+    assert record.resolution_method == "github_search_auto"
+    assert record.source_ref == commit_sha
+    assert record.source_repo_url == "https://github.com/example/comfyui-manual"
+
+
+def test_raw_comfyui_json_import_returns_medium_github_candidate_for_approval(
+    tmp_path: Path,
+) -> None:
+    commit_sha = "b" * 40
+    archive = _source_archive_bytes(
+        {
+            f"comfyui-manual-{commit_sha}/node.py": (
+                "NODE_CLASS_MAPPINGS = {'ManualNode': object}\n"
+            )
+        }
+    )
+    archive_digest = hashlib.sha256(archive).hexdigest()
+    source = NodeRegistrySource(
+        source_kind=NodeRegistrySourceKind.GIT_ZIP_ARCHIVE,
+        source_url=f"https://codeload.github.com/example/comfyui-manual/zip/{commit_sha}",
+        source_ref=commit_sha,
+        source_content_hash=f"sha256:{archive_digest}",
+        archive_subdir=f"comfyui-manual-{commit_sha}",
+        source_repo_url="https://github.com/example/comfyui-manual",
+    )
+    fetcher = FakeSourceFetcher(archive)
+    resolver = FakeGitHubCustomNodeSearchResolver(
+        source,
+        [
+            _github_candidate(
+                source,
+                candidate_id="candidate-medium",
+                repo="possible-manual-node",
+                confidence="medium",
+                evidence_score=4,
+                name_match="weak",
+            )
+        ],
+    )
+    store = ImportedWorkflowPackageStore(
+        tmp_path / "packages",
+        log_store=LogStore(),
+        node_registry_resolver=NodeRegistryResolver(
+            registry=NoofyNodeRegistry(registry_id="empty-test-registry"),
+            log_store=LogStore(),
+        ),
+        custom_node_source_cache=CustomNodeSourceCache(
+            cache_dir=tmp_path / "custom-node-cache",
+            fetcher=fetcher,
+            log_store=LogStore(),
+        ),
+        custom_node_github_resolver=resolver,
+    )
+    package = store.preview_archive(
+        json.dumps({"1": {"class_type": "ManualNode", "inputs": {}}}).encode("utf-8"),
+        original_filename="manual-node.json",
+        allow_unverified_community_preparation=True,
+    )
+
+    assert package.import_metadata is not None
+    assert package.import_metadata.status == "missing_custom_nodes"
+    details = package.import_metadata.developer_details["source_resolution"]
+    assert details["mode"] == "candidate_approval"
+    assert details["candidate"]["candidate_id"] == "candidate-medium"
+    assert "source" in details["candidate"]
+    assert fetcher.urls == []
+
+    resolved = store.resolve_custom_nodes_from_approved_candidate(
+        package,
+        candidate_id="candidate-medium",
+        allow_unverified_community_preparation=True,
+    )
+
+    assert fetcher.urls == [source.source_url]
+    assert resolved.import_metadata is not None
+    assert resolved.import_metadata.status == "needs_input_setup"
+    record = resolved.custom_nodes[0]
+    assert record.included is True
+    assert record.resolution_method == "github_search_approved"
 
 
 def test_noofy_importer_streams_source_file_extraction(
@@ -2215,6 +2367,162 @@ def test_import_store_resolves_opted_in_non_bundled_custom_node_to_cached_lock(
     assert cached_entry["source_kind"] == "noofy_cached_archive"
 
 
+def test_import_store_recovers_missing_bundled_custom_node_source_from_registry(
+    tmp_path: Path,
+) -> None:
+    source_archive = _source_archive_bytes(
+        {"repo-root/node.py": "NODE_CLASS_MAPPINGS = {'Get Image Size (JPS)': object}\n"}
+    )
+    source_digest = hashlib.sha256(source_archive).hexdigest()
+    fetcher = FakeSourceFetcher(source_archive)
+    archive = _small_archive_with_custom_node(
+        {
+            "included": True,
+            "source": "source-files/custom_nodes/ComfyUI_JPS-Nodes",
+            "source_ref": None,
+            "source_content_hash": None,
+            "source_archive_subdir": None,
+        }
+    )
+    source = NodeRegistrySource(
+        source_kind=NodeRegistrySourceKind.GIT_ZIP_ARCHIVE,
+        source_url="https://example.test/comfyui-jps/archive/pinned.zip",
+        source_ref="9f9118795d083b8eb5bb7bf9bfa0694f3f332a21",
+        source_content_hash=f"sha256:{source_digest}",
+        archive_subdir="repo-root",
+    )
+    registry = NoofyNodeRegistry(
+        registry_id="test-registry",
+        entries=[
+            NodeRegistryEntry(
+                package_id="comfyui_jps-nodes",
+                display_name="ComfyUI JPS Nodes",
+                sources=[source],
+                node_types=("Get Image Size (JPS)",),
+            )
+        ],
+    )
+    log_store = LogStore()
+    store = ImportedWorkflowPackageStore(
+        tmp_path / "packages",
+        log_store=log_store,
+        node_registry_resolver=NodeRegistryResolver(
+            registry=registry,
+            log_store=log_store,
+        ),
+        custom_node_source_cache=CustomNodeSourceCache(
+            cache_dir=tmp_path / "custom-node-cache",
+            fetcher=fetcher,
+            log_store=log_store,
+        ),
+    )
+
+    package = store.import_archive(
+        archive,
+        original_filename="missing-bundled.noofy",
+        allow_unverified_community_preparation=True,
+    )
+
+    assert fetcher.urls == [source.source_url]
+    assert package.import_metadata is not None
+    assert package.import_metadata.status == "needs_input_setup"
+    record = next(
+        node for node in package.custom_nodes if node.id == "comfyui_jps-nodes"
+    )
+    assert record.included is True
+    assert record.resolution_method == "registry_metadata"
+    assert record.source_cache_ref == f"{source_digest}/source"
+    assert record.source_archive_subdir == "repo-root"
+
+
+def test_import_store_preserves_medium_github_candidate_for_missing_bundled_source(
+    tmp_path: Path,
+) -> None:
+    commit_sha = "c" * 40
+    source_archive = _source_archive_bytes(
+        {
+            f"comfyui-jps-{commit_sha}/node.py": (
+                "NODE_CLASS_MAPPINGS = {'Get Image Size (JPS)': object}\n"
+            )
+        }
+    )
+    source_digest = hashlib.sha256(source_archive).hexdigest()
+    source = NodeRegistrySource(
+        source_kind=NodeRegistrySourceKind.GIT_ZIP_ARCHIVE,
+        source_url=f"https://codeload.github.com/example/comfyui-jps/zip/{commit_sha}",
+        source_ref=commit_sha,
+        source_content_hash=f"sha256:{source_digest}",
+        archive_subdir=f"comfyui-jps-{commit_sha}",
+        source_repo_url="https://github.com/example/comfyui-jps",
+    )
+    fetcher = FakeSourceFetcher(source_archive)
+    resolver = FakeGitHubCustomNodeSearchResolver(
+        source,
+        [
+            _github_candidate(
+                source,
+                candidate_id="candidate-jps",
+                repo="possible-jps-nodes",
+                confidence="medium",
+                evidence_score=4,
+                name_match="weak",
+            )
+        ],
+    )
+    log_store = LogStore()
+    store = ImportedWorkflowPackageStore(
+        tmp_path / "packages",
+        log_store=log_store,
+        node_registry_resolver=NodeRegistryResolver(
+            registry=NoofyNodeRegistry(registry_id="empty-test-registry"),
+            log_store=log_store,
+        ),
+        custom_node_source_cache=CustomNodeSourceCache(
+            cache_dir=tmp_path / "custom-node-cache",
+            fetcher=fetcher,
+            log_store=log_store,
+        ),
+        custom_node_github_resolver=resolver,
+    )
+    archive = _small_archive_with_custom_node(
+        {
+            "included": True,
+            "source": "source-files/custom_nodes/ComfyUI_JPS-Nodes",
+            "source_ref": None,
+            "source_content_hash": None,
+            "source_archive_subdir": None,
+        }
+    )
+
+    package = store.import_archive(
+        archive,
+        original_filename="missing-bundled.noofy",
+        allow_unverified_community_preparation=True,
+    )
+
+    assert fetcher.urls == []
+    assert package.import_metadata is not None
+    assert package.import_metadata.status == "missing_custom_nodes"
+    details = package.import_metadata.developer_details["source_resolution"]
+    assert details["mode"] == "candidate_approval"
+    assert details["candidate"]["candidate_id"] == "candidate-jps"
+
+    resolved = store.resolve_custom_nodes_from_approved_candidate(
+        package,
+        candidate_id="candidate-jps",
+        allow_unverified_community_preparation=True,
+    )
+
+    assert fetcher.urls == [source.source_url]
+    assert resolved.import_metadata is not None
+    assert resolved.import_metadata.status == "needs_input_setup"
+    assert all(node.id != "comfyui_jps-nodes" for node in resolved.custom_nodes)
+    record = next(node for node in resolved.custom_nodes if node.id == "github-example-comfyui-jps")
+    assert record.included is True
+    assert record.resolution_method == "github_search_approved"
+    assert record.source_cache_ref == f"{source_digest}/source"
+
+
 def test_import_runtime_profile_prefers_linux_cuda_when_nvidia_is_available(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2688,6 +2996,31 @@ def _small_archive_with_custom_node(update: dict) -> bytes:
                 contents = json.dumps(graph).encode("utf-8")
             rewritten.writestr(info, contents)
     return payload.getvalue()
+
+
+def _github_candidate(
+    source: NodeRegistrySource,
+    *,
+    candidate_id: str = "candidate-1",
+    repo: str = "comfyui-missing",
+    confidence: str = "high",
+    evidence_score: int = 10,
+    name_match: str = "exact",
+) -> GitHubCustomNodeCandidate:
+    return GitHubCustomNodeCandidate(
+        candidate_id=candidate_id,
+        owner="example",
+        repo=repo,
+        html_url=source.source_repo_url or "https://github.com/example/comfyui-missing",
+        description="Missing custom nodes",
+        stargazers_count=42,
+        updated_at="2026-06-01T00:00:00Z",
+        source=source,
+        evidence=("NODE_CLASS_MAPPINGS found in Python source",),
+        evidence_score=evidence_score,
+        name_match=name_match,
+        confidence=confidence,
+    )
 
 
 def _ed25519_keypair() -> tuple[Ed25519PrivateKey, str]:

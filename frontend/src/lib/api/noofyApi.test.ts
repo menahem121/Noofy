@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  approveImportCustomNodeCandidate,
   cancelModelDownload,
   createModelTag,
   createJobEventsUrl,
@@ -224,11 +225,13 @@ describe("noofyApi", () => {
   it("posts staged import custom-node resolution through the backend API", async () => {
     fetchMock
       .mockResolvedValueOnce(jsonResponse({ status: "ok" }))
+      .mockResolvedValueOnce(jsonResponse({ status: "ok" }))
       .mockResolvedValueOnce(jsonResponse({ status: "ok" }));
 
     await resolveImportCustomNodesFromUrls("import 1", {
       MissingNode: "https://github.com/example/custom-node",
     });
+    await approveImportCustomNodeCandidate("import 1", "candidate-1");
     await markImportHasNoCustomNodes("import 1");
 
     expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/workflows/import/import%201/custom-nodes/resolve-from-urls", {
@@ -243,7 +246,15 @@ describe("noofyApi", () => {
       },
       method: "POST",
     });
-    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/workflows/import/import%201/custom-nodes/no-custom-nodes", {
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/workflows/import/import%201/custom-nodes/approve-candidate", {
+      body: JSON.stringify({ candidate_id: "candidate-1" }),
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      method: "POST",
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/workflows/import/import%201/custom-nodes/no-custom-nodes", {
       body: undefined,
       headers: {
         Accept: "application/json",

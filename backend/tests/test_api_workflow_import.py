@@ -84,6 +84,7 @@ class FakeImportService:
         self.allow_unverified_community_preparation = False
         self.committed_duplicate_action: str | None = None
         self.custom_node_urls: dict[str, str] | None = None
+        self.approved_candidate_id: str | None = None
         self.no_custom_nodes_session_id: str | None = None
         self.pending_sessions: set[str] = {"import-session-1"}
         self.shutdown_called = False
@@ -242,6 +243,33 @@ class FakeImportService:
         if import_session_id not in self.pending_sessions:
             raise KeyError(import_session_id)
         self.custom_node_urls = urls_by_node_type
+        return {
+            "import_session_id": import_session_id,
+            "workflow_id": "unknown__custom_node_workflow__0.1.0",
+            "status": "needs_input_setup",
+            "user_facing_message": "Needs input setup",
+            "workflow": {
+                "id": "unknown__custom_node_workflow__0.1.0",
+                "name": "Custom node workflow",
+                "version": "0.1.0",
+                "description": "",
+            },
+            "required_model_count": 0,
+            "custom_node_count": 1,
+            "unresolved_input_count": 1,
+            "model_summary": None,
+            "custom_node_resolution": None,
+        }
+
+    def approve_import_custom_node_candidate(
+        self,
+        import_session_id: str,
+        *,
+        candidate_id: str,
+    ):
+        if import_session_id not in self.pending_sessions:
+            raise KeyError(import_session_id)
+        self.approved_candidate_id = candidate_id
         return {
             "import_session_id": import_session_id,
             "workflow_id": "unknown__custom_node_workflow__0.1.0",
@@ -444,6 +472,21 @@ def test_import_custom_node_url_resolution_endpoint(monkeypatch) -> None:
     assert fake_service.custom_node_urls == {
         "MissingSampler": "https://github.com/example/custom-node"
     }
+
+
+def test_import_custom_node_candidate_approval_endpoint(monkeypatch) -> None:
+    monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
+    fake_service = FakeImportService()
+
+    with TestClient(create_app(engine_service=fake_service)) as client:
+        response = client.post(
+            "/api/workflows/import/import-session-1/custom-nodes/approve-candidate",
+            json={"candidate_id": "candidate-1"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "needs_input_setup"
+    assert fake_service.approved_candidate_id == "candidate-1"
 
 
 def test_import_no_custom_nodes_endpoint_returns_update_guidance(monkeypatch) -> None:

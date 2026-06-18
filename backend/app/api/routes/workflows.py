@@ -54,6 +54,10 @@ class WorkflowImportCustomNodeUrlsRequest(BaseModel):
     urls_by_node_type: dict[str, str] = Field(default_factory=dict)
 
 
+class WorkflowImportCustomNodeCandidateRequest(BaseModel):
+    candidate_id: str = Field(min_length=1)
+
+
 class GalleryImageAssetCopyRequest(BaseModel):
     input_id: str
     gallery_item_id: str
@@ -319,6 +323,25 @@ async def resolve_import_custom_nodes_from_urls(
         return import_orchestrator.resolve_import_custom_nodes_from_urls(
             import_session_id,
             urls_by_node_type=request.urls_by_node_type,
+        )
+    except ImportSessionExpiredError as exc:
+        raise HTTPException(status_code=410, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/workflows/import/{import_session_id}/custom-nodes/approve-candidate")
+async def approve_import_custom_node_candidate(
+    import_session_id: str,
+    request: WorkflowImportCustomNodeCandidateRequest,
+    import_orchestrator: WorkflowImportOrchestratorDep,
+):
+    try:
+        return import_orchestrator.approve_import_custom_node_candidate(
+            import_session_id,
+            candidate_id=request.candidate_id,
         )
     except ImportSessionExpiredError as exc:
         raise HTTPException(status_code=410, detail=str(exc)) from exc

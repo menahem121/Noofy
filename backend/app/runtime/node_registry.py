@@ -35,6 +35,8 @@ from app.runtime.dependencies.isolation import SHA256_PATTERN, CustomNodeLock, T
 from app.source_policy import SourcePolicy
 
 NODE_REGISTRY_SCHEMA_VERSION = "0.1.0"
+DEFAULT_NODE_REGISTRY_PATH = Path(__file__).with_name("node_registry_catalog.json")
+DEFAULT_NODE_TYPE_MAPPINGS_PATH = Path(__file__).with_name("node_type_mappings.json")
 CUSTOM_NODE_SOURCE_CACHE_MANIFEST_FILENAME = (
     "noofy-custom-node-source-cache-manifest.json"
 )
@@ -96,12 +98,20 @@ class NodeRegistrySource(BaseModel):
     source_ref: str = Field(min_length=1)
     source_content_hash: str = Field(pattern=SHA256_PATTERN)
     archive_subdir: str | None = None
+    source_repo_url: str | None = None
 
     @field_validator("source_url")
     @classmethod
     def _validate_source_url(cls, value: str) -> str:
         if not value.startswith("https://"):
             raise ValueError("custom-node sources must use https URLs")
+        return value
+
+    @field_validator("source_repo_url")
+    @classmethod
+    def _validate_source_repo_url(cls, value: str | None) -> str | None:
+        if value is not None and not value.startswith("https://"):
+            raise ValueError("custom-node repository URLs must use https URLs")
         return value
 
     @field_validator("archive_subdir")
@@ -122,6 +132,11 @@ class NodeRegistrySource(BaseModel):
             raise ValueError(
                 "source_ref must be pinned, not a floating branch or alias"
             )
+        if (
+            self.source_kind == NodeRegistrySourceKind.GIT_ZIP_ARCHIVE
+            and not _is_full_git_commit_sha(self.source_ref)
+        ):
+            raise ValueError("git archive source_ref must be a resolved commit SHA")
         return self
 
 
@@ -168,6 +183,27 @@ class NodeTypeMappingCatalog(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     node_type_to_package_id: dict[str, str] = Field(default_factory=dict)
+
+    @classmethod
+    def load(cls, path: Path) -> NodeTypeMappingCatalog:
+        with path.open("r", encoding="utf-8") as file:
+            return cls.model_validate(json.load(file))
+
+
+def load_noofy_node_registry(
+    path: Path = DEFAULT_NODE_REGISTRY_PATH,
+) -> NoofyNodeRegistry:
+    if not path.exists():
+        return NoofyNodeRegistry(registry_id="noofy-empty-local-registry")
+    return NoofyNodeRegistry.load(path)
+
+
+def load_node_type_mapping_catalog(
+    path: Path = DEFAULT_NODE_TYPE_MAPPINGS_PATH,
+) -> NodeTypeMappingCatalog:
+    if not path.exists():
+        return NodeTypeMappingCatalog()
+    return NodeTypeMappingCatalog.load(path)
 
 
 class CustomNodeSourceResolutionRequest(BaseModel):
@@ -221,6 +257,7 @@ class ResolvedCustomNodeSource(BaseModel):
             source_cache_ref=(
                 cached_source.source_cache_ref if cached_source is not None else None
             ),
+            source_repo_url=self.source.source_repo_url,
             trust_level=self.trust_level,
             node_types=self.node_types,
         )
@@ -365,13 +402,8 @@ class NodeRegistryResolver:
     ) -> tuple[NodeRegistryEntry, str]:
         if request.package_id:
             entry = self.registry.entry_for_package(request.package_id)
-            if entry is None:
-                raise NodeRegistryResolutionError(
-                    NodeRegistryResolutionErrorCode.UNKNOWN_PACKAGE,
-                    "Noofy does not know how to prepare one required workflow extension.",
-                    developer_details={"package_id": request.package_id},
-                )
-            return entry, "registry_metadata"
+            if entry is not None:
+                return entry, "registry_metadata"
 
         mapped_package_ids = {
             self.mappings.node_type_to_package_id[node_type]
@@ -389,6 +421,15 @@ class NodeRegistryResolver:
             for entry in self.registry.entries_for_node_type(node_type):
                 matching_entries[entry.package_id] = entry
         if not matching_entries:
+            if request.package_id:
+                raise NodeRegistryResolutionError(
+                    NodeRegistryResolutionErrorCode.UNKNOWN_PACKAGE,
+                    "Noofy does not know how to prepare one required workflow extension.",
+                    developer_details={
+                        "package_id": request.package_id,
+                        "node_types": request.node_types,
+                    },
+                )
             raise NodeRegistryResolutionError(
                 NodeRegistryResolutionErrorCode.UNKNOWN_NODE_TYPE,
                 "Noofy does not know how to prepare one required workflow extension.",
@@ -594,6 +635,7 @@ class CustomNodeSourceCache:
                 "schema_version": NODE_REGISTRY_SCHEMA_VERSION,
                 "source_kind": source.source_kind.value,
                 "source_url": source.source_url,
+                "source_repo_url": source.source_repo_url,
                 "source_ref": source.source_ref,
                 "source_content_hash": f"sha256:{actual_hash}",
                 "source_cache_ref": f"{actual_hash}/source",
@@ -660,6 +702,10 @@ def _validate_source_policy(source: NodeRegistrySource) -> None:
     if (
         not source.source_ref
         or source.source_ref.strip().casefold() in _BLOCKED_FLOATING_REFS
+        or (
+            source.source_kind == NodeRegistrySourceKind.GIT_ZIP_ARCHIVE
+            and not _is_full_git_commit_sha(source.source_ref)
+        )
     ):
         raise NodeRegistryResolutionError(
             NodeRegistryResolutionErrorCode.UNPINNED_SOURCE_REF,
@@ -887,6 +933,10 @@ def _extract_verified_zip_archive(
 
 def _normalized_sha256(value: str) -> str:
     return value.removeprefix("sha256:").lower()
+
+
+def _is_full_git_commit_sha(value: str) -> bool:
+    return len(value) == 40 and all(char in "0123456789abcdefABCDEF" for char in value)
 
 
 def _normalize_package_id(value: str) -> str:

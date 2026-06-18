@@ -232,6 +232,7 @@ def explicit_node_registry_source(
             source_ref=record.source_ref,
             source_content_hash=record.source_content_hash,
             archive_subdir=record.source_archive_subdir,
+            source_repo_url=record.source_repo_url,
         )
     except ValidationError as exc:
         raise NodeRegistryResolutionError(

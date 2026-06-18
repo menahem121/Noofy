@@ -2,6 +2,7 @@ import {
   AlertCircle,
   ArrowRight,
   Download,
+  ExternalLink,
   Loader2,
   X,
 } from "lucide-react";
@@ -13,6 +14,7 @@ import {
   type RequiredModelAvailability,
   type WorkflowImportResponse,
 } from "../../lib/api/noofyApi";
+import { openExternalUrl } from "../../lib/openExternalUrl";
 import {
   failedModelMessage,
   isModelDownloadActive,
@@ -55,6 +57,7 @@ export function WorkflowImportDialogs({
           importResult={state.pendingImport}
           busy={state.importing}
           onResolveUrls={(urls) => void importFlow.resolveCustomNodesFromUrls(urls)}
+          onApproveCandidate={(candidateId) => void importFlow.approveCustomNodeCandidate(candidateId)}
           onNoCustomNodes={() => void importFlow.markWorkflowHasNoCustomNodes()}
           onCancel={() => void importFlow.cancelImport()}
         />
@@ -84,24 +87,38 @@ export function RequiredCustomNodesModal({
   importResult,
   busy,
   onResolveUrls,
+  onApproveCandidate,
   onNoCustomNodes,
   onCancel,
 }: {
   importResult: WorkflowImportResponse;
   busy: boolean;
   onResolveUrls: (urlsByNodeType: Record<string, string>) => void;
+  onApproveCandidate: (candidateId: string) => void;
   onNoCustomNodes: () => void;
   onCancel: () => void;
 }) {
   const resolution = importResult.custom_node_resolution;
   const fields = resolution?.github_url_fields ?? [];
   const [urlsByNodeType, setUrlsByNodeType] = useState<Record<string, string>>({});
+  const [showManualUrl, setShowManualUrl] = useState(false);
   const allNodeTypes = useMemo(() => {
     const ambiguous = resolution?.ambiguous_node_types.map((item) => item.node_type) ?? [];
     return [...new Set([...(resolution?.unresolved_node_types ?? []), ...ambiguous])].sort();
   }, [resolution?.ambiguous_node_types, resolution?.unresolved_node_types]);
   if (!resolution) return null;
   const needsComfyUpdate = resolution.status === "needs_comfyui_update";
+  const candidate = resolution.mode === "candidate_approval" && !showManualUrl ? resolution.candidate : null;
+  const missingName =
+    resolution.missing_custom_node?.package_id ??
+    resolution.package_id ??
+    fields[0]?.label ??
+    allNodeTypes[0] ??
+    "Workflow extension";
+  const automaticResolutionFailure =
+    resolution.automatic_resolution_failures?.find((item) => item.trim().length > 0) ??
+    "No reliable automatic source was found for this extension.";
+  const showMissingSummary = !needsComfyUpdate;
   const canDownload = fields.length > 0 && fields.some((field) => urlsByNodeType[field.node_type]?.trim());
 
   return (
@@ -119,7 +136,15 @@ export function RequiredCustomNodesModal({
         </header>
 
         <div className="required-models-modal__body">
-          {needsComfyUpdate ? (
+          {candidate ? (
+            <div className="notice notice--warning" role="status">
+              <AlertCircle size={18} aria-hidden="true" />
+              <div>
+                <strong>Noofy found a possible workflow extension.</strong>
+                <span>Review the repository details before using this extension.</span>
+              </div>
+            </div>
+          ) : needsComfyUpdate ? (
             <div className="notice notice--warning" role="status">
               <AlertCircle size={18} aria-hidden="true" />
               <div>
@@ -131,43 +156,100 @@ export function RequiredCustomNodesModal({
             <div className="notice notice--warning" role="status">
               <AlertCircle size={18} aria-hidden="true" />
               <div>
-                <strong>Noofy could not find these custom nodes</strong>
-                <span>Paste the GitHub repository URL for each required custom node so Noofy can prepare it in an isolated runner.</span>
+                <strong>Noofy could not automatically find this workflow extension.</strong>
+                <span>Paste the GitHub repository URL so Noofy can prepare it in an isolated runner.</span>
               </div>
             </div>
           )}
 
-          <div className="custom-node-list">
-            {allNodeTypes.map((nodeType) => (
-              <article className="custom-node-row" key={nodeType}>
-                <div className="custom-node-row__title">
-                  <strong>{nodeType}</strong>
-                  {resolution.ambiguous_node_types.some((item) => item.node_type === nodeType) ? (
-                    <span>Several registry packages match this node.</span>
-                  ) : (
-                    <span>No registry package was found for this node.</span>
-                  )}
+          {candidate ? (
+            <article className="custom-node-row custom-node-row--candidate">
+              <div className="custom-node-row__title">
+                <strong>{candidate.owner}/{candidate.repo}</strong>
+                <span>{candidate.description || "GitHub repository"}</span>
+              </div>
+              <dl className="custom-node-candidate-facts">
+                <div>
+                  <dt>Stars</dt>
+                  <dd>{candidate.stars ?? 0}</dd>
                 </div>
-                {fields.some((field) => field.node_type === nodeType) ? (
-                  <label className="custom-node-row__url">
-                    <span>GitHub URL</span>
-                    <input
-                      type="url"
-                      value={urlsByNodeType[nodeType] ?? ""}
-                      placeholder="https://github.com/owner/repository"
-                      disabled={busy || needsComfyUpdate}
-                      onChange={(event) =>
-                        setUrlsByNodeType((current) => ({
-                          ...current,
-                          [nodeType]: event.target.value,
-                        }))
-                      }
-                    />
-                  </label>
+                <div>
+                  <dt>Updated</dt>
+                  <dd>{candidate.updated_at ? new Date(candidate.updated_at).toLocaleDateString() : "Unknown"}</dd>
+                </div>
+              </dl>
+              <div className="custom-node-candidate-evidence">
+                {(candidate.evidence ?? []).map((item) => (
+                  <span key={item}>{item}</span>
+                ))}
+              </div>
+              <button
+                className="secondary-button"
+                type="button"
+                disabled={busy}
+                onClick={() => void openExternalUrl(candidate.repo_url)}
+              >
+                <ExternalLink size={14} aria-hidden="true" />
+                Open Repository
+              </button>
+            </article>
+          ) : (
+            <>
+              <div className="custom-node-list">
+                {showMissingSummary ? (
+                  <article className="custom-node-row">
+                    <div className="custom-node-row__title">
+                      <strong>{missingName}</strong>
+                      <span>{automaticResolutionFailure}</span>
+                    </div>
+                  </article>
                 ) : null}
-              </article>
-            ))}
-          </div>
+                {allNodeTypes.length ? allNodeTypes.map((nodeType) => (
+                  <article className="custom-node-row" key={nodeType}>
+                    <div className="custom-node-row__title">
+                      <strong>{nodeType}</strong>
+                      {resolution.ambiguous_node_types.some((item) => item.node_type === nodeType) ? (
+                        <span>Several registry packages match this node.</span>
+                      ) : (
+                        <span>No reliable automatic source was found for this node.</span>
+                      )}
+                    </div>
+                    {fields.some((field) => field.node_type === nodeType) ? (
+                      <label className="custom-node-row__url">
+                        <span>GitHub URL</span>
+                        <input
+                          type="url"
+                          value={urlsByNodeType[nodeType] ?? ""}
+                          placeholder="https://github.com/owner/repository"
+                          disabled={busy || needsComfyUpdate}
+                          onChange={(event) =>
+                            setUrlsByNodeType((current) => ({
+                              ...current,
+                              [nodeType]: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                    ) : null}
+                  </article>
+                )) : showMissingSummary ? null : (
+                  <article className="custom-node-row">
+                    <div className="custom-node-row__title">
+                      <strong>{missingName}</strong>
+                      <span>No reliable automatic source was found for this extension.</span>
+                    </div>
+                  </article>
+                )}
+              </div>
+              <div className="notice notice--warning" role="status">
+                <AlertCircle size={18} aria-hidden="true" />
+                <div>
+                  <strong>Only use extensions from sources you trust.</strong>
+                  <span>Community ComfyUI custom nodes can run Python code inside the workflow runner.</span>
+                </div>
+              </div>
+            </>
+          )}
 
           {busy ? (
             <div className="required-models-modal__processing" role="status" aria-live="polite">
@@ -178,18 +260,39 @@ export function RequiredCustomNodesModal({
         </div>
 
         <footer className="required-models-modal__footer">
-          <button
-            className="primary-button"
-            type="button"
-            disabled={busy || needsComfyUpdate || !canDownload}
-            onClick={() => onResolveUrls(urlsByNodeType)}
-          >
-            {busy && !needsComfyUpdate ? <Loader2 className="spin" size={16} aria-hidden="true" /> : <Download size={16} aria-hidden="true" />}
-            Download custom nodes from URLs
-          </button>
-          <button className="secondary-button" type="button" disabled={busy} onClick={onNoCustomNodes}>
-            This workflow has no custom nodes
-          </button>
+          {candidate ? (
+            <>
+              <button
+                className="primary-button"
+                type="button"
+                disabled={busy}
+                onClick={() => onApproveCandidate(candidate.candidate_id)}
+              >
+                {busy ? <Loader2 className="spin" size={16} aria-hidden="true" /> : <Download size={16} aria-hidden="true" />}
+                Use this repo
+              </button>
+              <button className="secondary-button" type="button" disabled={busy} onClick={() => setShowManualUrl(true)}>
+                Enter another GitHub URL manually
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                className="primary-button"
+                type="button"
+                disabled={busy || needsComfyUpdate || !canDownload}
+                onClick={() => onResolveUrls(urlsByNodeType)}
+              >
+                {busy && !needsComfyUpdate ? <Loader2 className="spin" size={16} aria-hidden="true" /> : <Download size={16} aria-hidden="true" />}
+                Use GitHub URL
+              </button>
+              {needsComfyUpdate ? (
+                <button className="secondary-button" type="button" disabled={busy} onClick={onNoCustomNodes}>
+                  Check after ComfyUI update
+                </button>
+              ) : null}
+            </>
+          )}
           <button className="ghost-button" type="button" disabled={busy} onClick={onCancel}>
             Cancel Import
           </button>

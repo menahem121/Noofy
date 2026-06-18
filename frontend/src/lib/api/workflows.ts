@@ -476,9 +476,28 @@ export interface WorkflowImportResponse {
   } | null;
   custom_node_resolution?: {
     status: string;
+    mode?: "manual_url" | "candidate_approval" | string | null;
     user_facing_message: string;
+    missing_custom_node?: { package_id?: string; name?: string; node_types?: string[] } | null;
+    package_id?: string | null;
     unresolved_node_types: string[];
     ambiguous_node_types: Array<{ node_type: string; package_ids?: string[] }>;
+    automatic_resolution_failures?: string[];
+    failed_custom_nodes?: Array<Record<string, unknown>>;
+    candidate?: {
+      candidate_id: string;
+      owner: string;
+      repo: string;
+      name?: string;
+      repo_url: string;
+      description?: string | null;
+      stars?: number;
+      updated_at?: string | null;
+      evidence?: string[];
+      evidence_score?: number;
+      name_match?: string;
+      confidence?: string;
+    } | null;
     github_url_fields: Array<{ node_type: string; label: string }>;
     can_provide_github_urls: boolean;
     can_mark_no_custom_nodes: boolean;
@@ -899,6 +918,16 @@ export function resolveImportCustomNodesFromUrls(
   return postJson<WorkflowImportResponse>(
     `/workflows/import/${encodeURIComponent(importSessionId)}/custom-nodes/resolve-from-urls`,
     { urls_by_node_type: urlsByNodeType },
+  );
+}
+
+export function approveImportCustomNodeCandidate(
+  importSessionId: string,
+  candidateId: string,
+) {
+  return postJson<WorkflowImportResponse>(
+    `/workflows/import/${encodeURIComponent(importSessionId)}/custom-nodes/approve-candidate`,
+    { candidate_id: candidateId },
   );
 }
 

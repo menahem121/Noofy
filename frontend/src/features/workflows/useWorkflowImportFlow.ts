@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
+  approveImportCustomNodeCandidate,
   cancelImportModelDownload,
   cancelWorkflowImport,
   commitWorkflowImport,
@@ -40,6 +41,7 @@ export interface WorkflowImportFlowController {
   continueImport: () => Promise<void>;
   duplicateImport: (action: "replace" | "copy") => Promise<void>;
   resolveCustomNodesFromUrls: (urlsByNodeType: Record<string, string>) => Promise<void>;
+  approveCustomNodeCandidate: (candidateId: string) => Promise<void>;
   markWorkflowHasNoCustomNodes: () => Promise<void>;
   readyImportAction: () => Promise<void>;
   cancelImport: () => Promise<void>;
@@ -326,6 +328,39 @@ export function useWorkflowImportFlow({
     }
   }, [finishImport, state.pendingImport?.import_session_id]);
 
+  const approveCustomNodeCandidate = useCallback(async (candidateId: string) => {
+    const sessionId = state.pendingImport?.import_session_id;
+    if (!sessionId) return;
+    setState((current) => ({ ...current, importing: true, importError: null }));
+    try {
+      const importResult = await approveImportCustomNodeCandidate(sessionId, candidateId);
+      if (
+        importResult.import_session_id &&
+        (
+          importResult.duplicate_identity ||
+          importNeedsCustomNodeResolution(importResult) ||
+          (importResult.model_summary && importResult.model_summary.total_count > 0)
+        )
+      ) {
+        setState((current) => ({
+          ...current,
+          importing: false,
+          pendingImport: importResult,
+          importError: null,
+        }));
+        return;
+      }
+      const committed = await commitWorkflowImport(sessionId);
+      await finishImport(committed, false);
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        importing: false,
+        importError: error instanceof Error ? error.message : String(error),
+      }));
+    }
+  }, [finishImport, state.pendingImport?.import_session_id]);
+
   const markWorkflowHasNoCustomNodes = useCallback(async () => {
     const sessionId = state.pendingImport?.import_session_id;
     if (!sessionId) return;
@@ -545,6 +580,7 @@ export function useWorkflowImportFlow({
     continueImport,
     duplicateImport,
     resolveCustomNodesFromUrls,
+    approveCustomNodeCandidate,
     markWorkflowHasNoCustomNodes,
     readyImportAction,
     cancelImport,

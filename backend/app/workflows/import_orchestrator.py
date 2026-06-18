@@ -179,22 +179,43 @@ def _custom_node_resolution_payload(package: WorkflowPackage) -> dict[str, objec
         {"node_type": node_type, "label": node_type}
         for node_type in sorted(set(unresolved_node_types + unresolved_from_ambiguous))
     ]
+    candidate = source_resolution.get("candidate")
+    public_candidate = None
+    if isinstance(candidate, dict):
+        public_candidate = {
+            key: value
+            for key, value in candidate.items()
+            if key != "source"
+        }
+    public_developer_details = dict(source_resolution)
+    if public_candidate is not None:
+        public_developer_details["candidate"] = public_candidate
     if not fields and status not in {"missing_custom_nodes", "needs_comfyui_update"}:
         return None
     return {
         "status": status or source_resolution.get("status", "missing_custom_nodes"),
+        "mode": source_resolution.get("mode") or (
+            "manual_url" if status == "missing_custom_nodes" else None
+        ),
         "user_facing_message": (
             package.import_metadata.user_facing_message
             if package.import_metadata is not None
             else "Noofy could not find the required custom nodes for this workflow."
         ),
+        "missing_custom_node": source_resolution.get("missing_custom_node"),
+        "package_id": source_resolution.get("package_id"),
         "unresolved_node_types": unresolved_node_types,
         "ambiguous_node_types": ambiguous_node_types,
+        "automatic_resolution_failures": source_resolution.get(
+            "automatic_resolution_failures", []
+        ),
+        "failed_custom_nodes": source_resolution.get("failed_custom_nodes", []),
+        "candidate": public_candidate,
         "github_url_fields": fields,
         "can_provide_github_urls": bool(fields),
-        "can_mark_no_custom_nodes": bool(fields),
+        "can_mark_no_custom_nodes": status == "needs_comfyui_update" and bool(fields),
         "update_guidance": source_resolution.get("update_guidance"),
-        "developer_details": source_resolution,
+        "developer_details": public_developer_details,
     }
 
 
@@ -434,6 +455,23 @@ class WorkflowImportOrchestrator:
         pending.package = self.imported_package_store.resolve_custom_nodes_from_github_urls(
             pending.package,
             urls_by_node_type=urls_by_node_type,
+            allow_unverified_community_preparation=pending.allow_unverified_community_preparation,
+        )
+        pending.updated_at = datetime.now(UTC)
+        return self._pending_import_response(import_session_id, pending)
+
+    def approve_import_custom_node_candidate(
+        self,
+        import_session_id: str,
+        *,
+        candidate_id: str,
+    ) -> StagedWorkflowImportResponse:
+        pending = self._pending_import_or_raise(import_session_id)
+        if self._has_active_import_download(pending):
+            raise RuntimeError("Model download is still running. Cancel it or wait for it to finish before continuing.")
+        pending.package = self.imported_package_store.resolve_custom_nodes_from_approved_candidate(
+            pending.package,
+            candidate_id=candidate_id,
             allow_unverified_community_preparation=pending.allow_unverified_community_preparation,
         )
         pending.updated_at = datetime.now(UTC)

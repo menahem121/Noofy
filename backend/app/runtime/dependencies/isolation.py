@@ -143,6 +143,7 @@ class CustomNodeLock(BaseModel):
     source_content_hash: str | None = Field(default=None, pattern=SHA256_PATTERN)
     source_cache_ref: str | None = None
     source_archive_subdir: str | None = None
+    source_repo_url: str | None = None
     commit: str | None = None
     version: str | None = None
     trust_level: TrustLevel

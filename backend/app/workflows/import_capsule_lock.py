@@ -82,6 +82,7 @@ def imported_package_capsule_lock(
             source_content_hash=node.source_content_hash,
             source_cache_ref=node.source_cache_ref,
             source_archive_subdir=node.source_archive_subdir,
+            source_repo_url=node.source_repo_url,
             trust_level=trust_level,
             node_types=node.node_types,
         )

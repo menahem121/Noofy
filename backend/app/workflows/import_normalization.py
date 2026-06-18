@@ -1100,6 +1100,9 @@ def normalize_custom_nodes(
                     merged, "source_archive_subdir"
                 )
                 or optional_string_field(merged, "archive_subdir"),
+                source_repo_url=optional_string_field(merged, "source_repo_url")
+                or optional_string_field(merged, "repo_url")
+                or optional_string_field(merged, "repository_url"),
                 resolution_method=(
                     merged.get("resolution_method")
                     if isinstance(merged.get("resolution_method"), str)
