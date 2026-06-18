@@ -130,6 +130,77 @@ async def test_watchdog_detects_crash_and_restarts(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_startup_exit_does_not_schedule_watchdog_restart(
+    tmp_path: Path,
+) -> None:
+    """A process that exits before startup completes should not auto-restart."""
+    processes: list[FakeProcess] = []
+
+    async def factory(*args, **kwargs):
+        proc = FakeProcess(pid=1100 + len(processes))
+        proc.crash(code=1)
+        processes.append(proc)
+        return proc
+
+    async def health(_: str) -> tuple[bool, str | None]:
+        return False, "not ready"
+
+    manager = _base_manager(
+        tmp_path,
+        process_factory=factory,
+        health_check=health,
+        restart_backoff_base_seconds=0.01,
+        startup_timeout_seconds=0.05,
+    )
+
+    result = await manager.start()
+    await asyncio.sleep(0.1)
+
+    assert result.status == "startup_failed"
+    assert len(processes) == 1
+    assert manager._process is None
+    assert manager._watchdog_task is None
+
+
+@pytest.mark.anyio
+async def test_stop_after_crash_cancels_pending_watchdog_restart(
+    tmp_path: Path,
+) -> None:
+    """Stopping a just-crashed process should cancel any queued restart."""
+    processes: list[FakeProcess] = []
+    health = HealthGate()
+
+    async def factory(*args, **kwargs):
+        proc = FakeProcess(pid=1200 + len(processes))
+        processes.append(proc)
+        health.spawned_count = len(processes)
+        return proc
+
+    manager = _base_manager(
+        tmp_path,
+        process_factory=factory,
+        health_check=health,
+        restart_backoff_base_seconds=0.2,
+    )
+
+    result = await manager.start()
+    assert result.status == "started"
+
+    processes[0].crash(code=1)
+    for _ in range(20):
+        if manager._restart_attempt == 1:
+            break
+        await asyncio.sleep(0.01)
+
+    stop_result = await manager.stop()
+    await asyncio.sleep(0.25)
+
+    assert stop_result.status == "not_running"
+    assert len(processes) == 1
+    assert manager._watchdog_task is None
+
+
+@pytest.mark.anyio
 async def test_watchdog_respects_max_restart_attempts(tmp_path: Path) -> None:
     """After max_restart_attempts exhausted, watchdog stops retrying."""
     processes: list[FakeProcess] = []

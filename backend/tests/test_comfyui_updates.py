@@ -577,6 +577,94 @@ async def test_failed_smoke_does_not_change_active_runtime(tmp_path: Path) -> No
 
 
 @pytest.mark.anyio
+async def test_default_smoke_test_prepares_isolated_runtime_directories(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    paths = resolve_paths(env={"NOOFY_DATA_DIR": str(tmp_path / "data")})
+    paths.ensure_directories()
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "main.py").write_text("", encoding="utf-8")
+    env = tmp_path / "env"
+    python = env / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text("", encoding="utf-8")
+    prepared_dirs: list[set[str]] = []
+
+    class FakeSmokeRuntimeManager:
+        def __init__(self, **kwargs) -> None:
+            self.base_url = "http://127.0.0.1:9999"
+            self.ws_url = "ws://127.0.0.1:9999/ws"
+            self.repo_dir = kwargs["repo_dir"]
+            self.base_dir = kwargs["managed_base_directory"]
+
+        async def start(self) -> ProcessActionResult:
+            prepared_dirs.append(
+                {
+                    name
+                    for name in ("custom_nodes", "input", "outputs", "user")
+                    if (self.base_dir / name).is_dir()
+                }
+            )
+            return ProcessActionResult(
+                status="started",
+                comfyui=ComfyUIRuntimeStatus(
+                    mode="managed",
+                    reachable=True,
+                    base_url=self.base_url,
+                    repo_dir=str(self.repo_dir),
+                    managed_process_running=True,
+                    pid=123,
+                ),
+            )
+
+        async def stop(self) -> ProcessActionResult:
+            return ProcessActionResult(
+                status="stopped",
+                comfyui=ComfyUIRuntimeStatus(
+                    mode="managed",
+                    reachable=False,
+                    base_url=self.base_url,
+                    repo_dir=str(self.repo_dir),
+                    managed_process_running=False,
+                ),
+            )
+
+    monkeypatch.setattr(
+        "app.runtime.comfyui.comfyui_updates.RuntimeManager",
+        FakeSmokeRuntimeManager,
+    )
+    monkeypatch.setattr(
+        "app.runtime.comfyui.comfyui_updates._smoke_required_routes",
+        _async_noop,
+    )
+    monkeypatch.setattr(
+        "app.runtime.comfyui.comfyui_updates._smoke_prompt_and_websocket",
+        _async_noop,
+    )
+    service = ComfyUIUpdateService(
+        paths=paths,
+        runtime_manager=_manager(tmp_path),
+        mode="managed",
+        developer_override=False,
+        bootstrap_python_executable="python3",
+        torch_cuda_index_url=None,
+        torch_cpu_index_url="https://download.pytorch.org/whl/cpu",
+        log_store=LogStore(),
+    )
+
+    await service._default_smoke_test(
+        source,
+        env,
+        LocalComfyUIVersionRecord(tag="v-test", locally_verified=True),
+    )
+
+    assert prepared_dirs == [{"custom_nodes", "input", "outputs", "user"}]
+    assert not (source / "custom_nodes").exists()
+
+
+@pytest.mark.anyio
 async def test_missing_managed_env_triggers_staged_repair_on_start_failure(
     tmp_path: Path,
 ) -> None:

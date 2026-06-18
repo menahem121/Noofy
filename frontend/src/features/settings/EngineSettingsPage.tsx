@@ -343,8 +343,13 @@ export function EngineSettingsPage({
   const { viewMode, setViewMode } = useAppPreferences();
   const runtimeStatus = useRuntimeStatus();
 
-  async function refresh() {
-    setState((current) => ({ ...current, loading: true, error: null }));
+  async function refresh(options: { quietErrors?: boolean } = {}) {
+    const quietErrors = options.quietErrors ?? false;
+    setState((current) => ({
+      ...current,
+      loading: true,
+      error: quietErrors ? current.error : null,
+    }));
     try {
       const [
         runtime,
@@ -374,12 +379,16 @@ export function EngineSettingsPage({
       }));
       runtimeStatus.setRuntimeFromResponse(runtime);
     } catch (error) {
-      void runtimeStatus.refreshRuntime({ force: true, silent: false });
+      void runtimeStatus.refreshRuntime({ force: true, silent: quietErrors });
       setState((current) => ({
         ...current,
         loading: false,
-        runtime: null,
-        error: error instanceof Error ? error.message : String(error),
+        runtime: quietErrors ? current.runtime : null,
+        error: quietErrors
+          ? current.error
+          : error instanceof Error
+            ? error.message
+            : String(error),
       }));
     }
   }
@@ -547,7 +556,7 @@ export function EngineSettingsPage({
         ...current,
         actionResult: { label: actionName, status: updateStatus.status, ok },
       }));
-      await refresh();
+      await refresh({ quietErrors: true });
     } catch (error) {
       setState((current) => ({
         ...current,

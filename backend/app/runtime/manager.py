@@ -325,12 +325,13 @@ class RuntimeManager:
         self._sidecar_starting = True
         try:
             if not self._is_managed_process_running():
-                await self._start_process()
+                await self._start_process(start_watchdog=False)
 
             started = await self._poll_until_reachable(self.startup_timeout_seconds)
             if started:
                 self._last_error = None
                 self._started_at = datetime.now(timezone.utc)
+                self._start_watchdog()
                 status = await self.status()
                 self.log_store.add(
                     "info",
@@ -351,6 +352,7 @@ class RuntimeManager:
                     "runtime.manager",
                     details={"error": self._last_error},
                 )
+                await self._cleanup_process()
                 return ProcessActionResult(
                     status="startup_failed", comfyui=(await self.status())
                 )
@@ -381,9 +383,19 @@ class RuntimeManager:
             )
 
         if not self._is_managed_process_running():
+            has_exited_process = self._process is not None
+            has_watchdog = self._watchdog_task is not None
+            if has_exited_process or has_watchdog:
+                self._stopping = True
+                await self._stop_managed_process()
+                self._started_at = None
             self.log_store.add(
-                "warning",
-                "ComfyUI stop requested but no managed process is running",
+                "info" if has_exited_process or has_watchdog else "warning",
+                (
+                    "ComfyUI stop requested after managed process exited"
+                    if has_exited_process or has_watchdog
+                    else "ComfyUI stop requested but no managed process is running"
+                ),
                 "runtime.manager",
             )
             return ProcessActionResult(

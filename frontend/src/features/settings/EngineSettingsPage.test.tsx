@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { RuntimeStatusProvider } from "../app/RuntimeStatusProvider";
@@ -1010,6 +1010,71 @@ describe("EngineSettingsPage", () => {
     expect(
       (await screen.findAllByText("ComfyUI was repaired and checked.", {}, { timeout: 2500 })).length,
     ).toBeGreaterThan(0);
+  });
+
+  it("keeps the update result when the post-update summary refresh fails", async () => {
+    let versionRequests = 0;
+    fetchMock.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith("/api/runtime"))
+          return Promise.resolve(jsonResponse(readyRuntime));
+        if (url.endsWith("/api/engine/comfyui/versions")) {
+          versionRequests += 1;
+          if (versionRequests > 1) {
+            return Promise.resolve(jsonResponse({}, 400));
+          }
+          return Promise.resolve(jsonResponse(versions));
+        }
+        if (url.endsWith("/api/engine/comfyui/launch-settings"))
+          return Promise.resolve(jsonResponse(launchSettings));
+        if (url.endsWith("/api/settings/apis"))
+          return Promise.resolve(jsonResponse(apiSettings));
+        if (url.endsWith("/api/settings/model-folders"))
+          return Promise.resolve(jsonResponse(modelFolderSettings));
+        if (url.endsWith("/api/settings/noofy-runtime"))
+          return Promise.resolve(jsonResponse(noofyRuntimeSettings));
+        if (
+          url.endsWith("/api/engine/comfyui/update") &&
+          init?.method === "POST"
+        ) {
+          expect(init.body).toBe(JSON.stringify({ version: "latest" }));
+          return Promise.resolve(
+            jsonResponse({
+              operation: "update",
+              phase: "completed",
+              selected_version: "latest",
+              resolved_tag: "v0.21.0",
+              progress_label: "ComfyUI v0.21.0 is active.",
+              status: "completed",
+              error: null,
+              installed_path: "/runtime/core-engines/v0.21.0",
+              activated_version: "v0.21.0",
+            }),
+          );
+        }
+        return Promise.reject(new Error(`Unexpected request: ${url}`));
+      },
+    );
+
+    renderSettingsPage();
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: /update comfyui/i }),
+    );
+
+    expect(
+      (
+        await screen.findAllByText("ComfyUI was updated and checked.")
+      ).length,
+    ).toBeGreaterThan(0);
+    await waitFor(() => expect(versionRequests).toBeGreaterThan(1));
+    expect(
+      screen.queryByText("Noofy could not complete that action"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/Noofy reported an error while loading this data/i),
+    ).not.toBeInTheDocument();
   });
 
   it("loads Noofy runtime status without checking GitHub automatically", async () => {

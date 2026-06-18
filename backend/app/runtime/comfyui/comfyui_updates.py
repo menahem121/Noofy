@@ -1365,6 +1365,8 @@ class ComfyUIUpdateService:
             / f"{_safe_tag(record.tag)}-{uuid4().hex}"
         )
         smoke_root.mkdir(parents=True, exist_ok=False)
+        for runtime_child in ("custom_nodes", "input", "outputs", "user"):
+            (smoke_root / runtime_child).mkdir(parents=True, exist_ok=True)
         manager = RuntimeManager(
             mode="managed",
             external_base_url="http://127.0.0.1:8188",
