@@ -1,5 +1,6 @@
 import contextlib
 import importlib.util
+import json
 import signal
 import subprocess
 import sys
@@ -17,6 +18,12 @@ def load_noofy_cli():
     assert spec.loader is not None
     spec.loader.exec_module(module)
     return module
+
+
+def write_runtime_tool_versions(root: Path, *, uv_version: str = "0.11.10") -> None:
+    path = root / "backend" / "app" / "runtime" / "runtime_tool_versions.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"uv": uv_version}), encoding="utf-8")
 
 
 def test_frontend_install_command_prefers_ci_when_lockfile_exists(tmp_path: Path) -> None:
@@ -709,31 +716,41 @@ def test_ensure_backend_venv_is_idempotent_when_python_exists(tmp_path: Path) ->
 
 def test_install_backend_dependencies_keeps_existing_pip(tmp_path: Path) -> None:
     cli = load_noofy_cli()
+    write_runtime_tool_versions(tmp_path)
     backend_python = cli.backend_python_path(tmp_path)
+    backend_uv = cli.backend_uv_path(tmp_path)
     calls = []
 
     def runner(command, cwd, env, capture):
         calls.append(command)
+        if command == [str(backend_uv), "--version"]:
+            return cli.CommandResult(returncode=0, stdout="uv 0.11.10\n")
         return cli.CommandResult(returncode=0)
 
     cli.NoofyCheckout(root=tmp_path, command_runner=runner).install_backend_dependencies()
 
     assert [str(backend_python), "-m", "ensurepip", "--upgrade"] not in calls
-    assert calls[-2:] == [
+    assert calls[-4:] == [
         [str(backend_python), "-m", "pip", "install", "--upgrade", "pip"],
         [str(backend_python), "-m", "pip", "install", "-e", ".[dev]"],
+        [str(backend_python), "-m", "pip", "install", "uv==0.11.10"],
+        [str(backend_uv), "--version"],
     ]
 
 
 def test_install_backend_dependencies_bootstraps_missing_pip(tmp_path: Path) -> None:
     cli = load_noofy_cli()
+    write_runtime_tool_versions(tmp_path)
     backend_python = cli.backend_python_path(tmp_path)
+    backend_uv = cli.backend_uv_path(tmp_path)
     calls = []
 
     def runner(command, cwd, env, capture):
         calls.append(command)
         if command[1] == "-c":
             raise subprocess.CalledProcessError(1, command)
+        if command == [str(backend_uv), "--version"]:
+            return cli.CommandResult(returncode=0, stdout="uv 0.11.10\n")
         return cli.CommandResult(returncode=0)
 
     cli.NoofyCheckout(root=tmp_path, command_runner=runner).install_backend_dependencies()
@@ -742,11 +759,37 @@ def test_install_backend_dependencies_bootstraps_missing_pip(tmp_path: Path) -> 
         [str(backend_python), "-m", "ensurepip", "--upgrade"],
         [str(backend_python), "-m", "pip", "install", "--upgrade", "pip"],
         [str(backend_python), "-m", "pip", "install", "-e", ".[dev]"],
+        [str(backend_python), "-m", "pip", "install", "uv==0.11.10"],
+        [str(backend_uv), "--version"],
     ]
+
+
+def test_install_backend_dependencies_reports_unsupported_uv_after_repair_attempt(
+    tmp_path: Path,
+) -> None:
+    cli = load_noofy_cli()
+    write_runtime_tool_versions(tmp_path)
+    backend_uv = cli.backend_uv_path(tmp_path)
+
+    def runner(command, cwd, env, capture):
+        if command == [str(backend_uv), "--version"]:
+            return cli.CommandResult(returncode=0, stdout="uv 0.11.17\n")
+        return cli.CommandResult(returncode=0)
+
+    checkout = cli.NoofyCheckout(root=tmp_path, command_runner=runner)
+
+    with pytest.raises(SystemExit) as exc_info:
+        checkout.install_backend_dependencies()
+
+    message = str(exc_info.value)
+    assert "unsupported uv version" in message
+    assert "Expected uv 0.11.10; found 0.11.17" in message
+    assert "backend/.venv" in message
 
 
 def test_install_backend_dependencies_reports_unavailable_ensurepip(tmp_path: Path) -> None:
     cli = load_noofy_cli()
+    write_runtime_tool_versions(tmp_path)
 
     def runner(command, cwd, env, capture):
         raise subprocess.CalledProcessError(1, command)
@@ -812,6 +855,8 @@ def test_install_delegates_runtime_preparation_to_bootstrap_service(tmp_path: Pa
     cli = load_noofy_cli()
     (tmp_path / "backend").mkdir()
     (tmp_path / "frontend").mkdir()
+    write_runtime_tool_versions(tmp_path)
+    backend_uv = cli.backend_uv_path(tmp_path)
     data_dir = tmp_path / ".noofy-runtime" / "data"
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.setenv(
@@ -827,6 +872,8 @@ def test_install_delegates_runtime_preparation_to_bootstrap_service(tmp_path: Pa
             backend_python = cli.backend_python_path(tmp_path)
             backend_python.parent.mkdir(parents=True)
             backend_python.write_text("", encoding="utf-8")
+        if command == [str(backend_uv), "--version"]:
+            return cli.CommandResult(returncode=0, stdout="uv 0.11.10\n")
         if capture:
             captured_envs.append(env)
             return cli.CommandResult(
@@ -856,6 +903,8 @@ def test_install_allows_unsupported_managed_runtime_platform(
     cli = load_noofy_cli()
     (tmp_path / "backend").mkdir()
     (tmp_path / "frontend").mkdir()
+    write_runtime_tool_versions(tmp_path)
+    backend_uv = cli.backend_uv_path(tmp_path)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.setenv(
         "NOOFY_API_KEY_VAULT_PASSPHRASE_FILE",
@@ -867,6 +916,8 @@ def test_install_allows_unsupported_managed_runtime_platform(
             backend_python = cli.backend_python_path(tmp_path)
             backend_python.parent.mkdir(parents=True)
             backend_python.write_text("", encoding="utf-8")
+        if command == [str(backend_uv), "--version"]:
+            return cli.CommandResult(returncode=0, stdout="uv 0.11.10\n")
         if capture:
             return cli.CommandResult(
                 returncode=0,
@@ -891,6 +942,8 @@ def test_install_fails_cleanly_when_runtime_preparation_fails(tmp_path: Path, mo
     cli = load_noofy_cli()
     (tmp_path / "backend").mkdir()
     (tmp_path / "frontend").mkdir()
+    write_runtime_tool_versions(tmp_path)
+    backend_uv = cli.backend_uv_path(tmp_path)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.setenv(
         "NOOFY_API_KEY_VAULT_PASSPHRASE_FILE",
@@ -902,6 +955,8 @@ def test_install_fails_cleanly_when_runtime_preparation_fails(tmp_path: Path, mo
             backend_python = cli.backend_python_path(tmp_path)
             backend_python.parent.mkdir(parents=True)
             backend_python.write_text("", encoding="utf-8")
+        if command == [str(backend_uv), "--version"]:
+            return cli.CommandResult(returncode=0, stdout="uv 0.11.10\n")
         if capture:
             return cli.CommandResult(
                 returncode=0,

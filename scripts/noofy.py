@@ -29,6 +29,9 @@ FRONTEND_DIR = REPO_ROOT / "frontend"
 DEFAULT_DATA_DIR = REPO_ROOT / ".noofy-runtime" / "data"
 DEFAULT_BACKEND_HOST = "127.0.0.1"
 DEFAULT_BACKEND_PORT = 8765
+RUNTIME_TOOL_VERSIONS_RELATIVE_PATH = (
+    Path("backend") / "app" / "runtime" / "runtime_tool_versions.json"
+)
 RUNTIME_BOOTSTRAP_READY_STATUSES = {"prepared", "already_prepared"}
 RUNTIME_BOOTSTRAP_NONFATAL_INSTALL_STATUSES = {"platform_unsupported"}
 SOURCE_PROCESS_LEASE_NAME = "source-processes.json"
@@ -112,6 +115,48 @@ def backend_venv_bin_dir(root: Path = REPO_ROOT, *, os_name: str | None = None) 
     if selected_os == "nt":
         return root / "backend" / ".venv" / "Scripts"
     return root / "backend" / ".venv" / "bin"
+
+
+def backend_uv_path(root: Path = REPO_ROOT, *, os_name: str | None = None) -> Path:
+    selected_os = os.name if os_name is None else os_name
+    executable_name = "uv.exe" if selected_os == "nt" else "uv"
+    return backend_venv_bin_dir(root, os_name=selected_os) / executable_name
+
+
+def runtime_tool_versions_path(root: Path = REPO_ROOT) -> Path:
+    return root / RUNTIME_TOOL_VERSIONS_RELATIVE_PATH
+
+
+def supported_uv_version(root: Path = REPO_ROOT) -> str:
+    path = runtime_tool_versions_path(root)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise SystemExit(
+            f"Noofy source checkout is missing its runtime tool version manifest: {path}"
+        ) from None
+    except json.JSONDecodeError as exc:
+        raise SystemExit(
+            f"Noofy source checkout has an invalid runtime tool version manifest: {path}: {exc}"
+        ) from None
+
+    version = payload.get("uv")
+    if not isinstance(version, str) or not version.strip():
+        raise SystemExit(
+            f"Noofy source checkout runtime tool version manifest must define a uv version: {path}"
+        )
+    return version.strip()
+
+
+def supported_uv_requirement(root: Path = REPO_ROOT) -> str:
+    return f"uv=={supported_uv_version(root)}"
+
+
+def parse_uv_version_output(output: str) -> str | None:
+    parts = output.strip().split()
+    if len(parts) >= 2 and parts[0] == "uv":
+        return parts[1]
+    return None
 
 
 def frontend_install_command(frontend_dir: Path = FRONTEND_DIR) -> list[str]:
@@ -404,6 +449,10 @@ class NoofyCheckout:
     def backend_venv_bin_dir(self) -> Path:
         return backend_venv_bin_dir(self.root)
 
+    @property
+    def backend_uv(self) -> Path:
+        return backend_uv_path(self.root)
+
     def install(
         self,
         *,
@@ -445,6 +494,8 @@ class NoofyCheckout:
     def install_backend_dependencies(self) -> None:
         print("Installing trusted backend dependencies into backend/.venv")
         self.ensure_backend_pip()
+        expected_uv_version = supported_uv_version(self.root)
+        uv_requirement = f"uv=={expected_uv_version}"
         self.command_runner(
             [str(self.backend_python), "-m", "pip", "install", "--upgrade", "pip"],
             self.backend_dir,
@@ -457,6 +508,39 @@ class NoofyCheckout:
             None,
             False,
         )
+        print(f"Ensuring supported backend dependency tool: {uv_requirement}")
+        self.command_runner(
+            [str(self.backend_python), "-m", "pip", "install", uv_requirement],
+            self.backend_dir,
+            None,
+            False,
+        )
+        self.verify_backend_uv_version(expected_version=expected_uv_version)
+
+    def verify_backend_uv_version(self, *, expected_version: str | None = None) -> None:
+        expected = expected_version or supported_uv_version(self.root)
+        try:
+            result = self.command_runner(
+                [str(self.backend_uv), "--version"],
+                self.backend_dir,
+                None,
+                True,
+            )
+        except subprocess.CalledProcessError as exc:
+            raise SystemExit(
+                "Noofy could not verify the backend uv executable after source-checkout install.\n"
+                f"Expected uv {expected} at: {self.backend_uv}\n"
+                "Remove backend/.venv and rerun make install if this continues."
+            ) from exc
+
+        actual = parse_uv_version_output(result.stdout)
+        if actual != expected:
+            found = actual or "unknown"
+            raise SystemExit(
+                "Noofy source-checkout install left backend/.venv with an unsupported uv version.\n"
+                f"Expected uv {expected}; found {found} at: {self.backend_uv}\n"
+                "Rerun make install to repair the venv. Remove backend/.venv first if the mismatch continues."
+            )
 
     def ensure_backend_pip(self) -> None:
         try:

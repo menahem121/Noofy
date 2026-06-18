@@ -9,7 +9,15 @@ from unittest.mock import patch
 import pytest
 
 from app.diagnostics import LogStore
+from app.runtime.runtime_tool_versions import SUPPORTED_UV_VERSION
 from app.runtime.uv_executable import _venv_uv_path, resolve_noofy_uv_executable
+
+
+def _is_uv_requirement(dependency: str) -> bool:
+    name_and_constraint = dependency.split(";", 1)[0].strip()
+    return name_and_constraint == "uv" or name_and_constraint.startswith(
+        ("uv==", "uv>=", "uv<", "uv~=", "uv ")
+    )
 
 
 def test_runtime_tool_versions_manifest_is_packaged() -> None:
@@ -17,6 +25,18 @@ def test_runtime_tool_versions_manifest_is_packaged() -> None:
     package_data = pyproject["tool"]["setuptools"]["package-data"]["app.runtime"]
 
     assert "runtime_tool_versions.json" in package_data
+
+
+def test_backend_dev_extra_pins_uv_to_runtime_supported_version() -> None:
+    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    dev_dependencies = pyproject["project"]["optional-dependencies"]["dev"]
+    uv_dependencies = [
+        dependency
+        for dependency in dev_dependencies
+        if _is_uv_requirement(dependency)
+    ]
+
+    assert uv_dependencies == [f"uv=={SUPPORTED_UV_VERSION}"]
 
 
 # ---------------------------------------------------------------------------
@@ -170,6 +190,7 @@ def test_resolved_uv_is_executable_and_reports_version() -> None:
     result = subprocess.run([path, "--version"], capture_output=True, text=True)
     assert result.returncode == 0
     assert "uv" in result.stdout.lower()
+    assert result.stdout.split()[1] == SUPPORTED_UV_VERSION
 
 
 # ---------------------------------------------------------------------------
