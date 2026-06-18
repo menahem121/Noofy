@@ -6,8 +6,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { RuntimeStatusProvider, type RuntimeHealthState } from "../app/RuntimeStatusProvider";
 import { WorkflowTabsProvider, WorkflowTabsRouteProvider, useWorkflowTabs, type WorkflowTabRuntimeState } from "../app/WorkflowTabs";
-import { __resetWorkflowRunPageCacheForTests, splitDiagnosticLogs, WorkflowRunPage } from "./WorkflowRunPage";
+import { splitDiagnosticLogs, WorkflowRunPage } from "./WorkflowRunPage";
 import { __resetWorkflowUserStateCacheForTests } from "../../lib/useWorkflowUserState";
+import { invalidateWorkflowRunPageCache, resetWorkflowRunPageCacheForTests } from "./workflowRunPageCache";
 
 vi.mock("../three-d/threeDScene", () => ({
   createThreeDScene: vi.fn().mockResolvedValue({
@@ -956,7 +957,7 @@ describe("WorkflowRunPage", () => {
   });
 
   afterEach(() => {
-    __resetWorkflowRunPageCacheForTests();
+    resetWorkflowRunPageCacheForTests();
     __resetWorkflowUserStateCacheForTests();
     vi.useRealTimers();
     vi.unstubAllGlobals();
@@ -1380,7 +1381,7 @@ describe("WorkflowRunPage", () => {
     });
   });
 
-  it("validates requirements, starts a run, polls progress, and shows the result", async () => {
+  it("keeps the completed result across run-page remounts until its workflow cache is closed", async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
 
@@ -1446,7 +1447,7 @@ describe("WorkflowRunPage", () => {
       return Promise.reject(new Error(`Unexpected request: ${url}`));
     });
 
-    renderRunPage();
+    const initialView = renderRunPage();
 
     await waitForReadyStatus();
     const runButton = screen.getByRole("button", { name: /run workflow/i });
@@ -1458,6 +1459,21 @@ describe("WorkflowRunPage", () => {
       "src",
       "/api/jobs/job-1/outputs/view?filename=result.png&subfolder=&type=output",
     );
+
+    initialView.unmount();
+    const restoredView = renderRunPage();
+
+    expect(await screen.findByAltText("Generated workflow output")).toHaveAttribute(
+      "src",
+      "/api/jobs/job-1/outputs/view?filename=result.png&subfolder=&type=output",
+    );
+
+    restoredView.unmount();
+    invalidateWorkflowRunPageCache("text_to_image_v0");
+    renderRunPage();
+
+    await waitForReadyStatus();
+    expect(screen.queryByAltText("Generated workflow output")).not.toBeInTheDocument();
   });
 
   it("keeps live preview bytes locally until final media replaces them", async () => {

@@ -16,7 +16,7 @@ vi.mock("../home/pendingSetupBanners", () => ({
 vi.mock("../../lib/useWorkflowUserState", () => ({
   invalidateWorkflowUserStateCache: mocks.invalidateWorkflowUserStateCache,
 }));
-vi.mock("./WorkflowRunPage", () => ({
+vi.mock("./workflowRunPageCache", () => ({
   invalidateWorkflowRunPageCache: mocks.invalidateWorkflowRunPageCache,
 }));
 

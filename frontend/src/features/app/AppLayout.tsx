@@ -43,7 +43,7 @@ export interface AppTopBarProgress {
 }
 
 interface AppLayoutProps {
-  activeRoute: AppRouteId;
+  activeRoute: AppRouteId | null;
   children: ReactNode;
   onNavigate: (route: AppRouteId, options?: AppNavigateOptions) => void;
   mainClassName?: string;

@@ -86,6 +86,7 @@ const packageData = {
         title: "Main",
         controls: [
           { id: "prompt", type: "textarea", label: "Prompt", input_id: "prompt", layout: { x: 0, y: 0, w: 16, h: 6 } },
+          { id: "result", type: "display_image", label: "Result", output_id: "image", layout: { x: 16, y: 0, w: 16, h: 6 } },
         ],
       },
     ],
@@ -253,6 +254,22 @@ describe("App workflow tabs", () => {
           message: jobProgressStatus === "running" ? "Generating..." : null,
         }));
       }
+      if (url.endsWith("/api/jobs/job-1/result")) {
+        activeRunCount = 0;
+        return Promise.resolve(jsonResponse({
+          job_id: "job-1",
+          status: "completed",
+          outputs: [{
+            node_id: "9",
+            output: {
+              images: [{
+                view_url: "/api/jobs/job-1/outputs/view?filename=result.png&subfolder=&type=output",
+              }],
+            },
+          }],
+          error: null,
+        }));
+      }
       if (url.endsWith("/api/jobs/job-1/cancel") && method === "POST") {
         return Promise.resolve(jsonResponse({ job_id: "job-1", status: "canceled", value: null, max: null, current_node: null, message: "Canceled." }));
       }
@@ -389,6 +406,16 @@ describe("App workflow tabs", () => {
     const tab = await screen.findByRole("button", { name: "Text to Image" });
     expect(tab).toHaveAttribute("aria-current", "page");
     expect(screen.getAllByRole("button", { name: "Close Text to Image workspace tab" })).toHaveLength(1);
+    expect(await screen.findByRole("button", { name: "Run workflow" })).toBeInTheDocument();
+    expect(document.querySelector(".sidebar-nav__item--active")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Models" }));
+    expect(await screen.findByRole("heading", { name: "Models" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Models" })).toHaveClass("sidebar-nav__item--active");
+
+    fireEvent.click(screen.getByRole("button", { name: "Text to Image" }));
+    expect(await screen.findByRole("button", { name: "Run workflow" })).toBeInTheDocument();
+    expect(document.querySelector(".sidebar-nav__item--active")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Go to home" }));
     const recentSection = await screen.findByRole("region", { name: "Recently Opened" });
@@ -420,6 +447,42 @@ describe("App workflow tabs", () => {
 
     expect(await screen.findByRole("button", { name: "Run workflow" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: /Dashboard Builder/i })).not.toBeInTheDocument();
+  });
+
+  it("preserves the last output while its workflow tab is open and clears it when the tab closes", async () => {
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Open Text to Image" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Run workflow" }));
+    expect(await screen.findByRole("progressbar", { name: "Workflow progress" })).toBeInTheDocument();
+    jobProgressStatus = "completed";
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/api/jobs/job-1/result"))).toBe(true);
+    }, { timeout: 3_000 });
+    expect(await screen.findByAltText("Generated workflow output")).toHaveAttribute(
+      "src",
+      "/api/jobs/job-1/outputs/view?filename=result.png&subfolder=&type=output",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Models" }));
+    expect(await screen.findByRole("heading", { name: "Models" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Text to Image" }));
+    expect(await screen.findByAltText("Generated workflow output")).toHaveAttribute(
+      "src",
+      "/api/jobs/job-1/outputs/view?filename=result.png&subfolder=&type=output",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Models" }));
+    expect(await screen.findByRole("heading", { name: "Models" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Close Text to Image workspace tab" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Close Text to Image workspace tab" })).not.toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Go to home" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Open Text to Image" }));
+    expect(await screen.findByRole("button", { name: "Run workflow" })).toBeInTheDocument();
+    expect(screen.queryByAltText("Generated workflow output")).not.toBeInTheDocument();
   });
 
   it("routes workflows that need input setup to the dashboard builder instead of opening the run view", async () => {

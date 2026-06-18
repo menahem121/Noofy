@@ -140,6 +140,12 @@ import {
 import { nextSeedValue, seedModeFromValidation, type SeedMode } from "../../lib/seedControl";
 import { groupedControlIdSet, topLevelDashboardControlItems, type DashboardTopLevelControlItem } from "./dashboardTopLevelItems";
 import type { WorkflowExportReviewModel } from "../../lib/workflowExport";
+import {
+  cachedWorkflowRunPageState,
+  invalidateWorkflowRunPageCache,
+  storeWorkflowRunPageState,
+  type WorkflowRunPageCachedState,
+} from "./workflowRunPageCache";
 
 interface WorkflowRunPageProps {
   workflowId: string;
@@ -151,22 +157,7 @@ interface WorkflowRunPageProps {
   onNavigate: (route: AppRouteId) => void;
 }
 
-interface RunPageState {
-  firstLoadedWorkflowId: string | null;
-  workflowStatus: WorkflowStatusResponse | null;
-  modelSummary: RequiredModelSummary | null;
-  packageData: WorkflowPackageResponse | null;
-  apiKeySettings: ApiKeySettingsResponse | null;
-  validation: WorkflowValidationResult | null;
-  modelSummaryLoading: boolean;
-  validationLoading: boolean;
-  job: EngineJob | null;
-  progress: JobProgress | null;
-  result: JobResult | null;
-  error: string | null;
-  packageLoadError: string | null;
-  packageLoadErrorStatus: number | null;
-}
+type RunPageState = WorkflowRunPageCachedState;
 
 interface RunFailureDialogState {
   errorMessage: string;
@@ -263,8 +254,6 @@ const initialState: RunPageState = {
   packageLoadErrorStatus: null,
 };
 
-const workflowRunPageStateCache = new Map<string, RunPageState>();
-
 const terminalStatuses = new Set(["completed", "failed", "canceled"]);
 const activeWorkflowProgressStatuses = new Set(["queued", "running", "queued_pending_memory"]);
 const preparationFailureStatuses = new Set([
@@ -303,7 +292,7 @@ export function WorkflowRunPage({
   onConfigureDashboard,
   onNavigate,
 }: WorkflowRunPageProps) {
-  const [state, setState] = useState<RunPageState>(() => cachedRunPageState(workflowId));
+  const [state, setState] = useState<RunPageState>(() => cachedWorkflowRunPageState(workflowId, initialState));
   const [isSubmittingRun, setIsSubmittingRun] = useState(false);
   const [failureDialog, setFailureDialog] = useState<RunFailureDialogState | null>(null);
   const [inputErrorDialog, setInputErrorDialog] = useState<RunInputErrorDialogState | null>(null);
@@ -353,7 +342,7 @@ export function WorkflowRunPage({
 
   useEffect(() => {
     if (state.firstLoadedWorkflowId === workflowId) {
-      workflowRunPageStateCache.set(workflowId, state);
+      storeWorkflowRunPageState(workflowId, state);
     }
   }, [state, workflowId]);
 
@@ -728,7 +717,7 @@ export function WorkflowRunPage({
         packageLoadError: packageResult.error,
         packageLoadErrorStatus: packageResult.error ? packageResult.status : null,
       };
-      workflowRunPageStateCache.set(targetWorkflowId, next);
+      storeWorkflowRunPageState(targetWorkflowId, next);
       return next;
     });
 
@@ -772,7 +761,7 @@ export function WorkflowRunPage({
   useLayoutEffect(() => {
     missingWorkflowNotifiedRef.current = null;
     void runtimeStatus.refreshRuntime({ silent: true });
-    setState(cachedRunPageState(workflowId));
+    setState(cachedWorkflowRunPageState(workflowId, initialState));
     void loadRequirements();
     setRequiredModelsModalOpen(false);
     setModelDownloadJob(null);
@@ -1594,10 +1583,10 @@ export function WorkflowRunPage({
   function handleTrackedResult(run: TrackedRun, result: JobResult) {
     const nextRun = trackedRunWithStatus(run, result.status, result.error);
     upsertTrackedRun(nextRun);
-    if (result.status === "completed") {
-      setState((current) => ({ ...current, result }));
-    } else if (result.status === "failed") {
-      setState((current) => ({ ...current, result }));
+    if (result.status === "completed" || result.status === "failed") {
+      setState((current) => cacheRunPageResult(workflowId, current, result));
+    }
+    if (result.status === "failed") {
       recordTrackedFailure(
         trackedRunHandle(nextRun),
         result.job_id,
@@ -1618,9 +1607,7 @@ export function WorkflowRunPage({
   }
 
   function handleRecoveredRuntimeResult(result: JobResult) {
-    setState((current) => ({
-      ...current,
-      result,
+    setState((current) => cacheRunPageResult(workflowId, current, result, {
       progress: null,
       error: result.status === "failed" ? current.error : null,
     }));
@@ -2337,7 +2324,7 @@ export function WorkflowRunPage({
 
   if (workflowMissing) {
     return (
-      <AppLayout activeRoute="workflows" onNavigate={onNavigate}>
+      <AppLayout activeRoute={null} onNavigate={onNavigate}>
         <WorkflowMissingPanel onBack={onBack} />
       </AppLayout>
     );
@@ -2345,7 +2332,7 @@ export function WorkflowRunPage({
 
   if (dashboardSetupRequired) {
     return (
-      <AppLayout activeRoute="workflows" onNavigate={onNavigate}>
+      <AppLayout activeRoute={null} onNavigate={onNavigate}>
         <DashboardSetupRequired
           workflowName={workflowDisplayTitle}
           onBack={onBack}
@@ -2363,7 +2350,7 @@ export function WorkflowRunPage({
   if (showCanvasView) {
     return (
       <AppLayout
-        activeRoute="workflows"
+        activeRoute={null}
         onNavigate={onNavigate}
         mainClassName="main-workspace--canvas-run"
         contentClassName="workspace-content--canvas-run"
@@ -2459,7 +2446,7 @@ export function WorkflowRunPage({
 
   return (
     <AppLayout
-      activeRoute="workflows"
+      activeRoute={null}
       onNavigate={onNavigate}
       mainClassName="main-workspace--workflow-run-classic"
       contentClassName="workspace-content--workflow-run-classic"
@@ -5307,16 +5294,15 @@ function buildDashboardSchemaForEditing(
   };
 }
 
-function cachedRunPageState(workflowId: string): RunPageState {
-  return workflowRunPageStateCache.get(workflowId) ?? initialState;
-}
-
-export function __resetWorkflowRunPageCacheForTests() {
-  workflowRunPageStateCache.clear();
-}
-
-export function invalidateWorkflowRunPageCache(workflowId: string) {
-  workflowRunPageStateCache.delete(workflowId);
+function cacheRunPageResult(
+  workflowId: string,
+  current: RunPageState,
+  result: JobResult,
+  update: Partial<RunPageState> = {},
+) {
+  const next = { ...current, ...update, result };
+  storeWorkflowRunPageState(workflowId, next);
+  return next;
 }
 
 function hiddenBuilderWidgetForInput(

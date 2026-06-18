@@ -16,6 +16,7 @@ import { FirstLaunchOnboarding } from "./features/onboarding/FirstLaunchOnboardi
 import { WorkflowGlobalDropImport, WorkflowImportStatusNotice } from "./features/workflows/WorkflowGlobalImport";
 import { WorkflowImportDialogs } from "./features/workflows/WorkflowImportModals";
 import { useWorkflowImportFlow } from "./features/workflows/useWorkflowImportFlow";
+import { invalidateWorkflowRunPageCache } from "./features/workflows/workflowRunPageCache";
 import { workflowNeedsConfiguration } from "./features/workflows/workflowSearch";
 import {
   cancelQueuedRunnerStart,
@@ -283,6 +284,7 @@ function AppContent() {
   async function closeWorkflowTabNow(workflowId: string) {
     await closeWorkflowSessionLease(workflowId, workflowTabs.runtimeByWorkflowId[workflowId]);
     const nextRoute = fallbackRouteAfterClose(workflowId, workflowTabs.tabs, route);
+    invalidateWorkflowRunPageCache(workflowId);
     workflowTabs.closeWorkflowTab(workflowId);
     if (nextRoute) setRoute(nextRoute);
   }
@@ -520,18 +522,18 @@ function RouteLoadingFallback({
   );
 }
 
-function routeShellId(route: AppRoute): AppRouteId {
+function routeShellId(route: AppRoute): AppRouteId | null {
   if (route.name === "settings" || route.name === "models" || route.name === "gallery" || route.name === "history") {
     return route.name;
   }
   if (
     route.name === "workflows" ||
-    route.name === "workflow" ||
     route.name === "dashboard-builder" ||
     route.name === "dashboard-builder-layout"
   ) {
     return "workflows";
   }
+  if (route.name === "workflow") return null;
   return "home";
 }
 

@@ -1,7 +1,7 @@
 import { clearDashboardDraft } from "../dashboard-builder/dashboardBuilderContent";
 import { removePendingImportedSetupReminder } from "../home/pendingSetupBanners";
 import { invalidateWorkflowUserStateCache } from "../../lib/useWorkflowUserState";
-import { invalidateWorkflowRunPageCache } from "./WorkflowRunPage";
+import { invalidateWorkflowRunPageCache } from "./workflowRunPageCache";
 
 export function cleanupRemovedWorkflowFrontendState(
   workflowId: string,
