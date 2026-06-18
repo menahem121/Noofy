@@ -52,6 +52,19 @@ class DuplicateWorkflowIdentityError(RuntimeError):
     """Raised when a duplicate import needs an explicit user decision."""
 
 
+class ImportRequiresCustomNodeResolutionError(RuntimeError):
+    """Raised when direct import would persist an unresolved custom-node workflow."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        custom_node_resolution: dict[str, object] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.custom_node_resolution = custom_node_resolution
+
+
 @dataclass
 class _PendingWorkflowImport:
     data: bytes
@@ -159,11 +172,32 @@ def _source_resolution_details(package: WorkflowPackage) -> dict[str, object]:
     return details if isinstance(details, dict) else {}
 
 
+def _custom_node_resolution_log_details(
+    custom_node_resolution: dict[str, object] | None,
+) -> dict[str, object]:
+    if custom_node_resolution is None:
+        return {
+            "custom_node_resolution_status": None,
+            "custom_node_resolution_mode": None,
+            "custom_node_resolution_unresolved_node_types": [],
+            "custom_node_resolution_package_id": None,
+        }
+    return {
+        "custom_node_resolution_status": custom_node_resolution.get("status"),
+        "custom_node_resolution_mode": custom_node_resolution.get("mode"),
+        "custom_node_resolution_unresolved_node_types": custom_node_resolution.get(
+            "unresolved_node_types", []
+        ),
+        "custom_node_resolution_package_id": custom_node_resolution.get("package_id"),
+    }
+
+
 def _custom_node_resolution_payload(package: WorkflowPackage) -> dict[str, object] | None:
     status = package.import_metadata.status if package.import_metadata else None
     source_resolution = _source_resolution_details(package)
     if status not in {"missing_custom_nodes", "needs_comfyui_update"} and not source_resolution:
         return None
+    mode = source_resolution.get("mode")
     unresolved_node_types = [
         item for item in source_resolution.get("unresolved_node_types", [])
         if isinstance(item, str)
@@ -179,6 +213,16 @@ def _custom_node_resolution_payload(package: WorkflowPackage) -> dict[str, objec
         {"node_type": node_type, "label": node_type}
         for node_type in sorted(set(unresolved_node_types + unresolved_from_ambiguous))
     ]
+    missing_custom_node = source_resolution.get("missing_custom_node")
+    missing_package_id = source_resolution.get("package_id")
+    has_unresolved_shape = (
+        mode in {"manual_url", "candidate_approval"}
+        or status in {"missing_custom_nodes", "needs_comfyui_update"}
+        or bool(unresolved_node_types)
+        or bool(ambiguous_node_types)
+        or isinstance(missing_custom_node, dict)
+        or isinstance(missing_package_id, str)
+    )
     candidate = source_resolution.get("candidate")
     public_candidate = None
     if isinstance(candidate, dict):
@@ -190,11 +234,11 @@ def _custom_node_resolution_payload(package: WorkflowPackage) -> dict[str, objec
     public_developer_details = dict(source_resolution)
     if public_candidate is not None:
         public_developer_details["candidate"] = public_candidate
-    if not fields and status not in {"missing_custom_nodes", "needs_comfyui_update"}:
+    if not fields and not has_unresolved_shape:
         return None
     return {
         "status": status or source_resolution.get("status", "missing_custom_nodes"),
-        "mode": source_resolution.get("mode") or (
+        "mode": mode or (
             "manual_url" if status == "missing_custom_nodes" else None
         ),
         "user_facing_message": (
@@ -202,8 +246,8 @@ def _custom_node_resolution_payload(package: WorkflowPackage) -> dict[str, objec
             if package.import_metadata is not None
             else "Noofy could not find the required custom nodes for this workflow."
         ),
-        "missing_custom_node": source_resolution.get("missing_custom_node"),
-        "package_id": source_resolution.get("package_id"),
+        "missing_custom_node": missing_custom_node,
+        "package_id": missing_package_id,
         "unresolved_node_types": unresolved_node_types,
         "ambiguous_node_types": ambiguous_node_types,
         "automatic_resolution_failures": source_resolution.get(
@@ -221,10 +265,17 @@ def _custom_node_resolution_payload(package: WorkflowPackage) -> dict[str, objec
 
 def _import_needs_custom_node_resolution(package: WorkflowPackage) -> bool:
     payload = _custom_node_resolution_payload(package)
-    return payload is not None and payload.get("status") in {
-        "missing_custom_nodes",
-        "needs_comfyui_update",
-    }
+    if payload is None:
+        return False
+    if payload.get("mode") in {"manual_url", "candidate_approval"}:
+        return True
+    if payload.get("status") in {"missing_custom_nodes", "needs_comfyui_update"}:
+        return True
+    if payload.get("candidate") is not None:
+        return True
+    if payload.get("package_id") or payload.get("missing_custom_node"):
+        return True
+    return bool(payload.get("unresolved_node_types") or payload.get("ambiguous_node_types"))
 
 
 class WorkflowImportOrchestrator:
@@ -261,9 +312,38 @@ class WorkflowImportOrchestrator:
         allow_unverified_community_preparation: bool = False,
         duplicate_action: str | None = None,
     ) -> dict[str, object]:
+        preview_package = self.imported_package_store.preview_archive(
+            data,
+            original_filename=original_filename,
+            allow_unverified_community_preparation=allow_unverified_community_preparation,
+        )
+        custom_node_resolution = _custom_node_resolution_payload(preview_package)
+        self.log_store.add(
+            "info",
+            "Direct workflow import reviewed",
+            "workflow.import",
+            workflow_id=preview_package.metadata.id,
+            details={
+                "import_endpoint": "direct",
+                "package_dir_written": False,
+                "import_metadata_status": (
+                    preview_package.import_metadata.status
+                    if preview_package.import_metadata is not None
+                    else None
+                ),
+                **_custom_node_resolution_log_details(custom_node_resolution),
+                **_raw_comfyui_import_details(preview_package),
+            },
+        )
+        if _import_needs_custom_node_resolution(preview_package):
+            raise ImportRequiresCustomNodeResolutionError(
+                "This workflow needs custom-node resolution before it can be imported. Use staged import preview.",
+                custom_node_resolution=custom_node_resolution,
+            )
         try:
-            package = self.imported_package_store.import_archive(
+            package = self.imported_package_store.import_prepared_archive(
                 data,
+                package=preview_package,
                 original_filename=original_filename,
                 allow_unverified_community_preparation=allow_unverified_community_preparation,
                 duplicate_action=duplicate_action,
@@ -272,6 +352,25 @@ class WorkflowImportOrchestrator:
             if self.history_service is not None:
                 self.history_service.record_import_failed(filename=original_filename, error=str(exc))
             raise
+        self.log_store.add(
+            "info",
+            "Direct workflow import persisted",
+            "workflow.import",
+            workflow_id=package.metadata.id,
+            details={
+                "import_endpoint": "direct",
+                "package_dir_written": True,
+                "import_metadata_status": (
+                    package.import_metadata.status
+                    if package.import_metadata is not None
+                    else None
+                ),
+                **_custom_node_resolution_log_details(
+                    _custom_node_resolution_payload(package)
+                ),
+                **_raw_comfyui_import_details(package),
+            },
+        )
         return self._imported_package_response(package, duplicate_action=duplicate_action)
 
     def _imported_package_response(
@@ -383,11 +482,31 @@ class WorkflowImportOrchestrator:
         )
         required_model_count = len(group_required_models(package.required_models))
         duplicate_identity = self._duplicate_identity_payload(package)
+        custom_node_resolution = _custom_node_resolution_payload(package)
         if (
             not package.required_models
             and duplicate_identity is None
             and not _import_needs_custom_node_resolution(package)
         ):
+            self.log_store.add(
+                "info",
+                "Workflow import preview auto-committing",
+                "workflow.import",
+                workflow_id=package.metadata.id,
+                details={
+                    "import_endpoint": "preview",
+                    "package_dir_written": False,
+                    "import_metadata_status": (
+                        package.import_metadata.status
+                        if package.import_metadata is not None
+                        else None
+                    ),
+                    "required_model_count": required_model_count,
+                    "duplicate_identity": False,
+                    **_custom_node_resolution_log_details(custom_node_resolution),
+                    **_raw_comfyui_import_details(package),
+                },
+            )
             committed = self.import_workflow_archive(
                 data,
                 original_filename=original_filename,
@@ -423,9 +542,19 @@ class WorkflowImportOrchestrator:
             "workflow.import",
             workflow_id=package.metadata.id,
             details={
+                "import_endpoint": "preview",
                 "import_session_id": session_id,
+                "package_dir_written": False,
+                "import_metadata_status": (
+                    package.import_metadata.status
+                    if package.import_metadata is not None
+                    else None
+                ),
                 "required_model_count": required_model_count,
                 "duplicate_identity": duplicate_identity is not None,
+                **_custom_node_resolution_log_details(
+                    custom_node_resolution
+                ),
                 **_raw_comfyui_import_details(package),
             },
         )
@@ -440,7 +569,7 @@ class WorkflowImportOrchestrator:
             unresolved_input_count=len(package.unresolved_runtime_inputs),
             model_summary=model_summary,
             duplicate_identity=duplicate_identity,
-            custom_node_resolution=_custom_node_resolution_payload(package),
+            custom_node_resolution=custom_node_resolution,
         )
 
     def resolve_import_custom_nodes_from_urls(

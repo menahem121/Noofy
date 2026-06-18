@@ -3,6 +3,7 @@ import { AlertCircle, CheckCircle2, Loader2, UploadCloud, X } from "lucide-react
 
 import { workflowDisplayName } from "../../lib/workflowNames";
 import {
+  importNeedsCustomNodeResolution,
   isSupportedWorkflowImportFile,
   type WorkflowImportFlowController,
   unsupportedWorkflowImportMessage,
@@ -137,6 +138,25 @@ export function WorkflowImportStatusNotice({
   }
 
   if (state.importResult) {
+    if (importNeedsCustomNodeResolution(state.importResult)) {
+      return (
+        <div className="workflow-import-status workflow-import-status--error" role="status" aria-live="polite">
+          <AlertCircle size={18} aria-hidden="true" />
+          <div>
+            <strong>Workflow import needs custom-node resolution</strong>
+            <span>Noofy did not add this workflow. Re-import it to choose the missing workflow extension.</span>
+          </div>
+          <button
+            className="icon-button"
+            type="button"
+            aria-label="Dismiss workflow import message"
+            onClick={importFlow.dismissImportResult}
+          >
+            <X size={16} aria-hidden="true" />
+          </button>
+        </div>
+      );
+    }
     const workflowName = workflowDisplayName(state.importResult.workflow);
     const needsConfiguration = importNeedsConfiguration(state.importResult);
     return (

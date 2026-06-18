@@ -492,6 +492,52 @@ describe("App workflow tabs", () => {
     expect(await screen.findByText("Home Drop was added to your local workflows.")).toBeInTheDocument();
   });
 
+  it("keeps unresolved custom-node imports staged instead of showing an added notice", async () => {
+    const workflow = importedWorkflow("txt2audio_moss_tts", "txt2audio_MOSS-TTS");
+    importPreviewResponses.set(
+      "txt2audio_MOSS-TTS.noofy",
+      importResponse(workflow, {
+        import_session_id: "custom-node-session",
+        status: "unsupported",
+        user_facing_message: "Noofy could not automatically find this workflow extension.",
+        custom_node_count: 1,
+        custom_node_resolution: {
+          status: "failed",
+          mode: "manual_url",
+          user_facing_message: "Noofy could not automatically find this workflow extension.",
+          missing_custom_node: {
+            package_id: "comfyui-moss-tts",
+            node_types: ["MossTTSGenerate", "MossTTSModelLoader"],
+          },
+          package_id: "comfyui-moss-tts",
+          unresolved_node_types: ["MossTTSGenerate", "MossTTSModelLoader"],
+          ambiguous_node_types: [],
+          automatic_resolution_failures: ["No reliable candidate found."],
+          failed_custom_nodes: [],
+          candidate: null,
+          github_url_fields: [
+            { node_type: "MossTTSGenerate", label: "MossTTSGenerate" },
+            { node_type: "MossTTSModelLoader", label: "MossTTSModelLoader" },
+          ],
+          can_provide_github_urls: true,
+          can_mark_no_custom_nodes: false,
+          update_guidance: null,
+          developer_details: {},
+        },
+      }),
+    );
+
+    render(<App />);
+
+    expect(await screen.findByText("Built-in Workflows")).toBeInTheDocument();
+    dropFiles([new File(["archive"], "txt2audio_MOSS-TTS.noofy", { type: "application/octet-stream" })]);
+
+    await waitFor(() => expect(importPreviewWasRequested("txt2audio_MOSS-TTS.noofy")).toBe(true));
+    expect(await screen.findByRole("heading", { name: "comfyui-moss-tts" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Use GitHub URL" })).toBeInTheDocument();
+    expect(screen.queryByText("txt2audio_MOSS-TTS was added to your local workflows.")).not.toBeInTheDocument();
+  });
+
   it("advertises .noofy and raw .json support in the global drop overlay", async () => {
     render(<App />);
 

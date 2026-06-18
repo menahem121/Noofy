@@ -26,7 +26,7 @@ import { workflowDisplayName } from "../../lib/workflowNames";
 import { ModelReferenceDetails } from "./ModelReferenceDetails";
 import { ModelVerificationProgressPanel } from "./ModelVerificationProgressPanel";
 import { requiredModelTypeLabel } from "./requiredModelLabels";
-import type { WorkflowImportFlowController } from "./useWorkflowImportFlow";
+import { importNeedsCustomNodeResolution, type WorkflowImportFlowController } from "./useWorkflowImportFlow";
 import { importNeedsConfiguration } from "./workflowImportUtils";
 
 export function WorkflowImportDialogs({
@@ -38,8 +38,7 @@ export function WorkflowImportDialogs({
 }) {
   const { state } = importFlow;
   const needsCustomNodeResolution = Boolean(
-    state.pendingImport?.custom_node_resolution &&
-    ["missing_custom_nodes", "needs_comfyui_update"].includes(state.pendingImport.custom_node_resolution.status),
+    state.pendingImport && importNeedsCustomNodeResolution(state.pendingImport),
   );
   return (
     <>

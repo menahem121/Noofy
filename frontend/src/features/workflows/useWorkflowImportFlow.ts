@@ -93,10 +93,17 @@ function rememberImportedSetup(importResult: WorkflowImportResponse) {
   );
 }
 
-function importNeedsCustomNodeResolution(importResult: WorkflowImportResponse) {
+export function importNeedsCustomNodeResolution(importResult: WorkflowImportResponse) {
+  const resolution = importResult.custom_node_resolution;
+  if (!resolution) return false;
+  if (resolution.mode === "manual_url" || resolution.mode === "candidate_approval") return true;
+  if (["missing_custom_nodes", "needs_comfyui_update"].includes(resolution.status)) return true;
+  if (resolution.candidate) return true;
+  if (resolution.package_id || resolution.missing_custom_node) return true;
   return Boolean(
-    importResult.custom_node_resolution &&
-    ["missing_custom_nodes", "needs_comfyui_update"].includes(importResult.custom_node_resolution.status),
+    (resolution.unresolved_node_types?.length ?? 0) > 0 ||
+    (resolution.ambiguous_node_types?.length ?? 0) > 0 ||
+    (resolution.github_url_fields?.length ?? 0) > 0,
   );
 }
 

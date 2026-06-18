@@ -14,12 +14,16 @@ from app.main import create_app
 from app.runtime.runners.supervisor import RunnerSupervisor
 from app.source_policy import SourcePolicy
 from app.workflows import model_availability as availability_module
-from app.workflows.import_orchestrator import WorkflowImportOrchestrator
+from app.workflows.import_orchestrator import (
+    ImportRequiresCustomNodeResolutionError,
+    WorkflowImportOrchestrator,
+)
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.model_availability import ModelAvailabilityService
 from app.workflows.package import (
     RequiredModel,
     WorkflowCustomNodeRecord,
+    WorkflowImportMetadata,
     WorkflowMetadata,
     WorkflowPackage,
 )
@@ -419,6 +423,91 @@ def _staged_import_engine_service(tmp_path) -> EngineService:
     )
 
 
+def _unresolved_custom_node_package() -> WorkflowPackage:
+    return WorkflowPackage(
+        metadata=WorkflowMetadata(
+            id="local__txt2audio_moss_tts__0.1.0",
+            name="txt2audio_MOSS-TTS",
+            version="0.1.0",
+        ),
+        engine="comfyui",
+        comfyui_graph={"1": {"class_type": "MossTTSModelLoader", "inputs": {}}},
+        custom_nodes=[
+            WorkflowCustomNodeRecord(
+                id="comfyui-moss-tts",
+                folder_name="comfyui-moss-tts",
+                source="registry_metadata:comfyui-moss-tts",
+                included=False,
+                node_types=["MossTTSModelLoader", "MossTTSGenerate"],
+            )
+        ],
+        import_metadata=WorkflowImportMetadata(
+            status="missing_custom_nodes",
+            user_facing_message="Noofy could not automatically find this workflow extension.",
+            developer_details={
+                "source_resolution": {
+                    "status": "failed",
+                    "mode": "manual_url",
+                    "reason": "github_search_no_candidate",
+                    "package_id": "comfyui-moss-tts",
+                    "missing_custom_node": {
+                        "package_id": "comfyui-moss-tts",
+                        "node_types": ["MossTTSModelLoader", "MossTTSGenerate"],
+                    },
+                    "unresolved_node_types": [
+                        "MossTTSGenerate",
+                        "MossTTSModelLoader",
+                    ],
+                    "ambiguous_node_types": [],
+                    "automatic_resolution_failures": [
+                        "Noofy searched package names and node types but did not find a reliable candidate."
+                    ],
+                }
+            },
+        ),
+    )
+
+
+def _resolved_custom_node_package() -> WorkflowPackage:
+    return WorkflowPackage(
+        metadata=WorkflowMetadata(
+            id="local__resolved_custom_node__0.1.0",
+            name="Resolved custom node",
+            version="0.1.0",
+        ),
+        engine="comfyui",
+        comfyui_graph={"1": {"class_type": "MagicSampler", "inputs": {}}},
+        custom_nodes=[
+            WorkflowCustomNodeRecord(
+                id="magic-pack",
+                folder_name="magic-pack",
+                source="https://example.test/magic-pack/archive/pinned.zip",
+                included=True,
+                node_types=["MagicSampler"],
+                source_ref="7b3f5d0a9d508b641f85a7db4fbb7f1c2d3e4f50",
+                source_content_hash="sha256:" + ("1" * 64),
+                source_cache_ref="cache/source",
+            )
+        ],
+        import_metadata=WorkflowImportMetadata(
+            status="imported",
+            user_facing_message="Imported",
+            developer_details={
+                "source_resolution": {
+                    "status": "resolved",
+                    "resolved_custom_nodes": [
+                        {
+                            "package_id": "magic-pack",
+                            "resolution_method": "user_github_url",
+                            "source_ref": "7b3f5d0a9d508b641f85a7db4fbb7f1c2d3e4f50",
+                        }
+                    ],
+                }
+            },
+        ),
+    )
+
+
 def test_import_workflow_endpoint_passes_archive_bytes_to_service(monkeypatch) -> None:
     monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
     fake_service = FakeImportService()
@@ -451,6 +540,123 @@ def test_import_workflow_endpoint_passes_community_preparation_opt_in(monkeypatc
 
     assert response.status_code == 200
     assert fake_service.allow_unverified_community_preparation is True
+
+
+def test_preview_workflow_import_keeps_unresolved_custom_nodes_pending(tmp_path) -> None:
+    package_store = FakePackageStore(_unresolved_custom_node_package())
+    service = EngineService(
+        workflow_loader=WorkflowPackageLoader(tmp_path / "packages"),
+        workflow_validator=WorkflowPackageValidator(),
+        runner_supervisor=RunnerSupervisor(),
+        runtime_manager=StubRuntimeManager(),
+        log_store=LogStore(),
+        imported_package_store=package_store,
+        model_availability_service=FakeAvailabilityService(),
+    )
+
+    preview = service.preview_workflow_import(
+        b"archive",
+        original_filename="txt2audio_MOSS-TTS.noofy",
+        allow_unverified_community_preparation=True,
+    )
+
+    assert preview.import_session_id is not None
+    assert preview.custom_node_resolution is not None
+    assert preview.custom_node_resolution["mode"] == "manual_url"
+    assert preview.custom_node_resolution["package_id"] == "comfyui-moss-tts"
+    assert preview.custom_node_resolution["unresolved_node_types"] == [
+        "MossTTSGenerate",
+        "MossTTSModelLoader",
+    ]
+    assert package_store.preview_count == 1
+    assert package_store.import_count == 0
+    assert package_store.prepared_import_count == 0
+
+
+def test_direct_workflow_import_rejects_unresolved_custom_nodes_without_persisting(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
+    package_store = FakePackageStore(_unresolved_custom_node_package())
+    service = EngineService(
+        workflow_loader=WorkflowPackageLoader(tmp_path / "packages"),
+        workflow_validator=WorkflowPackageValidator(),
+        runner_supervisor=RunnerSupervisor(),
+        runtime_manager=StubRuntimeManager(),
+        log_store=LogStore(),
+        imported_package_store=package_store,
+        model_availability_service=FakeAvailabilityService(),
+    )
+
+    with TestClient(create_app(engine_service=service)) as client:
+        response = client.post(
+            "/api/workflows/import?filename=txt2audio_MOSS-TTS.noofy&allow_unverified_community_preparation=true",
+            content=b"archive",
+            headers={"Content-Type": "application/octet-stream"},
+        )
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert "custom-node resolution" in detail["message"]
+    assert detail["custom_node_resolution"]["mode"] == "manual_url"
+    assert detail["custom_node_resolution"]["package_id"] == "comfyui-moss-tts"
+    assert package_store.preview_count == 1
+    assert package_store.import_count == 0
+    assert package_store.prepared_import_count == 0
+
+
+def test_direct_import_orchestrator_rejects_unresolved_custom_nodes_without_persisting(
+    tmp_path,
+) -> None:
+    package_store = FakePackageStore(_unresolved_custom_node_package())
+    service = EngineService(
+        workflow_loader=WorkflowPackageLoader(tmp_path / "packages"),
+        workflow_validator=WorkflowPackageValidator(),
+        runner_supervisor=RunnerSupervisor(),
+        runtime_manager=StubRuntimeManager(),
+        log_store=LogStore(),
+        imported_package_store=package_store,
+        model_availability_service=FakeAvailabilityService(),
+    )
+
+    with pytest.raises(ImportRequiresCustomNodeResolutionError) as error:
+        service.import_workflow_archive(
+            b"archive",
+            original_filename="txt2audio_MOSS-TTS.noofy",
+            allow_unverified_community_preparation=True,
+        )
+
+    assert error.value.custom_node_resolution is not None
+    assert error.value.custom_node_resolution["mode"] == "manual_url"
+    assert package_store.preview_count == 1
+    assert package_store.import_count == 0
+    assert package_store.prepared_import_count == 0
+
+
+def test_resolved_custom_node_resolution_does_not_keep_import_pending(tmp_path) -> None:
+    package_store = FakePackageStore(_resolved_custom_node_package())
+    service = EngineService(
+        workflow_loader=WorkflowPackageLoader(tmp_path / "packages"),
+        workflow_validator=WorkflowPackageValidator(),
+        runner_supervisor=RunnerSupervisor(),
+        runtime_manager=StubRuntimeManager(),
+        log_store=LogStore(),
+        imported_package_store=package_store,
+        model_availability_service=FakeAvailabilityService(),
+    )
+
+    preview = service.preview_workflow_import(
+        b"archive",
+        original_filename="resolved-custom-node.noofy",
+        allow_unverified_community_preparation=True,
+    )
+
+    assert preview.import_session_id is None
+    assert preview.custom_node_resolution is None
+    assert package_store.preview_count == 2
+    assert package_store.import_count == 0
+    assert package_store.prepared_import_count == 1
 
 
 def test_import_custom_node_url_resolution_endpoint(monkeypatch) -> None:
