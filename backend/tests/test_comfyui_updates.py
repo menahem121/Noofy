@@ -587,6 +587,20 @@ async def test_default_smoke_test_prepares_isolated_runtime_directories(
     source.mkdir()
     (source / "main.py").write_text("", encoding="utf-8")
     (source / "requirements.txt").write_text("aiohttp\n", encoding="utf-8")
+    (source / "custom_nodes").mkdir()
+    (source / "custom_nodes" / "example_node.py.example").write_text(
+        "# upstream example\n", encoding="utf-8"
+    )
+    (source / "input").mkdir()
+    (source / "input" / "example.png").write_bytes(b"example")
+    (source / "models" / "checkpoints").mkdir(parents=True)
+    (source / "models" / "checkpoints" / "put_checkpoints_here").write_text(
+        "", encoding="utf-8"
+    )
+    (source / "output").mkdir()
+    (source / "output" / "_output_images_will_be_put_here").write_text(
+        "", encoding="utf-8"
+    )
     env = tmp_path / "env"
     python = env / "bin" / "python"
     python.parent.mkdir(parents=True)
@@ -665,16 +679,29 @@ async def test_default_smoke_test_prepares_isolated_runtime_directories(
         log_store=LogStore(),
     )
 
+    record = LocalComfyUIVersionRecord(
+        tag="v-test",
+        locally_verified=True,
+        archive_url="https://example.test/v-test.zip",
+    )
+    record = record.model_copy(update={"source_hash": service._source_hash(source, record)})
+
     await service._default_smoke_test(
         source,
         env,
-        LocalComfyUIVersionRecord(tag="v-test", locally_verified=True),
+        record,
     )
 
     assert prepared_dirs == [{"custom_nodes", "input", "outputs", "user"}]
     assert smoke_repo_dirs == [{"custom_nodes", "input", "models", "output"}]
-    for name in ("custom_nodes", "input", "models", "output"):
-        assert not (source / name).exists()
+    for path in (
+        source / "custom_nodes" / "example_node.py.example",
+        source / "input" / "example.png",
+        source / "models" / "checkpoints" / "put_checkpoints_here",
+        source / "output" / "_output_images_will_be_put_here",
+    ):
+        assert path.exists()
+    assert service._source_hash(source, record) == record.source_hash
 
 
 @pytest.mark.anyio

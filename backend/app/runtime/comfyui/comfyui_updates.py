@@ -1391,7 +1391,12 @@ class ComfyUIUpdateService:
                 raise RuntimeError(f"Smoke ComfyUI did not start: {started.status}")
             await _smoke_required_routes(manager.base_url)
             await _smoke_prompt_and_websocket(manager.base_url, manager.ws_url)
-            _assert_no_runtime_dirs_in_source(source_dir)
+            if record.source_hash and not self._source_matches_record(
+                source_dir, record
+            ):
+                raise RuntimeError(
+                    "ComfyUI source changed during update validation."
+                )
         finally:
             await manager.stop()
             shutil.rmtree(smoke_root, ignore_errors=True)
