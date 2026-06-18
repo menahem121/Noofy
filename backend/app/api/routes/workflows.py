@@ -240,6 +240,14 @@ async def preview_workflow_import(
             original_filename=filename,
             allow_unverified_community_preparation=allow_unverified_community_preparation,
         )
+    except ImportRequiresCustomNodeResolutionError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": str(exc),
+                "custom_node_resolution": exc.custom_node_resolution,
+            },
+        ) from exc
     except NoofyImportError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

@@ -654,9 +654,19 @@ def test_resolved_custom_node_resolution_does_not_keep_import_pending(tmp_path) 
 
     assert preview.import_session_id is None
     assert preview.custom_node_resolution is None
-    assert package_store.preview_count == 2
+    assert package_store.preview_count == 1
     assert package_store.import_count == 0
     assert package_store.prepared_import_count == 1
+    assert package_store.prepared_package is package_store.package
+    assert package_store.prepared_package.custom_nodes[0].source_cache_ref == "cache/source"
+    assert (
+        package_store.prepared_package.custom_nodes[0].source_ref
+        == "7b3f5d0a9d508b641f85a7db4fbb7f1c2d3e4f50"
+    )
+    assert (
+        package_store.prepared_package.custom_nodes[0].source_content_hash
+        == "sha256:" + ("1" * 64)
+    )
 
 
 def test_import_custom_node_url_resolution_endpoint(monkeypatch) -> None:
@@ -731,6 +741,36 @@ def test_preview_workflow_import_endpoint_returns_staged_model_summary(monkeypat
     assert payload["model_summary"]["models"][0]["status"] == "missing"
     assert fake_service.previewed_payload == b"archive-bytes"
     assert fake_service.previewed_filename == "model.noofy"
+
+
+def test_preview_workflow_import_endpoint_maps_custom_node_resolution_guard_to_conflict(monkeypatch) -> None:
+    monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
+    fake_service = FakeImportService()
+
+    def raise_custom_node_resolution(*args, **kwargs):
+        raise ImportRequiresCustomNodeResolutionError(
+            "This workflow needs custom-node resolution before it can be imported. Use staged import preview.",
+            custom_node_resolution={
+                "mode": "manual_url",
+                "package_id": "comfyui-moss-tts",
+                "unresolved_node_types": ["MossTTSGenerate"],
+            },
+        )
+
+    fake_service.preview_workflow_import = raise_custom_node_resolution
+
+    with TestClient(create_app(engine_service=fake_service)) as client:
+        response = client.post(
+            "/api/workflows/import/preview?filename=txt2audio_MOSS-TTS.noofy",
+            content=b"archive-bytes",
+            headers={"Content-Type": "application/octet-stream"},
+        )
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert "custom-node resolution" in detail["message"]
+    assert detail["custom_node_resolution"]["mode"] == "manual_url"
+    assert detail["custom_node_resolution"]["package_id"] == "comfyui-moss-tts"
 
 
 def test_preview_workflow_import_verifies_exact_local_model_before_prompting(tmp_path) -> None:

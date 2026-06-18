@@ -507,10 +507,13 @@ class WorkflowImportOrchestrator:
                     **_raw_comfyui_import_details(package),
                 },
             )
-            committed = self.import_workflow_archive(
+            committed = self._persist_prepared_workflow_import(
                 data,
+                package=package,
                 original_filename=original_filename,
                 allow_unverified_community_preparation=allow_unverified_community_preparation,
+                duplicate_action=None,
+                import_endpoint="preview",
             )
             return StagedWorkflowImportResponse(
                 import_session_id=None,
@@ -754,24 +757,17 @@ class WorkflowImportOrchestrator:
             verify_hashes=True,
         )
         try:
-            imported_package = self.imported_package_store.import_prepared_archive(
+            committed = self._persist_prepared_workflow_import(
                 pending.data,
                 package=pending.package,
                 original_filename=pending.original_filename,
                 allow_unverified_community_preparation=pending.allow_unverified_community_preparation,
                 duplicate_action=duplicate_action,
+                import_endpoint="staged",
             )
-        except Exception as exc:
-            if self.history_service is not None:
-                self.history_service.record_import_failed(
-                    filename=pending.original_filename,
-                    error=str(exc),
-                )
+        except Exception:
+            self._pending_workflow_imports[import_session_id] = pending
             raise
-        committed = self._imported_package_response(
-            imported_package,
-            duplicate_action=duplicate_action,
-        )
         finished_at = datetime.now(UTC)
         self.log_store.add(
             "info",
@@ -790,6 +786,58 @@ class WorkflowImportOrchestrator:
             model_summary=model_summary,
             **committed,
         )
+
+    def _persist_prepared_workflow_import(
+        self,
+        data: bytes,
+        *,
+        package: WorkflowPackage,
+        original_filename: str | None,
+        allow_unverified_community_preparation: bool,
+        duplicate_action: str | None,
+        import_endpoint: str,
+    ) -> dict[str, object]:
+        try:
+            imported_package = self.imported_package_store.import_prepared_archive(
+                data,
+                package=package,
+                original_filename=original_filename,
+                allow_unverified_community_preparation=allow_unverified_community_preparation,
+                duplicate_action=duplicate_action,
+            )
+        except Exception as exc:
+            if self.history_service is not None:
+                self.history_service.record_import_failed(
+                    filename=original_filename,
+                    error=str(exc),
+                )
+            raise
+        committed = self._imported_package_response(
+            imported_package,
+            duplicate_action=duplicate_action,
+        )
+        self.log_store.add(
+            "info",
+            "Prepared workflow import persisted",
+            "workflow.import",
+            workflow_id=imported_package.metadata.id,
+            details={
+                "import_endpoint": import_endpoint,
+                "package_dir_written": True,
+                "reused_preview_package": True,
+                "duplicate_action": duplicate_action,
+                "import_metadata_status": (
+                    imported_package.import_metadata.status
+                    if imported_package.import_metadata is not None
+                    else None
+                ),
+                **_custom_node_resolution_log_details(
+                    _custom_node_resolution_payload(imported_package)
+                ),
+                **_raw_comfyui_import_details(imported_package),
+            },
+        )
+        return committed
 
     def cancel_workflow_import(self, import_session_id: str) -> dict[str, object]:
         try:
