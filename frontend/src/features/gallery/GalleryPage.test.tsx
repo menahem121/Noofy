@@ -21,7 +21,7 @@ function jsonResponse(data: unknown, status = 200) {
 }
 
 const items = [
-  { id: "image-1", kind: "image", type: "image", content_url: "/api/gallery/image-1/content", thumbnail_url: "/api/gallery/image-1/thumbnail", file_state: "available", workflow_id: "wf", workflow_title: "Portrait Maker", job_id: "job", control_id: "image", output_id: "i", widget_title: "Portrait", filename: "portrait.png", mime_type: "image/png", extension: ".png", size_bytes: 100, created_at: "2026-05-05T12:00:00Z", width: 1024, height: 1024, favorite: true, generation_settings: { settings: { Prompt: "studio portrait" } } },
+  { id: "image-1", kind: "image", type: "image", content_url: "/api/gallery/image-1/content", thumbnail_url: "/api/gallery/image-1/thumbnail", file_state: "available", workflow_id: "wf", workflow_title: "Portrait Maker", job_id: "job", control_id: "image", output_id: "i", widget_title: "Portrait", filename: "portrait.png", mime_type: "image/png", extension: ".png", size_bytes: 100, created_at: "2026-05-05T12:00:00Z", width: 1024, height: 1024, favorite: true, generation_settings: { settings: { Prompt: "studio portrait", Style: "oil painting" }, inputs: [{ input_id: "positive", label: "Positive prompt", control_type: "textarea", value: "studio portrait" }, { input_id: "negative", label: "Negative prompt", control_type: "textarea", value: "blurry" }, { input_id: "style", label: "Style", control_type: "string_field", value: "oil painting" }] } },
   { id: "video-1", kind: "video", type: "video", content_url: "/api/gallery/video-1/content", thumbnail_url: null, file_state: "available", workflow_id: "wf", workflow_title: "Motion Maker", job_id: "job", control_id: "video", output_id: "v", widget_title: "Motion", filename: "motion.webm", mime_type: "video/webm", extension: ".webm", size_bytes: 200, duration_seconds: 12, created_at: "2026-05-04T12:00:00Z", favorite: false },
   { id: "audio-1", kind: "audio", type: "audio", content_url: "/api/gallery/audio-1/content", thumbnail_url: null, file_state: "available", workflow_id: "wf", workflow_title: "Voice Maker", job_id: "job", control_id: "audio", output_id: "a", widget_title: "Voice", filename: "voice.wav", mime_type: "audio/wav", extension: ".wav", size_bytes: 300, duration_seconds: 8, created_at: "2026-05-03T12:00:00Z", favorite: false },
   { id: "three-d-1", kind: "3d", type: "3d", content_url: "/api/gallery/three-d-1/content", thumbnail_url: null, file_state: "available", workflow_id: "wf", workflow_title: "Mesh Maker", job_id: "job", control_id: "three-d", output_id: "m", widget_title: "Mesh", filename: "mesh.glb", mime_type: "model/gltf-binary", extension: ".glb", size_bytes: null, created_at: "2026-05-02T18:00:00Z", favorite: false },
@@ -93,6 +93,27 @@ describe("GalleryPage", () => {
     expect(galleryCss).toMatch(/\.img-modal--three-d\s*\{[^}]*height:\s*min\(760px,\s*calc\(100vh - 48px\)\)/s);
     expect(galleryCss).toMatch(/\.gallery-detail-three-d\s*\{[^}]*grid-template-rows:\s*minmax\(0,\s*1fr\)\s+auto\s+auto/s);
     expect(galleryCss).toMatch(/\.gallery-detail-three-d \.three-d-viewer__stage\s*\{[^}]*min-height:\s*0/s);
+  });
+
+  it("keeps overflowing Gallery details in a viewport-bounded scroll panel", () => {
+    expect(galleryCss).toMatch(/\.img-modal__body\s*\{[^}]*min-height:\s*0;[^}]*max-height:\s*calc\(100vh - 48px\)/s);
+    expect(galleryCss).toMatch(/\.img-modal__scroll\s*\{[^}]*min-height:\s*0;[^}]*overflow-y:\s*auto;[^}]*scrollbar-gutter:\s*stable/s);
+  });
+
+  it("copies every multiline text input from image details", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { ...window.navigator, clipboard: { writeText } });
+
+    render(<GalleryPage onNavigate={onNavigate} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Open image: Portrait Maker" }));
+
+    expect(screen.getByRole("button", { name: "Copy Positive prompt" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy Negative prompt" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copy Style" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy Negative prompt" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("blurry"));
+    expect(screen.getByRole("button", { name: "Copy Negative prompt" })).toHaveAttribute("title", "Copied");
   });
 
   it("opens a safe file detail without embedding arbitrary file content", async () => {

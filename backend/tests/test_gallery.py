@@ -122,6 +122,28 @@ def test_gallery_store_migrates_legacy_images_transactionally(tmp_path: Path) ->
     assert item.filename == "old.png"
 
 
+def test_gallery_store_backfills_typed_inputs_from_run_manifests(tmp_path: Path) -> None:
+    root = tmp_path / "gallery"
+    store = GalleryStore(root)
+    result = JobResult(job_id="job", status="completed", outputs=[])
+    store.save_run_manifest(result, _snapshot("image"))
+    item = store.save_staged_output(_captured_output(store))
+
+    with sqlite3.connect(root / "gallery.db") as conn:
+        conn.execute("UPDATE schema_version SET version = 2")
+        conn.execute(
+            "UPDATE gallery_items SET generation_settings_json = ?, schema_version = 2 WHERE id = ?",
+            (json.dumps({"settings": {"Prompt": "test"}}), item.id),
+        )
+
+    migrated = GalleryStore(root).get_item(item.id)
+    assert migrated is not None
+    assert migrated.generation_settings["inputs"] == [
+        {"input_id": "prompt", "label": "Prompt", "control_type": "textarea", "value": "test"}
+    ]
+    assert migrated.schema_version == 3
+
+
 @pytest.mark.anyio
 async def test_gallery_capture_streams_enabled_mixed_media_and_reuses_saved_item(tmp_path: Path) -> None:
     store = GalleryStore(tmp_path / "gallery")
@@ -148,7 +170,12 @@ async def test_gallery_capture_streams_enabled_mixed_media_and_reuses_saved_item
     first = capture.job_status(result.job_id).outputs[0]
     assert first.status == "saved"
     assert len(first.item_ids) == 1
-    assert store.get_item(first.item_ids[0]).kind == "audio"
+    saved_item = store.get_item(first.item_ids[0])
+    assert saved_item is not None
+    assert saved_item.kind == "audio"
+    assert saved_item.generation_settings["inputs"] == [
+        {"input_id": "prompt", "label": "Prompt", "control_type": "textarea", "value": "test"}
+    ]
     capture.schedule_output_save(result.job_id, "result", result=result)
     assert calls == ["speech.wav"]
 

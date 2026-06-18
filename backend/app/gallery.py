@@ -29,7 +29,7 @@ from app.media_types import MEDIA_KINDS, MEDIA_OUTPUT_BUCKETS as MEDIA_BUCKETS, 
 from app.workflows.library import workflow_package_display_name
 from app.workflows.package import WorkflowPackage
 
-GALLERY_SCHEMA_VERSION = 2
+GALLERY_SCHEMA_VERSION = 3
 THUMBNAIL_SIZE = (512, 512)
 SaveState = Literal[
     "queued",
@@ -177,6 +177,8 @@ class GalleryStore:
             if has_items and (version < 2 or "content_rel_path" not in item_columns):
                 self._migrate_v1_to_v2(conn)
             self._create_v2_schema(conn)
+            if has_items and version < 3:
+                self._backfill_generation_inputs(conn)
             conn.execute("UPDATE schema_version SET version = ?", (GALLERY_SCHEMA_VERSION,))
             conn.execute(
                 "UPDATE gallery_save_requests SET status = 'interrupted', message = ? "
@@ -184,6 +186,28 @@ class GalleryStore:
                 ("Gallery save was interrupted. Retry if the output is still available.",),
             )
             conn.commit()
+
+    def _backfill_generation_inputs(self, conn: sqlite3.Connection) -> None:
+        rows = conn.execute(
+            """
+            SELECT gallery_items.id, gallery_items.generation_settings_json, gallery_run_manifests.snapshot_json
+            FROM gallery_items
+            JOIN gallery_run_manifests ON gallery_run_manifests.job_id = gallery_items.job_id
+            """
+        ).fetchall()
+        for row in rows:
+            settings = _loads_dict(row["generation_settings_json"])
+            if isinstance(settings.get("inputs"), list):
+                continue
+            try:
+                snapshot = RunSubmissionSnapshot.model_validate_json(row["snapshot_json"])
+            except Exception:
+                continue
+            settings["inputs"] = _generation_inputs(snapshot.inputs)
+            conn.execute(
+                "UPDATE gallery_items SET generation_settings_json = ?, schema_version = ? WHERE id = ?",
+                (json.dumps(settings, sort_keys=True), GALLERY_SCHEMA_VERSION, row["id"]),
+            )
 
     def _create_v2_schema(self, conn: sqlite3.Connection) -> None:
         conn.execute(
@@ -1038,8 +1062,13 @@ def _generation_settings(
         "widget_title": widget.widget_title, "created_at": created_at.astimezone(UTC).isoformat(),
         "dashboard_version": snapshot.dashboard_version,
         "settings": {item.label: item.value for item in snapshot.inputs},
+        "inputs": _generation_inputs(snapshot.inputs),
         "submitted_values": snapshot.values, "mime_type": mime_type,
     }
+
+
+def _generation_inputs(inputs: list[GalleryInputSnapshot]) -> list[dict[str, Any]]:
+    return [item.model_dump(mode="json") for item in inputs]
 
 
 def _inspect_image_file(path: Path, thumbnail_path: Path) -> tuple[str | None, int | None, int | None, bool]:

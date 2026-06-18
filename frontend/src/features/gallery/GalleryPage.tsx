@@ -4,9 +4,11 @@ import {
   ArrowRight,
   Box,
   Calendar,
+  Check,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Copy,
   Download,
   ExternalLink,
   FileAudio,
@@ -388,7 +390,7 @@ function MediaDetail({ item, index, total, onClose, onFavorite, onDelete, delete
           </div>
           <div className="img-modal__scroll">
             <div className="img-modal__section"><span className="img-modal__section-label">Generated with</span><p className="img-modal__prompt">{item.widgetTitle || item.workflowName}</p></div>
-            {item.prompt ? <div className="img-modal__section"><span className="img-modal__section-label">Prompt</span><p className="img-modal__prompt">{item.prompt}</p></div> : null}
+            {item.multilineTextInputs.map((input) => <PromptSection key={input.id} label={input.label} value={input.value} />)}
             <Metadata item={item} />
           </div>
           <div className="img-modal__footer">
@@ -402,6 +404,39 @@ function MediaDetail({ item, index, total, onClose, onFavorite, onDelete, delete
       </div>
     </div>
   );
+}
+
+function PromptSection({ label, value }: { label: string; value: string }) {
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (!copied) return undefined;
+    const timeoutId = window.setTimeout(() => setCopied(false), 1800);
+    return () => window.clearTimeout(timeoutId);
+  }, [copied]);
+
+  async function copyPrompt() {
+    await navigator.clipboard.writeText(value);
+    setCopied(true);
+  }
+
+  return <div className="img-modal__section">
+    <div className="img-modal__section-header">
+      <span className="img-modal__section-label">{label}</span>
+      <button
+        className="img-modal__copy-btn icon-button"
+        type="button"
+        aria-label={`Copy ${label}`}
+        title={copied ? "Copied" : `Copy ${label}`}
+        onClick={() => void copyPrompt().catch((error: unknown) => {
+          console.error("Gallery prompt copy failed", error);
+        })}
+      >
+        {copied ? <Check size={14} aria-hidden="true" /> : <Copy size={14} aria-hidden="true" />}
+      </button>
+    </div>
+    <p className="img-modal__prompt">{value}</p>
+  </div>;
 }
 
 function GalleryDeletionDialog({

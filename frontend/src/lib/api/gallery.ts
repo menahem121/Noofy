@@ -4,6 +4,12 @@ export type GalleryKind = "image" | "video" | "audio" | "3d" | "file";
 export type GalleryGenerationSettings = Record<string, unknown>;
 export type GalleryUsedSettings = Record<string, string | number | boolean>;
 
+export interface GalleryMultilineTextInput {
+  id: string;
+  label: string;
+  value: string;
+}
+
 export interface GalleryItem {
   id: string;
   kind: GalleryKind;
@@ -29,6 +35,7 @@ export interface GalleryItem {
   fps: number | null;
   favorite: boolean;
   usedSettings: GalleryUsedSettings;
+  multilineTextInputs: GalleryMultilineTextInput[];
   generationSettings: GalleryGenerationSettings;
 }
 
@@ -90,11 +97,22 @@ function normalizeGalleryItem(raw: unknown): GalleryItem {
     generationSettings.settings && typeof generationSettings.settings === "object"
       ? generationSettings.settings as GalleryUsedSettings
       : {};
-  const prompt = typeof usedSettings.Prompt === "string"
-    ? usedSettings.Prompt
-    : typeof usedSettings.prompt === "string"
-      ? usedSettings.prompt
-      : "";
+  const generationInputs = Array.isArray(generationSettings.inputs) ? generationSettings.inputs : [];
+  const multilineTextInputs = generationInputs.flatMap((rawInput, index) => {
+    if (!rawInput || typeof rawInput !== "object") return [];
+    const input = rawInput as Record<string, unknown>;
+    const controlType = input.control_type ?? input.controlType;
+    if (controlType !== "textarea" || typeof input.value !== "string" || !input.value.trim()) return [];
+    const label = typeof input.label === "string" && input.label.trim() ? input.label : "Prompt";
+    const id = typeof input.input_id === "string" && input.input_id ? input.input_id : `${label}-${index}`;
+    return [{ id, label, value: input.value }];
+  });
+  const prompt = multilineTextInputs[0]?.value
+    ?? (typeof usedSettings.Prompt === "string"
+      ? usedSettings.Prompt
+      : typeof usedSettings.prompt === "string"
+        ? usedSettings.prompt
+        : "");
   const kind = galleryKind(item.kind ?? item.type);
   return {
     id: String(item.id ?? ""),
@@ -121,6 +139,7 @@ function normalizeGalleryItem(raw: unknown): GalleryItem {
     fps: optionalNumber(item.fps),
     favorite: Boolean(item.favorite),
     usedSettings,
+    multilineTextInputs,
     generationSettings,
   };
 }
