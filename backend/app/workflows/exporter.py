@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+from app.archive_safety import PathSafetyError, safe_relative_posix_path
 from app.artifacts import ModelVerificationLevel
 from app.gallery import GalleryStore
 from app.workflows.assets import workflow_icon_asset_id
@@ -184,6 +185,7 @@ class WorkflowExporter:
                 zf.write(export_report_file, "export-report.json")
             else:
                 zf.writestr("export-report.json", json.dumps({}))
+            self._write_original_package_payload_files(zf, package_dir)
 
         filename = f"{_safe_filename(workflow_package_display_name(package, metadata))}.noofy"
         return buf.getvalue(), filename
@@ -556,6 +558,44 @@ class WorkflowExporter:
             metadata.update(raw)
         return metadata
 
+    def _write_original_package_payload_files(
+        self,
+        zf: zipfile.ZipFile,
+        package_dir: Path | None,
+    ) -> None:
+        if package_dir is None:
+            return
+        source_files_dir = package_dir / "source-files"
+        if not source_files_dir.is_dir():
+            return
+        written = set(zf.namelist())
+        for root_name in ("assets", "custom_nodes"):
+            root = source_files_dir / root_name
+            if not root.is_dir():
+                continue
+            for path in sorted(root.rglob("*"), key=lambda item: item.as_posix()):
+                if path.is_dir():
+                    continue
+                if path.is_symlink():
+                    raise WorkflowExportError(
+                        "This workflow cannot be exported because its original package "
+                        "payload contains a symlink."
+                    )
+                if not path.is_file():
+                    continue
+                try:
+                    archive_path = path.relative_to(source_files_dir).as_posix()
+                    archive_path = safe_relative_posix_path(archive_path, allow_nested=True)
+                except (PathSafetyError, ValueError) as exc:
+                    raise WorkflowExportError(
+                        "This workflow cannot be exported because its original package "
+                        "payload contains an unsafe path."
+                    ) from exc
+                if archive_path in written:
+                    continue
+                zf.write(path, archive_path)
+                written.add(archive_path)
+
     def _stored_comfyui_graph(self, package_dir: Path | None) -> dict[str, Any] | None:
         if package_dir is None:
             return None
@@ -840,7 +880,7 @@ def _build_export_capsule_lock_json(
     package: WorkflowPackage,
     package_dir: Path | None,
 ) -> dict[str, Any] | None:
-    _validate_portable_custom_node_sources(package)
+    _validate_portable_custom_node_sources(package, package_dir)
     try:
         capsule = imported_package_capsule_lock(package)
         payload = capsule.model_dump(mode="json", exclude_none=True)
@@ -944,10 +984,19 @@ def _portable_custom_node_locks(package: WorkflowPackage) -> list[dict[str, Any]
     return nodes
 
 
-def _validate_portable_custom_node_sources(package: WorkflowPackage) -> None:
+def _validate_portable_custom_node_sources(
+    package: WorkflowPackage,
+    package_dir: Path | None,
+) -> None:
     missing: list[str] = []
     for node in package.custom_nodes:
         if not node.included:
+            continue
+        if _is_bundled_custom_node_source(node.source):
+            if not _bundled_custom_node_source_exists(package_dir, node):
+                missing.append(
+                    f"{node.id} ({', '.join(node.node_types) or 'unknown node types'})"
+                )
             continue
         if (
             not node.source.startswith("https://")
@@ -963,6 +1012,52 @@ def _validate_portable_custom_node_sources(package: WorkflowPackage) -> None:
             "have portable pinned source facts: "
             + "; ".join(missing)
         )
+
+
+def _is_bundled_custom_node_source(source: str) -> bool:
+    return (
+        source == "bundled_archive"
+        or source == "bundled_from_creator_machine"
+        or source.startswith("bundled_archive:")
+    )
+
+
+def _bundled_custom_node_source_exists(
+    package_dir: Path | None,
+    node: WorkflowCustomNodeRecord,
+) -> bool:
+    if package_dir is None:
+        return False
+    custom_nodes_dir = package_dir / "source-files" / "custom_nodes"
+    if not custom_nodes_dir.is_dir():
+        return False
+    explicit_folder = _bundled_custom_node_source_folder(node.source)
+    for folder_name in (explicit_folder, node.folder_name, node.id):
+        if not folder_name:
+            continue
+        if (custom_nodes_dir / folder_name).is_dir():
+            return True
+    wanted = _normalized_custom_node_folder_name(node.folder_name or node.id)
+    for candidate in custom_nodes_dir.iterdir():
+        if (
+            candidate.is_dir()
+            and _normalized_custom_node_folder_name(candidate.name) == wanted
+        ):
+            return True
+    return False
+
+
+def _bundled_custom_node_source_folder(source: str) -> str | None:
+    if not source.startswith("bundled_archive:"):
+        return None
+    try:
+        return safe_relative_posix_path(source.split(":", 1)[1], allow_nested=False)
+    except PathSafetyError:
+        return None
+
+
+def _normalized_custom_node_folder_name(value: str) -> str:
+    return value.replace("_", "-").casefold()
 
 
 def _read_stored_package_json(path: Path | None) -> dict[str, Any]:

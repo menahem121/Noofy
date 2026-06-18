@@ -260,7 +260,12 @@ def _archive_with_extra_files(
         for item in source.infolist():
             target.writestr(item, source.read(item.filename))
         for name, value in files.items():
-            target.writestr(name, json.dumps(value))
+            if isinstance(value, bytes):
+                target.writestr(name, value)
+            elif isinstance(value, str):
+                target.writestr(name, value)
+            else:
+                target.writestr(name, json.dumps(value))
     return dst.getvalue()
 
 
@@ -315,6 +320,81 @@ def test_export_produces_valid_noofy_archive(tmp_path: Path) -> None:
         assert "package.json" in names
         assert "comfyui_graph.json" in names
         assert "dashboard.json" in names
+
+
+def test_export_preserves_original_assets_and_bundled_custom_node_sources(
+    tmp_path: Path,
+) -> None:
+    archive_bytes = _archive_with_json_updates(
+        _make_archive(with_signature=True, dashboard=_CONFIGURED_DASHBOARD),
+        {
+            "comfyui_graph.json": lambda graph: graph.update(
+                {"7": {"class_type": "ExampleBundledNode", "inputs": {}}}
+            ),
+            "capsule.lock.json": lambda capsule: capsule.update(
+                {
+                    "custom_nodes": [
+                        {
+                            "id": "example-bundled-node",
+                            "folder_name": "ExampleBundledNode",
+                            "source": "bundled_from_creator_machine",
+                            "included": True,
+                            "node_types": ["ExampleBundledNode"],
+                            "requirements_files": ["requirements.txt"],
+                            "sha256_manifest": "abc123",
+                        }
+                    ]
+                }
+            ),
+        },
+    )
+    archive_bytes = _archive_with_extra_files(
+        archive_bytes,
+        {
+            "assets/thumbnail.png": b"thumbnail-bytes",
+            "assets/input-defaults/sample.txt": b"default text",
+            "custom_nodes/ExampleBundledNode/__init__.py": "NODE_CLASS_MAPPINGS = {}\n",
+            "custom_nodes/ExampleBundledNode/requirements.txt": "",
+        },
+    )
+    exporter, workflow_id, _ = _setup_with_configured_dashboard(
+        tmp_path,
+        archive_bytes=archive_bytes,
+    )
+
+    exported, _ = exporter.export_archive(workflow_id)
+
+    with zipfile.ZipFile(io.BytesIO(exported)) as zf:
+        names = zf.namelist()
+        package_data = json.loads(zf.read("package.json"))
+        capsule_data = json.loads(zf.read("capsule.lock.json"))
+        assert zf.read("assets/thumbnail.png") == b"thumbnail-bytes"
+        assert zf.read("assets/input-defaults/sample.txt") == b"default text"
+        assert (
+            zf.read("custom_nodes/ExampleBundledNode/__init__.py")
+            == b"NODE_CLASS_MAPPINGS = {}\n"
+        )
+        assert zf.read("custom_nodes/ExampleBundledNode/requirements.txt") == b""
+
+    assert len(names) == len(set(names))
+    assert package_data["custom_nodes"][0]["source"] == "bundled_from_creator_machine"
+    assert package_data["custom_nodes"][0]["folder_name"] == "ExampleBundledNode"
+    assert capsule_data["custom_nodes"][0]["source"] == "bundled_from_creator_machine"
+    assert capsule_data["custom_nodes"][0]["node_types"] == ["ExampleBundledNode"]
+
+    clean_store = ImportedWorkflowPackageStore(tmp_path / "clean-packages", log_store=LogStore())
+    reimported = clean_store.import_archive(exported, original_filename="roundtrip.noofy")
+    reimported_dir = clean_store.package_dir(reimported)
+    assert (
+        reimported_dir
+        / "source-files"
+        / "custom_nodes"
+        / "ExampleBundledNode"
+        / "__init__.py"
+    ).read_text(encoding="utf-8") == "NODE_CLASS_MAPPINGS = {}\n"
+    assert (
+        reimported_dir / "source-files" / "assets" / "input-defaults" / "sample.txt"
+    ).read_bytes() == b"default text"
 
 
 def test_exported_archive_omits_dashboard_three_d_asset_bytes(tmp_path: Path) -> None:
