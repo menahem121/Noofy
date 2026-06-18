@@ -1,7 +1,11 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 
-import type { AppNavigateOptions, AppRouteId } from "./features/app/AppLayout";
-import { SidebarProvider } from "./features/app/AppLayout";
+import {
+  AppLayout,
+  SidebarProvider,
+  type AppNavigateOptions,
+  type AppRouteId,
+} from "./features/app/AppLayout";
 import { RuntimeStatusProvider } from "./features/app/RuntimeStatusProvider";
 import { WorkflowTabsProvider, WorkflowTabsRouteProvider, useWorkflowTabs, type WorkflowTabRuntimeState } from "./features/app/WorkflowTabs";
 import type { DashboardSchema, MockWorkflow } from "./features/dashboard-builder/dashboardBuilderContent";
@@ -466,7 +470,7 @@ function AppContent() {
       onActivateWorkflowTab={openWorkflow}
       onRequestCloseWorkflowTab={(workflowId) => void requestCloseWorkflowTab(workflowId)}
     >
-      <Suspense fallback={<main className="app-route-loading" aria-busy="true" />}>{renderPage()}</Suspense>
+      <Suspense fallback={<RouteLoadingFallback route={route} onNavigate={navigate} />}>{renderPage()}</Suspense>
       <WorkflowGlobalDropImport importFlow={workflowImportFlow} />
       <WorkflowImportStatusNotice
         importFlow={workflowImportFlow}
@@ -495,6 +499,53 @@ function AppContent() {
       />
     </WorkflowTabsRouteProvider>
   );
+}
+
+function RouteLoadingFallback({
+  route,
+  onNavigate,
+}: {
+  route: AppRoute;
+  onNavigate: (route: AppRouteId, options?: AppNavigateOptions) => void;
+}) {
+  const copy = routeLoadingCopy(route);
+  return (
+    <AppLayout activeRoute={routeShellId(route)} onNavigate={onNavigate}>
+      <div className="app-route-loading" role="status" aria-label={copy.title} aria-live="polite" aria-busy="true">
+        <span className="app-route-loading__spinner" aria-hidden="true" />
+        <strong>{copy.title}</strong>
+        <span>{copy.message}</span>
+      </div>
+    </AppLayout>
+  );
+}
+
+function routeShellId(route: AppRoute): AppRouteId {
+  if (route.name === "settings" || route.name === "models" || route.name === "gallery" || route.name === "history") {
+    return route.name;
+  }
+  if (
+    route.name === "workflows" ||
+    route.name === "workflow" ||
+    route.name === "dashboard-builder" ||
+    route.name === "dashboard-builder-layout"
+  ) {
+    return "workflows";
+  }
+  return "home";
+}
+
+function routeLoadingCopy(route: AppRoute): { title: string; message: string } {
+  if (route.name === "settings") return { title: "Opening Settings", message: "Preparing app settings." };
+  if (route.name === "models") return { title: "Opening Models", message: "Preparing your model library." };
+  if (route.name === "gallery") return { title: "Opening Gallery", message: "Preparing your recent outputs." };
+  if (route.name === "history") return { title: "Opening History", message: "Preparing your run history." };
+  if (route.name === "workflow") return { title: "Opening Workflow", message: "Preparing this workflow." };
+  if (route.name === "dashboard-builder" || route.name === "dashboard-builder-layout") {
+    return { title: "Opening Builder", message: "Preparing the dashboard editor." };
+  }
+  if (route.name === "workflows") return { title: "Opening Workflows", message: "Preparing your workflow library." };
+  return { title: "Opening Home", message: "Preparing your dashboard." };
 }
 
 function loadStoredAppRoute(tabs: Array<{ workflowId: string; lastActivatedAt: number }>): AppRoute {
