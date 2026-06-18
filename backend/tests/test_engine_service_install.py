@@ -15,9 +15,9 @@ from app.diagnostics import LogStore
 from app.engine.models import EngineJob, JobProgress
 from app.engine.service import (
     EngineService,
-    _smoke_execution_fixture_for_capsule,
     _workflow_runner_unavailable_result,
 )
+from app.runtime.runners.lifecycle_service import _smoke_execution_fixture_for_capsule
 from app.runtime.capsule_installer import CapsuleInstaller
 from app.runtime.install_state import InstallStateStore
 from app.runtime.dependencies.isolation import (

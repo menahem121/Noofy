@@ -28,7 +28,6 @@ from app.runtime.dependencies.accelerator_policy import (
 )
 from app.runtime.dependencies.dependency_lock import (
     DEFAULT_APPROVED_INDEX_URL,
-    DEFAULT_COMMUNITY_INSTALL_POLICY_VERSION,
     DependencyDeclaration,
     DependencyDistributionKind,
     DependencyPolicyError,

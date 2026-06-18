@@ -18,7 +18,6 @@ from app.diagnostics import DiagnosticsSink
 from app.gallery import GalleryItem, RunSubmissionSnapshot
 from app.workflows.library import (
     WorkflowLibraryStore,
-    WorkflowRunHistoryRecord,
     workflow_package_display_name,
 )
 from app.workflows.loader import WorkflowPackageLoader

@@ -12,7 +12,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -29,15 +28,11 @@ from app.runtime.comfyui.comfyui_update_archive import (
     validate_zip_member,
 )
 from app.runtime.comfyui.comfyui_update_records import (
-    ACTIVE_COMFYUI_FILENAME,
-    LOCAL_VALIDATION_FILENAME,
     UPDATE_METADATA_SCHEMA_VERSION,
     ComfyUIVersionRecordStore,
     LocalComfyUIVersionRecord,
     now_iso as _now_iso,
-    read_active_payload as _read_active_payload,
     read_active_record as _read_active_record,
-    read_previous_active_record as _read_previous_active_record,
     write_json as _write_json,
 )
 from app.runtime.comfyui.comfyui_update_releases import (

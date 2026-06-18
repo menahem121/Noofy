@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Any
-
 from app.runtime.dependencies.dependency_lock import DEFAULT_COMMUNITY_INSTALL_POLICY_VERSION
 from app.runtime.fingerprints import (
     FINGERPRINT_SCHEMA_VERSION,

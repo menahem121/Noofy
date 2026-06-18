@@ -275,7 +275,6 @@ class DashboardAuthoringService:
                 target,
                 purpose="reset dashboard override",
             )
-            dashboard_file = target / "dashboard.json"
             if target.exists():
                 shutil.rmtree(target)
                 removed = True

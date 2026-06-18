@@ -15,7 +15,6 @@ import os
 import runpy
 import sys
 import threading
-import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any

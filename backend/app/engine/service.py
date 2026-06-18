@@ -1,6 +1,6 @@
 import asyncio
 import re
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -63,12 +63,7 @@ from app.runtime.memory.memory_governor import (
 from app.runtime.memory.service import MemoryGovernorService
 from app.runtime.memory.resource_monitor import SystemResourceObserver, build_resource_snapshot
 from app.runtime.runners.runner_coordinator import RunnerProcessCoordinator
-from app.runtime.runners.lifecycle_service import (
-    WorkflowRunnerLifecycleService,
-    _smoke_execution_fixture_for_capsule,  # re-exported for factory.py / tests
-    _workflow_runner_launch_spec,          # re-exported for factory.py
-    _workflow_source_files_dir,            # re-exported for factory.py
-)
+from app.runtime.runners.lifecycle_service import WorkflowRunnerLifecycleService
 from app.runtime.storage.storage_gc import RuntimeStorageGarbageCollector, RuntimeStorageRoots
 from app.runtime.runners.supervisor import (
     CORE_RUNNER_ID,
@@ -91,11 +86,8 @@ from app.workflows.exporter import WorkflowExportError, WorkflowExporter
 from app.workflows.importer import ImportedWorkflowPackageStore, NoofyImportError
 from app.workflows.library import WorkflowLibraryStore, WorkflowMetadataUpdate
 from app.workflows.import_orchestrator import (
-    IMPORT_SESSION_TTL,
-    ImportSessionExpiredError,
     WorkflowImportOrchestrator,
-    _ImportModelDownloadJob,  # temporary migration re-export for tests
-    _PendingWorkflowImport,  # temporary migration re-export for tests
+    _PendingWorkflowImport,  # temporary migration proxy return type
 )
 from app.workflows.library_service import WorkflowLibraryService
 from app.workflows.loader import WorkflowPackageLoader

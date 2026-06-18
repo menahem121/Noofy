@@ -8,7 +8,6 @@ from app.diagnostics import LogStore
 from app.runtime.memory import service as memory_service_module
 from app.runtime.memory.memory_governor import (
     FallbackMemoryObserver,
-    BackendAllocatorMemorySample,
     GpuProcessMemoryUsage,
     LocalMemoryEvidenceSummary,
     LocalMemoryLearningStore,

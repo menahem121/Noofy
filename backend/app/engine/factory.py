@@ -6,8 +6,8 @@ from app.core.config import settings
 from app.engine.adapter import EngineAdapter
 from app.engine.comfyui_adapter import ComfyUIEngineAdapter
 from app.diagnostics import DiagnosticsSink, LogStore
-from app.engine.service import (
-    EngineService,
+from app.engine.service import EngineService
+from app.runtime.runners.lifecycle_service import (
     _smoke_execution_fixture_for_capsule,
     _workflow_runner_launch_spec,
     _workflow_source_files_dir,

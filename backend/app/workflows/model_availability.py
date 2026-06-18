@@ -751,7 +751,6 @@ class ModelAvailabilityService:
             missing_groups,
             explicit_source_urls_authoritative=explicit_source_urls_authoritative,
         )
-        total_models = len(downloadable_models)
 
         outcomes = await self._download_missing_models(
             package,

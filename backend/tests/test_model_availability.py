@@ -2133,7 +2133,6 @@ async def test_hugging_face_uses_api_key_and_is_tried_before_civitai_without_has
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     payload = b"hf-fixture"
-    sha = hashlib.sha256(payload).hexdigest()
     noofy_root = tmp_path / "Noofy Models"
     calls: list[tuple[str, str, dict[str, str], dict[str, str]]] = []
 

@@ -6,17 +6,20 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
-from app.engine import service as service_module
+from app.composition import ApiServices
 from app.diagnostics import LogStore
 from app.engine.models import RequiredModelSummary
-from app.engine.service import EngineService, IMPORT_SESSION_TTL, ImportSessionExpiredError
+from app.engine.service import EngineService
 from app.main import create_app
 from app.runtime.runners.supervisor import RunnerSupervisor
 from app.source_policy import SourcePolicy
 from app.workflows import model_availability as availability_module
 from app.workflows.import_orchestrator import (
+    IMPORT_SESSION_TTL,
     ImportRequiresCustomNodeResolutionError,
+    ImportSessionExpiredError,
     WorkflowImportOrchestrator,
+    _ImportModelDownloadJob,
 )
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.model_availability import ModelAvailabilityService
@@ -394,6 +397,44 @@ class FakeImportService:
         self.shutdown_called = True
 
 
+def _import_test_app(engine_service):
+    placeholder = object()
+    return create_app(
+        services=ApiServices(
+            engine_service=engine_service,
+            comfyui_sidecar_service=placeholder,
+            user_state_service=placeholder,
+            asset_service=placeholder,
+            gallery_store=placeholder,
+            api_key_service=placeholder,
+            onboarding_service=placeholder,
+            model_folder_service=placeholder,
+            model_tag_store=placeholder,
+            model_ownership_store=placeholder,
+            model_inventory_service=placeholder,
+            model_download_service=placeholder,
+            noofy_runtime_update_service=placeholder,
+            workflow_library_service=getattr(
+                engine_service,
+                "workflow_library_service",
+                None,
+            ),
+            dashboard_authoring_service=None,
+            workflow_exporter=None,
+            workflow_import_orchestrator=getattr(
+                engine_service,
+                "workflow_import_orchestrator",
+                None,
+            ),
+            workflow_runner_lifecycle_service=None,
+            run_job_service=None,
+            run_orchestrator=None,
+            run_result_service=None,
+            history_service=None,
+        )
+    )
+
+
 def _staged_import_engine_service(tmp_path) -> EngineService:
     package = WorkflowPackage(
         metadata=WorkflowMetadata(
@@ -512,7 +553,7 @@ def test_import_workflow_endpoint_passes_archive_bytes_to_service(monkeypatch) -
     monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
     fake_service = FakeImportService()
 
-    with TestClient(create_app(engine_service=fake_service)) as client:
+    with TestClient(_import_test_app(fake_service)) as client:
         response = client.post(
             "/api/workflows/import?filename=test.noofy",
             content=b"archive-bytes",
@@ -531,7 +572,7 @@ def test_import_workflow_endpoint_passes_community_preparation_opt_in(monkeypatc
     monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
     fake_service = FakeImportService()
 
-    with TestClient(create_app(engine_service=fake_service)) as client:
+    with TestClient(_import_test_app(fake_service)) as client:
         response = client.post(
             "/api/workflows/import?filename=test.noofy&allow_unverified_community_preparation=true",
             content=b"archive-bytes",
@@ -589,7 +630,7 @@ def test_direct_workflow_import_rejects_unresolved_custom_nodes_without_persisti
         model_availability_service=FakeAvailabilityService(),
     )
 
-    with TestClient(create_app(engine_service=service)) as client:
+    with TestClient(_import_test_app(service)) as client:
         response = client.post(
             "/api/workflows/import?filename=txt2audio_MOSS-TTS.noofy&allow_unverified_community_preparation=true",
             content=b"archive",
@@ -673,7 +714,7 @@ def test_import_custom_node_url_resolution_endpoint(monkeypatch) -> None:
     monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
     fake_service = FakeImportService()
 
-    with TestClient(create_app(engine_service=fake_service)) as client:
+    with TestClient(_import_test_app(fake_service)) as client:
         response = client.post(
             "/api/workflows/import/import-session-1/custom-nodes/resolve-from-urls",
             json={
@@ -694,7 +735,7 @@ def test_import_custom_node_candidate_approval_endpoint(monkeypatch) -> None:
     monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
     fake_service = FakeImportService()
 
-    with TestClient(create_app(engine_service=fake_service)) as client:
+    with TestClient(_import_test_app(fake_service)) as client:
         response = client.post(
             "/api/workflows/import/import-session-1/custom-nodes/approve-candidate",
             json={"candidate_id": "candidate-1"},
@@ -709,7 +750,7 @@ def test_import_no_custom_nodes_endpoint_returns_update_guidance(monkeypatch) ->
     monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
     fake_service = FakeImportService()
 
-    with TestClient(create_app(engine_service=fake_service)) as client:
+    with TestClient(_import_test_app(fake_service)) as client:
         response = client.post(
             "/api/workflows/import/import-session-1/custom-nodes/no-custom-nodes",
         )
@@ -728,7 +769,7 @@ def test_preview_workflow_import_endpoint_returns_staged_model_summary(monkeypat
     monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
     fake_service = FakeImportService()
 
-    with TestClient(create_app(engine_service=fake_service)) as client:
+    with TestClient(_import_test_app(fake_service)) as client:
         response = client.post(
             "/api/workflows/import/preview?filename=model.noofy",
             content=b"archive-bytes",
@@ -759,7 +800,7 @@ def test_preview_workflow_import_endpoint_maps_custom_node_resolution_guard_to_c
 
     fake_service.preview_workflow_import = raise_custom_node_resolution
 
-    with TestClient(create_app(engine_service=fake_service)) as client:
+    with TestClient(_import_test_app(fake_service)) as client:
         response = client.post(
             "/api/workflows/import/preview?filename=txt2audio_MOSS-TTS.noofy",
             content=b"archive-bytes",
@@ -929,7 +970,7 @@ def test_import_model_verification_status_endpoint(monkeypatch) -> None:
 
     fake_service.import_model_verification_status = verification_status  # type: ignore[attr-defined]
 
-    with TestClient(create_app(engine_service=fake_service)) as client:
+    with TestClient(_import_test_app(fake_service)) as client:
         response = client.get("/api/workflows/import/import-session-1/model-verification")
 
     assert response.status_code == 200
@@ -1032,7 +1073,7 @@ def test_pending_import_session_stays_alive_during_active_download(tmp_path) -> 
     pending = service._pending_workflow_imports[session_id]
     pending.updated_at = datetime.now(UTC) - IMPORT_SESSION_TTL - timedelta(seconds=1)
     pending.active_download_job_id = "active-job"
-    service._import_model_download_jobs["active-job"] = service_module._ImportModelDownloadJob(
+    service._import_model_download_jobs["active-job"] = _ImportModelDownloadJob(
         job_id="active-job",
         import_session_id=session_id,
         workflow_id="ttl_workflow",
@@ -1053,7 +1094,7 @@ def test_staged_import_download_commit_and_cancel_endpoints(monkeypatch) -> None
     monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
     fake_service = FakeImportService()
 
-    with TestClient(create_app(engine_service=fake_service)) as client:
+    with TestClient(_import_test_app(fake_service)) as client:
         download = client.post("/api/workflows/import/import-session-1/download-models")
         status = client.get("/api/workflows/import/import-session-1/download-models/download-job-1")
         canceled = client.post("/api/workflows/import/import-session-1/download-models/download-job-1/cancel")
@@ -1076,7 +1117,7 @@ def test_staged_import_commit_accepts_duplicate_action(monkeypatch) -> None:
     monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
     fake_service = FakeImportService()
 
-    with TestClient(create_app(engine_service=fake_service)) as client:
+    with TestClient(_import_test_app(fake_service)) as client:
         response = client.post(
             "/api/workflows/import/import-session-1/commit",
             json={"duplicate_action": "copy"},
@@ -1089,7 +1130,7 @@ def test_staged_import_commit_accepts_duplicate_action(monkeypatch) -> None:
 def test_get_workflow_package_endpoint_returns_normalized_record(monkeypatch) -> None:
     monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
 
-    with TestClient(create_app(engine_service=FakeImportService())) as client:
+    with TestClient(_import_test_app(FakeImportService())) as client:
         response = client.get("/api/workflows/unknown__eraserv4.5__0.1.0/package")
 
     assert response.status_code == 200
@@ -1099,7 +1140,7 @@ def test_get_workflow_package_endpoint_returns_normalized_record(monkeypatch) ->
 def test_get_workflow_package_endpoint_returns_404_for_unknown_workflow(monkeypatch) -> None:
     monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
 
-    with TestClient(create_app(engine_service=FakeImportService())) as client:
+    with TestClient(_import_test_app(FakeImportService())) as client:
         response = client.get("/api/workflows/missing/package")
 
     assert response.status_code == 404
@@ -1108,7 +1149,7 @@ def test_get_workflow_package_endpoint_returns_404_for_unknown_workflow(monkeypa
 def test_trust_policy_endpoint_returns_public_key_metadata_only(monkeypatch) -> None:
     monkeypatch.delenv("NOOFY_API_TOKEN", raising=False)
 
-    with TestClient(create_app(engine_service=FakeImportService())) as client:
+    with TestClient(_import_test_app(FakeImportService())) as client:
         response = client.get("/api/trust/policy")
 
     assert response.status_code == 200

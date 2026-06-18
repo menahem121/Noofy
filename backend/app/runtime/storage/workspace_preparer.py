@@ -42,7 +42,6 @@ from app.runtime.dependencies.dependency_resolver import (
     custom_node_dependency_source_dirs,
 )
 from app.runtime.fingerprints import (
-    dependency_env_fingerprint,
     runner_workspace_fingerprint,
     sha256_fingerprint,
 )
