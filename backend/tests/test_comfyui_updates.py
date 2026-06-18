@@ -1597,7 +1597,7 @@ def test_resolve_active_runtime_selection_reports_bundled_comfyui_version(
     )
 
     assert selection.version_metadata.source_kind == "bundled"
-    assert selection.version_metadata.active_tag == "v0.24.0-post.184009c2"
+    assert selection.version_metadata.active_tag == "v0.25.0"
 
 
 def test_resolve_active_runtime_selection_keeps_broken_installed_runtime_for_repair(

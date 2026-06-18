@@ -4,18 +4,18 @@
   "profiles": [
     {
       "runtime_profile_id": "noofy-comfyui-v1-default",
-      "runtime_profile_manifest_hash": "sha256:4c2f8761a0d63dfc936fe5584bd868a8980a40e11606bd96417d31f18cc36a1b",
+      "runtime_profile_manifest_hash": "sha256:fcb7d601f610529d2d0e85a94f307f746b9b1c48d5b44cbc7203adbeaabd1897",
       "profile_family_id": "noofy-comfyui-v1",
-      "comfyui_core_version": "v0.24.0-post.184009c2",
-      "comfyui_core_source_hash": "sha256:cb1b555e57c269ecb9f152dc3a32c44b0de96181dbfb6bc31fb62fa1482eff0e",
+      "comfyui_core_version": "v0.25.0",
+      "comfyui_core_source_hash": "sha256:ed3735102510df396ba3c7974a465f0ddb37faca32df678630ac470bf26ae37f",
       "comfyui_source_origin_kind": "upstream_source_archive",
-      "comfyui_source_reference": "https://github.com/Comfy-Org/ComfyUI/archive/184009c2f60db7b2e7dc4a80c28f9bc6029408d6.tar.gz#commit=184009c2f60db7b2e7dc4a80c28f9bc6029408d6#archive_sha256=sha256:aaba7a051f807aeff73490378457f912a206a69a9479582022810b693728d46f",
-      "comfyui_source_manifest_hash": "sha256:cb1b555e57c269ecb9f152dc3a32c44b0de96181dbfb6bc31fb62fa1482eff0e",
+      "comfyui_source_reference": "https://github.com/Comfy-Org/ComfyUI/archive/135abed8da169e33ab0b86550e05e3ae55d6df8c.tar.gz#tag=v0.25.0#commit=135abed8da169e33ab0b86550e05e3ae55d6df8c#archive_sha256=sha256:1bd9e1d44e646bd70a895050620595b1bd31954793d30b90f91d4db9d7aae4c1",
+      "comfyui_source_manifest_hash": "sha256:ed3735102510df396ba3c7974a465f0ddb37faca32df678630ac470bf26ae37f",
       "source_status": "clean_reproducible",
       "comfyui_frontend_package_name": "comfyui-frontend-package",
-      "comfyui_frontend_version": "bundled-with-comfyui-master-184009c2",
+      "comfyui_frontend_version": "1.45.15",
       "profile_signature": null,
-      "signed_manifest_reference": "noofy-local-profile-signature://phase5a/comfyui-master-184009c2",
+      "signed_manifest_reference": "noofy-local-profile-signature://phase5a/comfyui-v0.25.0-135abed8",
       "variants": [
         {
           "runtime_profile_variant_id": "darwin-arm64-mps",
@@ -38,9 +38,9 @@
             "noofy_environment": {}
           },
           "readme_guidance": [
-            "ComfyUI master at 184009c2 README: Python 3.13 is very well supported; Python 3.12 is a fallback for custom-node dependency issues.",
-            "ComfyUI master at 184009c2 README: Torch 2.4 and above is supported; use current major PyTorch unless it is less than two weeks old.",
-            "ComfyUI master at 184009c2 README: Apple Silicon follows manual install and current PyTorch guidance.",
+            "ComfyUI v0.25.0 README: Python 3.13 is very well supported; Python 3.12 is a fallback for custom-node dependency issues.",
+            "ComfyUI v0.25.0 README: Torch 2.4 and above is supported; use current major PyTorch unless it is less than two weeks old.",
+            "ComfyUI v0.25.0 README: Apple Silicon follows manual install and current PyTorch guidance.",
             "Noofy profile decision: ComfyUI does not auto-enable PyTorch attention on MPS (default is sub-quadratic attention), so this profile forces --use-pytorch-cross-attention; same-seed outputs may differ from the previous profile version."
           ]
         },
@@ -65,8 +65,8 @@
             "noofy_environment": {}
           },
           "readme_guidance": [
-            "ComfyUI master at 184009c2 README: Python 3.13 is very well supported; Python 3.12 is a fallback for custom-node dependency issues.",
-            "ComfyUI master at 184009c2 README: Torch 2.4 and above is supported; use current major PyTorch unless it is less than two weeks old.",
+            "ComfyUI v0.25.0 README: Python 3.13 is very well supported; Python 3.12 is a fallback for custom-node dependency issues.",
+            "ComfyUI v0.25.0 README: Torch 2.4 and above is supported; use current major PyTorch unless it is less than two weeks old.",
             "ComfyUI supports CPU mode with --cpu, but it is slow."
           ]
         },
@@ -91,9 +91,9 @@
             "noofy_environment": {}
           },
           "readme_guidance": [
-            "ComfyUI master at 184009c2 README: Python 3.13 is very well supported; Python 3.12 is a fallback for custom-node dependency issues.",
-            "ComfyUI master at 184009c2 README: Torch 2.4 and above is supported; use current major PyTorch unless it is less than two weeks old.",
-            "ComfyUI master at 184009c2 README: NVIDIA stable install uses the CUDA 13.0 PyTorch wheel index.",
+            "ComfyUI v0.25.0 README: Python 3.13 is very well supported; Python 3.12 is a fallback for custom-node dependency issues.",
+            "ComfyUI v0.25.0 README: Torch 2.4 and above is supported; use current major PyTorch unless it is less than two weeks old.",
+            "ComfyUI v0.25.0 README: NVIDIA stable install uses the CUDA 13.0 PyTorch wheel index.",
             "PyTorch 2.11 release notes: PyPI wheels use CUDA 13.0 by default; CUDA 13.0 supports Turing/SM 7.5 and newer on Linux x86_64."
           ]
         },
@@ -118,8 +118,8 @@
             "noofy_environment": {}
           },
           "readme_guidance": [
-            "ComfyUI master at 184009c2 README: Python 3.13 is very well supported; Python 3.12 is a fallback for custom-node dependency issues.",
-            "ComfyUI master at 184009c2 README: Torch 2.4 and above is supported; use current major PyTorch unless it is less than two weeks old.",
+            "ComfyUI v0.25.0 README: Python 3.13 is very well supported; Python 3.12 is a fallback for custom-node dependency issues.",
+            "ComfyUI v0.25.0 README: Torch 2.4 and above is supported; use current major PyTorch unless it is less than two weeks old.",
             "ComfyUI supports CPU mode with --cpu, but it is slow."
           ]
         },
@@ -144,8 +144,8 @@
             "noofy_environment": {}
           },
           "readme_guidance": [
-            "ComfyUI master at 184009c2 README: Python 3.13 is very well supported; Python 3.12 is a fallback for custom-node dependency issues.",
-            "ComfyUI master at 184009c2 README: Torch 2.4 and above is supported; use current major PyTorch unless it is less than two weeks old.",
+            "ComfyUI v0.25.0 README: Python 3.13 is very well supported; Python 3.12 is a fallback for custom-node dependency issues.",
+            "ComfyUI v0.25.0 README: Torch 2.4 and above is supported; use current major PyTorch unless it is less than two weeks old.",
             "PyTorch 2.11 release notes: PyPI wheels use CUDA 13.0 by default; CUDA 13.0 supports Turing/SM 7.5 and newer on Linux x86_64.",
             "NVIDIA L40S-class hosts should use the CUDA 13.0 wheel profile when the installed driver reports compatible CUDA capability."
           ]
@@ -171,8 +171,8 @@
             "noofy_environment": {}
           },
           "readme_guidance": [
-            "ComfyUI master at 184009c2 README: Python 3.13 is very well supported; Python 3.12 is a fallback for custom-node dependency issues.",
-            "ComfyUI master at 184009c2 README: Torch 2.4 and above is supported; use current major PyTorch unless it is less than two weeks old.",
+            "ComfyUI v0.25.0 README: Python 3.13 is very well supported; Python 3.12 is a fallback for custom-node dependency issues.",
+            "ComfyUI v0.25.0 README: Torch 2.4 and above is supported; use current major PyTorch unless it is less than two weeks old.",
             "ComfyUI supports CPU mode with --cpu, but it is slow and intended as a fallback on Linux hosts without NVIDIA CUDA."
           ]
         }
