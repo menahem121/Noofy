@@ -1365,12 +1365,14 @@ class ComfyUIUpdateService:
             / f"{_safe_tag(record.tag)}-{uuid4().hex}"
         )
         smoke_root.mkdir(parents=True, exist_ok=False)
+        smoke_source = smoke_root / "source"
+        shutil.copytree(source_dir, smoke_source)
         for runtime_child in ("custom_nodes", "input", "outputs", "user"):
             (smoke_root / runtime_child).mkdir(parents=True, exist_ok=True)
         manager = RuntimeManager(
             mode="managed",
             external_base_url="http://127.0.0.1:8188",
-            repo_dir=source_dir,
+            repo_dir=smoke_source,
             python_executable=_venv_python(env_dir),
             startup_timeout_seconds=90,
             health_poll_interval_seconds=0.5,

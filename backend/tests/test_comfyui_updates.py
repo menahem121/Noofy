@@ -586,11 +586,13 @@ async def test_default_smoke_test_prepares_isolated_runtime_directories(
     source = tmp_path / "source"
     source.mkdir()
     (source / "main.py").write_text("", encoding="utf-8")
+    (source / "requirements.txt").write_text("aiohttp\n", encoding="utf-8")
     env = tmp_path / "env"
     python = env / "bin" / "python"
     python.parent.mkdir(parents=True)
     python.write_text("", encoding="utf-8")
     prepared_dirs: list[set[str]] = []
+    smoke_repo_dirs: list[set[str]] = []
 
     class FakeSmokeRuntimeManager:
         def __init__(self, **kwargs) -> None:
@@ -605,6 +607,15 @@ async def test_default_smoke_test_prepares_isolated_runtime_directories(
                     name
                     for name in ("custom_nodes", "input", "outputs", "user")
                     if (self.base_dir / name).is_dir()
+                }
+            )
+            for name in ("custom_nodes", "input", "models", "output"):
+                (self.repo_dir / name).mkdir(parents=True, exist_ok=True)
+            smoke_repo_dirs.append(
+                {
+                    name
+                    for name in ("custom_nodes", "input", "models", "output")
+                    if (self.repo_dir / name).is_dir()
                 }
             )
             return ProcessActionResult(
@@ -661,7 +672,9 @@ async def test_default_smoke_test_prepares_isolated_runtime_directories(
     )
 
     assert prepared_dirs == [{"custom_nodes", "input", "outputs", "user"}]
-    assert not (source / "custom_nodes").exists()
+    assert smoke_repo_dirs == [{"custom_nodes", "input", "models", "output"}]
+    for name in ("custom_nodes", "input", "models", "output"):
+        assert not (source / name).exists()
 
 
 @pytest.mark.anyio
