@@ -115,6 +115,7 @@ export function RequiredCustomNodesModal({
     fields[0]?.label ??
     allNodeTypes[0] ??
     "Workflow extension";
+  const modalTitle = candidate?.repo ?? missingName;
   const automaticResolutionFailure =
     resolution.automatic_resolution_failures?.find((item) => item.trim().length > 0) ??
     "No reliable automatic source was found for this extension.";
@@ -127,7 +128,7 @@ export function RequiredCustomNodesModal({
         <header className="required-models-modal__header">
           <div>
             <p className="eyebrow">Required custom nodes</p>
-            <h2 id="required-custom-nodes-title">{workflowDisplayName(importResult.workflow)}</h2>
+            <h2 id="required-custom-nodes-title">{modalTitle}</h2>
             <p>{resolution.user_facing_message}</p>
           </div>
           <button className="icon-button" type="button" aria-label="Cancel import" disabled={busy} onClick={onCancel}>

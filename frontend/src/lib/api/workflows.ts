@@ -495,6 +495,7 @@ export interface WorkflowImportResponse {
       updated_at?: string | null;
       evidence?: string[];
       evidence_score?: number;
+      specific_match_score?: number;
       name_match?: string;
       confidence?: string;
     } | null;

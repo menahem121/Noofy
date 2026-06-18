@@ -475,7 +475,8 @@ describe("RequiredCustomNodesModal", () => {
       />,
     );
 
-    expect(screen.getByText("comfyui-missing")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "comfyui-missing" })).toBeInTheDocument();
+    expect(screen.getAllByText("comfyui-missing")).toHaveLength(2);
     expect(screen.getByText("No reliable candidate found.")).toBeInTheDocument();
     expect(screen.getByText("MissingSampler")).toBeInTheDocument();
     expect(screen.getByText("SharedNode")).toBeInTheDocument();
@@ -551,6 +552,7 @@ describe("RequiredCustomNodesModal", () => {
       />,
     );
 
+    expect(screen.getByRole("heading", { name: "ComfyUI-Missing" })).toBeInTheDocument();
     expect(screen.getAllByText("Noofy found a possible workflow extension.")).toHaveLength(2);
     expect(screen.getByText("example/ComfyUI-Missing")).toBeInTheDocument();
     expect(screen.getByText("NODE_CLASS_MAPPINGS found in Python source")).toBeInTheDocument();

@@ -924,6 +924,166 @@ def test_raw_comfyui_json_import_returns_medium_github_candidate_for_approval(
     assert record.resolution_method == "github_search_approved"
 
 
+def test_raw_comfyui_json_import_prefers_moss_tts_over_generic_comfyui_repo(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wrong_sha = "d" * 40
+    correct_sha = "e" * 40
+    wrong_archive = _source_archive_bytes(
+        {
+            f"avatar-graph-comfyui-{wrong_sha}/nodes.py": (
+                "NODE_CLASS_MAPPINGS = {'AvatarGraph': object}\n"
+            ),
+            f"avatar-graph-comfyui-{wrong_sha}/README.md": (
+                "ComfyUI custom nodes for avatar graphs.\n"
+            ),
+        }
+    )
+    correct_archive = _source_archive_bytes(
+        {
+            f"comfyui-moss-tts-{correct_sha}/nodes.py": (
+                "NODE_CLASS_MAPPINGS = {'MossTTSModelLoader': object, "
+                "'MossTTSGenerate': object}\n"
+            ),
+            f"comfyui-moss-tts-{correct_sha}/README.md": (
+                "ComfyUI custom nodes for MOSS-TTS text to speech.\n"
+            ),
+        }
+    )
+    queries: list[str] = []
+
+    def fake_search(query: str) -> list[dict[str, object]]:
+        queries.append(query)
+        return [
+            _github_repo_payload(
+                owner="avatechai",
+                repo="avatar-graph-comfyui",
+                stars=900,
+            ),
+            _github_repo_payload(
+                owner="richservo",
+                repo="comfyui-moss-tts",
+                stars=4,
+            ),
+        ]
+
+    def fake_commit(owner: str, repo: str, ref: str | None) -> str:
+        return correct_sha if repo == "comfyui-moss-tts" else wrong_sha
+
+    def fake_download(url: str, *, max_bytes: int = 512 * 1024 * 1024) -> bytes:
+        return correct_archive if "comfyui-moss-tts" in url else wrong_archive
+
+    monkeypatch.setattr(importer_module, "_github_search_repositories", fake_search)
+    monkeypatch.setattr(importer_module, "_github_commit_sha", fake_commit)
+    monkeypatch.setattr(importer_module, "_download_url_bytes", fake_download)
+
+    fetcher = FakeSourceFetcher(correct_archive)
+    store = ImportedWorkflowPackageStore(
+        tmp_path / "packages",
+        log_store=LogStore(),
+        node_registry_resolver=NodeRegistryResolver(
+            registry=NoofyNodeRegistry(registry_id="empty-test-registry"),
+            log_store=LogStore(),
+        ),
+        custom_node_source_cache=CustomNodeSourceCache(
+            cache_dir=tmp_path / "custom-node-cache",
+            fetcher=fetcher,
+            log_store=LogStore(),
+        ),
+        custom_node_github_resolver=importer_module.DefaultGitHubCustomNodeUrlResolver(),
+    )
+
+    package = store.preview_archive(
+        json.dumps(_moss_tts_graph()).encode("utf-8"),
+        original_filename="comfyui_graph.json",
+        allow_unverified_community_preparation=True,
+    )
+
+    assert queries
+    assert "comfyui-graph" not in " ".join(queries).casefold()
+    assert any("comfyui-moss-tts" in query for query in queries)
+    assert fetcher.urls == [
+        f"https://codeload.github.com/richservo/comfyui-moss-tts/zip/{correct_sha}"
+    ]
+    assert package.import_metadata is not None
+    assert package.import_metadata.status == "needs_input_setup"
+    record = next(
+        node for node in package.custom_nodes if node.id == "github-richservo-comfyui-moss-tts"
+    )
+    assert record.resolution_method == "github_search_auto"
+    assert record.source_repo_url == "https://github.com/richservo/comfyui-moss-tts"
+
+
+def test_raw_comfyui_json_import_does_not_recommend_generic_comfyui_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wrong_sha = "f" * 40
+    wrong_archive = _source_archive_bytes(
+        {
+            f"avatar-graph-comfyui-{wrong_sha}/nodes.py": (
+                "NODE_CLASS_MAPPINGS = {'AvatarGraph': object}\n"
+            ),
+            f"avatar-graph-comfyui-{wrong_sha}/README.md": (
+                "ComfyUI custom nodes for avatar graphs.\n"
+            ),
+        }
+    )
+
+    monkeypatch.setattr(
+        importer_module,
+        "_github_search_repositories",
+        lambda query: [
+            _github_repo_payload(
+                owner="avatechai",
+                repo="avatar-graph-comfyui",
+                stars=900,
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        importer_module,
+        "_github_commit_sha",
+        lambda owner, repo, ref: wrong_sha,
+    )
+    monkeypatch.setattr(
+        importer_module,
+        "_download_url_bytes",
+        lambda url, *, max_bytes=512 * 1024 * 1024: wrong_archive,
+    )
+
+    store = ImportedWorkflowPackageStore(
+        tmp_path / "packages",
+        log_store=LogStore(),
+        node_registry_resolver=NodeRegistryResolver(
+            registry=NoofyNodeRegistry(registry_id="empty-test-registry"),
+            log_store=LogStore(),
+        ),
+        custom_node_source_cache=CustomNodeSourceCache(
+            cache_dir=tmp_path / "custom-node-cache",
+            fetcher=FakeSourceFetcher(wrong_archive),
+            log_store=LogStore(),
+        ),
+        custom_node_github_resolver=importer_module.DefaultGitHubCustomNodeUrlResolver(),
+    )
+
+    package = store.preview_archive(
+        json.dumps(_moss_tts_graph()).encode("utf-8"),
+        original_filename="comfyui_graph.json",
+        allow_unverified_community_preparation=True,
+    )
+
+    assert package.import_metadata is not None
+    assert package.import_metadata.status == "missing_custom_nodes"
+    details = package.import_metadata.developer_details["source_resolution"]
+    assert details["mode"] == "manual_url"
+    assert details["package_id"] == "comfyui-moss-tts"
+    assert details["candidate"]["repo"] == "avatar-graph-comfyui"
+    assert details["candidate"]["confidence"] == "low"
+    assert details["candidate"]["specific_match_score"] == 0
+
+
 def test_noofy_importer_streams_source_file_extraction(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -3021,6 +3181,51 @@ def _github_candidate(
         name_match=name_match,
         confidence=confidence,
     )
+
+
+def _moss_tts_graph() -> dict[str, object]:
+    return {
+        "1": {
+            "_meta": {"title": "MOSS-TTS Model Loader"},
+            "class_type": "MossTTSModelLoader",
+            "inputs": {
+                "codec_local_path": "",
+                "local_model_path": "",
+                "model_variant": "MOSS-TTS (Delay 8B)",
+            },
+        },
+        "2": {
+            "_meta": {"title": "MOSS-TTS Generate"},
+            "class_type": "MossTTSGenerate",
+            "inputs": {
+                "moss_pipe": ["1", 0],
+                "text": "I hope you like Noofy.",
+            },
+        },
+        "3": {
+            "_meta": {"title": "Preview Audio"},
+            "class_type": "PreviewAudio",
+            "inputs": {"audio": ["2", 0]},
+        },
+    }
+
+
+def _github_repo_payload(
+    *,
+    owner: str,
+    repo: str,
+    stars: int,
+) -> dict[str, object]:
+    return {
+        "full_name": f"{owner}/{repo}",
+        "owner": {"login": owner},
+        "name": repo,
+        "html_url": f"https://github.com/{owner}/{repo}",
+        "description": f"{repo} custom nodes",
+        "stargazers_count": stars,
+        "updated_at": "2026-06-01T00:00:00Z",
+        "default_branch": "main",
+    }
 
 
 def _ed25519_keypair() -> tuple[Ed25519PrivateKey, str]:

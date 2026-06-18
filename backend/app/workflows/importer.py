@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -177,6 +178,8 @@ class GitHubCustomNodeSearchTarget:
     package_id: str | None
     names: tuple[str, ...]
     node_types: tuple[str, ...]
+    node_titles: tuple[str, ...]
+    family_terms: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -193,6 +196,7 @@ class GitHubCustomNodeCandidate:
     evidence_score: int
     name_match: str
     confidence: str
+    specific_match_score: int = 0
 
 
 class DefaultGitHubCustomNodeUrlResolver:
@@ -596,6 +600,7 @@ class ImportedWorkflowPackageStore:
                 package,
                 reason="github_search_no_candidate",
                 unresolved_node_types=list(target.node_types),
+                missing_package_id=target.package_id,
                 automatic_resolution_failures=search_failures
                 or [
                     "Noofy searched package names and node types but did not find a candidate with enough ComfyUI evidence."
@@ -637,6 +642,7 @@ class ImportedWorkflowPackageStore:
                 package,
                 reason="github_search_needs_user_approval",
                 unresolved_node_types=list(target.node_types),
+                missing_package_id=target.package_id,
                 candidate=_github_candidate_payload(best, include_source=True),
                 automatic_resolution_failures=[
                     "Noofy found a likely repository, but the match is not strong enough for silent install."
@@ -647,6 +653,7 @@ class ImportedWorkflowPackageStore:
             package,
             reason="github_search_low_confidence",
             unresolved_node_types=list(target.node_types),
+            missing_package_id=target.package_id,
             candidate=_github_candidate_payload(best, include_source=True),
             automatic_resolution_failures=[
                 "Noofy found search results, but none had enough ComfyUI evidence for automatic installation."
@@ -1901,39 +1908,194 @@ def _github_search_target_for_package(
     source_resolution = _source_resolution_details(package)
     node_types = set(_source_resolution_node_types(source_resolution))
     names: set[str] = set()
+    node_titles: set[str] = set()
     missing_package_id: str | None = None
+    raw_details = _raw_comfyui_details(package)
     if isinstance(source_resolution, dict):
         missing_package_id_value = source_resolution.get("package_id")
-        if isinstance(missing_package_id_value, str) and missing_package_id_value:
+        if (
+            isinstance(missing_package_id_value, str)
+            and missing_package_id_value
+            and not _is_generic_custom_node_search_name(missing_package_id_value)
+        ):
             missing_package_id = missing_package_id_value
             names.add(missing_package_id_value)
         missing = source_resolution.get("missing_custom_node")
         if isinstance(missing, dict):
             for key in ("package_id", "name"):
                 value = missing.get(key)
-                if isinstance(value, str) and value:
+                if (
+                    isinstance(value, str)
+                    and value
+                    and not _is_generic_custom_node_search_name(value)
+                ):
                     names.add(value)
                     missing_package_id = missing_package_id or value
 
     for record in _non_bundled_required_custom_node_records(package):
-        names.update(item for item in (record.id, record.folder_name) if item)
+        names.update(
+            item
+            for item in (record.id, record.folder_name)
+            if item and not _is_generic_custom_node_search_name(item)
+        )
         node_types.update(record.node_types)
         missing_package_id = missing_package_id or record.id
 
-    if package.identity is not None:
-        names.add(package.identity.package_id)
-    names.add(package.metadata.name)
-    if package.metadata.display_name:
-        names.add(package.metadata.display_name)
+    node_titles.update(_raw_comfyui_titles_for_node_types(package, node_types))
+    family_terms = set(_github_family_terms(node_types, node_titles))
+
+    if raw_details is None:
+        if package.identity is not None and not _is_generic_custom_node_search_name(
+            package.identity.package_id
+        ):
+            names.add(package.identity.package_id)
+        if not _is_generic_custom_node_search_name(package.metadata.name):
+            names.add(package.metadata.name)
+        if (
+            package.metadata.display_name
+            and not _is_generic_custom_node_search_name(package.metadata.display_name)
+        ):
+            names.add(package.metadata.display_name)
+
+    if missing_package_id is None and family_terms:
+        missing_package_id = _preferred_github_family_package_id(family_terms)
     names = {name for name in names if name.strip()}
     node_types = {item for item in node_types if item.strip()}
-    if not names and not node_types:
+    node_titles = {item for item in node_titles if item.strip()}
+    family_terms = {item for item in family_terms if item.strip()}
+    if not names and not node_types and not node_titles and not family_terms:
         return None
     return GitHubCustomNodeSearchTarget(
         package_id=missing_package_id,
         names=tuple(sorted(names)),
         node_types=tuple(sorted(node_types)),
+        node_titles=tuple(sorted(node_titles)),
+        family_terms=tuple(sorted(family_terms)),
     )
+
+
+GENERIC_CUSTOM_NODE_SEARCH_NAMES = {
+    "api graph",
+    "comfyui graph",
+    "comfyui workflow",
+    "comfyui json",
+    "graph",
+    "unknown",
+    "workflow",
+}
+
+
+GENERIC_NODE_FAMILY_WORDS = {
+    "api",
+    "custom",
+    "generate",
+    "generator",
+    "graph",
+    "loader",
+    "model",
+    "node",
+    "nodes",
+    "preview",
+    "workflow",
+}
+
+
+def _is_generic_custom_node_search_name(value: str) -> bool:
+    normalized = _normalized_search_phrase(value)
+    if not normalized:
+        return True
+    if normalized in GENERIC_CUSTOM_NODE_SEARCH_NAMES:
+        return True
+    compact = normalized.replace(" ", "")
+    return compact in {
+        item.replace(" ", "") for item in GENERIC_CUSTOM_NODE_SEARCH_NAMES
+    }
+
+
+def _raw_comfyui_titles_for_node_types(
+    package: WorkflowPackage,
+    node_types: set[str],
+) -> list[str]:
+    if not node_types:
+        return []
+    titles: list[str] = []
+    for node in package.comfyui_graph.values():
+        if not isinstance(node, dict) or node.get("class_type") not in node_types:
+            continue
+        meta = node.get("_meta")
+        title = meta.get("title") if isinstance(meta, dict) else None
+        if isinstance(title, str) and title.strip():
+            titles.append(title.strip())
+    return titles
+
+
+def _github_family_terms(
+    node_types: set[str],
+    node_titles: set[str],
+) -> list[str]:
+    terms: set[str] = set()
+    for value in sorted(node_titles) + sorted(node_types):
+        words = _node_family_words(value)
+        if len(words) >= 2:
+            terms.update(_github_family_term_variants(" ".join(words)))
+        elif words:
+            terms.update(_github_family_term_variants(words[0]))
+    return sorted(terms)
+
+
+def _node_family_words(value: str) -> list[str]:
+    words = _github_search_words(value)
+    while words and words[-1] in GENERIC_NODE_FAMILY_WORDS:
+        words.pop()
+    if words and words[0] == "comfyui":
+        words = words[1:]
+    meaningful = [word for word in words if word not in GENERIC_NODE_FAMILY_WORDS]
+    return meaningful or words
+
+
+def _github_search_words(value: str) -> list[str]:
+    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", value)
+    spaced = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", spaced)
+    return [
+        item.casefold()
+        for item in re.sub(r"[^A-Za-z0-9]+", " ", spaced).split()
+        if item
+    ]
+
+
+def _github_family_term_variants(value: str) -> set[str]:
+    phrase = _normalized_search_phrase(value)
+    if not phrase:
+        return set()
+    dash = phrase.replace(" ", "-")
+    compact = phrase.replace(" ", "")
+    return {
+        phrase,
+        dash,
+        phrase.replace(" ", "_"),
+        compact,
+        f"comfyui {phrase}",
+        f"comfyui-{dash}",
+    }
+
+
+def _preferred_github_family_package_id(family_terms: set[str]) -> str:
+    normalized_terms: set[str] = set()
+    for term in family_terms:
+        phrase = _normalized_search_phrase(term)
+        if phrase.startswith("comfyui "):
+            phrase = phrase.removeprefix("comfyui ").strip()
+        if phrase:
+            normalized_terms.add(phrase)
+    preferred = sorted(
+        normalized_terms,
+        key=lambda item: (len(item.split()) < 2, len(item), item),
+    )[0]
+    return safe_store_segment(f"comfyui-{preferred}")
+
+
+def _normalized_search_phrase(value: str) -> str:
+    return " ".join(_github_search_words(value))
 
 
 def _missing_custom_node_resolution(
@@ -2261,8 +2423,16 @@ def _github_custom_node_search_queries(
     target: GitHubCustomNodeSearchTarget,
 ) -> list[str]:
     terms: list[str] = []
-    for name in [target.package_id, *target.names, *target.node_types]:
+    for name in [
+        target.package_id,
+        *target.names,
+        *target.family_terms,
+        *target.node_types,
+        *target.node_titles,
+    ]:
         if not name:
+            continue
+        if _is_generic_custom_node_search_name(name):
             continue
         terms.extend(_github_search_term_variants(name))
     seen: set[str] = set()
@@ -2291,6 +2461,7 @@ def _github_search_term_variants(value: str) -> list[str]:
         variants.add("-".join(words))
         variants.add("_".join(words))
         variants.add(" ".join(words))
+        variants.add("".join(words))
     return [item for item in variants if item.strip()]
 
 
@@ -2335,14 +2506,16 @@ def _inspect_github_custom_node_candidate(
     archive_url = f"https://codeload.github.com/{owner}/{repo}/zip/{commit_sha}"
     archive_bytes = _download_url_bytes(archive_url)
     archive_hash = hashlib.sha256(archive_bytes).hexdigest()
-    evidence, evidence_score = _github_custom_node_archive_evidence(
+    evidence, evidence_score, specific_match_score = _github_custom_node_archive_evidence(
         archive_bytes,
         target=target,
+        repo=repo,
     )
     name_match = _github_candidate_name_match(repo, target)
     confidence = _github_candidate_confidence(
         name_match=name_match,
         evidence_score=evidence_score,
+        specific_match_score=specific_match_score,
     )
     source = NodeRegistrySource(
         source_kind=NodeRegistrySourceKind.GIT_ZIP_ARCHIVE,
@@ -2369,6 +2542,7 @@ def _inspect_github_custom_node_candidate(
         evidence_score=evidence_score,
         name_match=name_match,
         confidence=confidence,
+        specific_match_score=specific_match_score,
     )
 
 
@@ -2376,7 +2550,8 @@ def _github_custom_node_archive_evidence(
     archive_bytes: bytes,
     *,
     target: GitHubCustomNodeSearchTarget,
-) -> tuple[list[str], int]:
+    repo: str,
+) -> tuple[list[str], int, int]:
     try:
         archive = zipfile.ZipFile(io.BytesIO(archive_bytes))
     except zipfile.BadZipFile as exc:
@@ -2432,15 +2607,29 @@ def _github_custom_node_archive_evidence(
     combined_lower = combined_text.casefold()
     evidence: list[str] = []
     score = 0
+    specific_score = 0
     if "NODE_CLASS_MAPPINGS" in combined_text:
         evidence.append("NODE_CLASS_MAPPINGS found in Python source")
         score += 5
     matching_node_types = [
-        node_type for node_type in target.node_types if node_type in combined_text
+        node_type
+        for node_type in target.node_types
+        if node_type in combined_text or node_type.casefold() in combined_lower
     ]
     if matching_node_types:
         evidence.append("Required node type appears in source")
         score += 4
+        specific_score += 5
+    matching_family_terms = _github_matching_family_terms(combined_text, target)
+    if matching_family_terms:
+        evidence.append("Required node family appears in source or README")
+        score += 4
+        specific_score += 4
+    repo_family_match = _github_repo_family_match_strength(repo, target)
+    if repo_family_match:
+        evidence.append("Repository name matches required node family")
+        score += 3
+        specific_score += 5 if repo_family_match == "exact" else 4
     if "comfyui" in combined_lower or "custom node" in combined_lower:
         evidence.append("README or source mentions ComfyUI custom nodes")
         score += 2
@@ -2452,7 +2641,7 @@ def _github_custom_node_archive_evidence(
         score += 1
     if readme_files:
         evidence.append("Repository includes README documentation")
-    return evidence, score
+    return evidence, score, specific_score
 
 
 def _read_zip_text_sample(archive: zipfile.ZipFile, info: zipfile.ZipInfo) -> str:
@@ -2480,7 +2669,7 @@ def _github_candidate_name_match(
 ) -> str:
     target_keys = {
         _github_name_key(name)
-        for name in [target.package_id, *target.names]
+        for name in [target.package_id, *target.names, *target.family_terms]
         if name
     }
     repo_key = _github_name_key(repo)
@@ -2491,8 +2680,52 @@ def _github_candidate_name_match(
     return "weak"
 
 
-def _github_candidate_confidence(*, name_match: str, evidence_score: int) -> str:
-    if name_match in {"exact", "strong"} and evidence_score >= 6:
+def _github_matching_family_terms(
+    text: str,
+    target: GitHubCustomNodeSearchTarget,
+) -> list[str]:
+    text_lower = text.casefold()
+    text_key = _github_name_key(text)
+    matches: list[str] = []
+    for term in target.family_terms:
+        phrase = _normalized_search_phrase(term)
+        if not phrase:
+            continue
+        phrase_key = _github_name_key(phrase)
+        if phrase in text_lower or phrase_key in text_key:
+            matches.append(term)
+    return sorted(set(matches))
+
+
+def _github_repo_family_match_strength(
+    repo: str,
+    target: GitHubCustomNodeSearchTarget,
+) -> str | None:
+    repo_key = _github_name_key(repo)
+    for term in target.family_terms:
+        term_key = _github_name_key(term)
+        if not term_key:
+            continue
+        if repo_key == term_key or repo_key == f"comfyui{term_key}":
+            return "exact"
+        if repo_key.endswith(term_key) or term_key.endswith(repo_key):
+            return "strong"
+    return None
+
+
+def _github_candidate_confidence(
+    *,
+    name_match: str,
+    evidence_score: int,
+    specific_match_score: int,
+) -> str:
+    if specific_match_score <= 0:
+        return "low"
+    if (
+        name_match in {"exact", "strong"}
+        and evidence_score >= 6
+        and specific_match_score >= 4
+    ):
         return "high"
     if evidence_score >= 4 or (
         name_match in {"exact", "strong"} and evidence_score >= 3
@@ -2503,12 +2736,13 @@ def _github_candidate_confidence(*, name_match: str, evidence_score: int) -> str
 
 def _github_candidate_sort_key(
     candidate: GitHubCustomNodeCandidate,
-) -> tuple[int, int, int, int]:
+) -> tuple[int, int, int, int, int]:
     confidence_rank = {"high": 3, "medium": 2, "low": 1}.get(candidate.confidence, 0)
     name_rank = {"exact": 3, "strong": 2, "weak": 1}.get(candidate.name_match, 0)
     return (
-        candidate.evidence_score,
+        candidate.specific_match_score,
         name_rank,
+        candidate.evidence_score,
         confidence_rank,
         candidate.stargazers_count,
     )
@@ -2552,6 +2786,7 @@ def _github_candidate_payload(
         "updated_at": candidate.updated_at,
         "evidence": list(candidate.evidence),
         "evidence_score": candidate.evidence_score,
+        "specific_match_score": candidate.specific_match_score,
         "name_match": candidate.name_match,
         "confidence": candidate.confidence,
     }
