@@ -9,7 +9,6 @@ import {
   GripVertical,
   ImagePlus,
   LayoutGrid,
-  Save,
   Shuffle,
   SlidersHorizontal,
   Sparkles,
@@ -156,7 +155,6 @@ export function DashboardBuilderLayoutPage({
   const [dragPreview, setDragPreview] = useState<{ itemId: string; layout: DashboardWidgetLayout } | null>(null);
   const [movePreview, setMovePreview] = useState<{ itemId: string; layout: DashboardWidgetLayout } | null>(null);
   const [dropPreview, setDropPreview] = useState<{ itemId: string; layout: DashboardWidgetLayout } | null>(null);
-  const [savedFlash, setSavedFlash] = useState<"draft" | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [isSavingDashboard, setIsSavingDashboard] = useState(false);
   const canvasRef = useRef<HTMLDivElement | null>(null);
@@ -192,7 +190,6 @@ export function DashboardBuilderLayoutPage({
     setDragPreview(null);
     setMovePreview(null);
     setDropPreview(null);
-    setSavedFlash(null);
     setSaveError(null);
     setIsSavingDashboard(false);
     resizeStateRef.current = null;
@@ -215,11 +212,6 @@ export function DashboardBuilderLayoutPage({
   const unplacedItems = topLevelItems.filter((item) => !dashboardItemLayout(item));
   const placedItems = topLevelItems.filter((item) => dashboardItemLayout(item));
   const allWidgetsPlaced = schemaReady && topLevelItems.length > 0 && unplacedItems.length === 0;
-  const helperCopy = topLevelItems.length === 0
-    ? "Add at least one viewable widget before saving."
-    : allWidgetsPlaced
-      ? "Dashboard ready to save."
-      : "Place all widgets on the canvas before saving.";
   const canvasRows = schemaReady ? canvasRowsForItems(topLevelItems.map((item) => ({ layout: dashboardItemLayout(item) }))) : 0;
 
   function updateSchemaFromUser(updater: SetStateAction<DashboardSchema>) {
@@ -503,23 +495,13 @@ export function DashboardBuilderLayoutPage({
     window.addEventListener("pointerup", handlePointerUp);
   }
 
-  function handleSaveDraft() {
-    if (!schemaReady) return;
-    const nextSchema = ensureRequiredRuntimeInputWidgets(schema, workflow);
-    draftActiveRef.current = true;
-    saveDashboardDraft(nextSchema, draftBaseKeyRef.current);
-    setSchema(nextSchema);
-    setSaveError(null);
-    setSavedFlash("draft");
-    window.setTimeout(() => setSavedFlash(null), 2400);
-  }
-
   function handleBackToWidgets() {
     const nextSchema = ensureRequiredRuntimeInputWidgets(
       schemaReady ? schema : buildInitialDashboard(workflow),
       workflow,
     );
-    if (schemaReady && draftActiveRef.current) {
+    if (schemaReady) {
+      draftActiveRef.current = true;
       saveDashboardDraft(nextSchema, draftBaseKeyRef.current);
     }
     onBackToWidgets(nextSchema);
@@ -533,7 +515,6 @@ export function DashboardBuilderLayoutPage({
     const payload = toBackendPayload(saveSchema);
     setIsSavingDashboard(true);
     setSaveError(null);
-    setSavedFlash(null);
     saveDashboard(targetId, payload)
       .then(() => {
         if (saveSequence !== saveSequenceRef.current || activeWorkflowIdRef.current !== targetId) return;
@@ -548,7 +529,6 @@ export function DashboardBuilderLayoutPage({
         const draftSchema = { ...saveSchema, workflowId: targetId };
         setSchema(draftSchema);
         saveDashboardDraft(draftSchema, draftBaseKeyRef.current);
-        setSavedFlash(null);
         setSaveError(
           error instanceof Error
             ? error.message
@@ -569,62 +549,6 @@ export function DashboardBuilderLayoutPage({
       contentClassName="workspace-content--builder-layout"
     >
       <div className="builder-layout-page">
-        <header className="builder-layout-topbar" aria-labelledby="builder-layout-title">
-          <div className="builder-layout-topbar__left">
-            <button
-              className="ghost-button ghost-button--back"
-              type="button"
-              onClick={handleBackToWidgets}
-            >
-              <ArrowLeft size={15} aria-hidden="true" />
-              Back to widgets
-            </button>
-            <div>
-              <p className="eyebrow">Dashboard Builder — Layout</p>
-              <h1 id="builder-layout-title">Dashboard Builder</h1>
-            </div>
-          </div>
-
-          <div className="builder-layout-topbar__actions">
-            {savedFlash ? (
-              <div className="status-pill status-pill--success" role="status">
-                <span />
-                <span>Draft saved</span>
-              </div>
-            ) : saveError ? (
-              <div className="status-pill status-pill--error" role="status" title={saveError}>
-                <span />
-                <span>Save failed. Draft kept.</span>
-              </div>
-            ) : (
-              <p className={`builder-layout-save-helper ${allWidgetsPlaced ? "builder-layout-save-helper--ready" : ""}`}>
-                {helperCopy}
-              </p>
-            )}
-            <button className="secondary-button" type="button" onClick={handleSaveDraft} disabled={!schemaReady}>
-              <Save size={15} aria-hidden="true" />
-              Save as draft
-            </button>
-            <button
-              className="primary-button primary-button--compact"
-              type="button"
-              disabled={!allWidgetsPlaced || isSavingDashboard}
-              onClick={handleSaveDashboard}
-            >
-              <CheckCircle2 size={16} aria-hidden="true" />
-              {isSavingDashboard ? "Saving..." : "Save Dashboard"}
-            </button>
-          </div>
-        </header>
-
-        {saveError ? (
-          <div className="builder-layout-save-error" role="alert">
-            <strong>Dashboard not saved</strong>
-            <span>{saveError}</span>
-            <span className="builder-layout-save-error__hint">Your local draft was kept.</span>
-          </div>
-        ) : null}
-
         {!schemaReady ? (
           <div className="builder-layout-loading" aria-live="polite" aria-busy="true">
             <div className="builder-loading__panel builder-loading__panel--layout" role="status">
@@ -652,14 +576,24 @@ export function DashboardBuilderLayoutPage({
           </div>
         ) : (
           <div className="builder-layout-workspace">
-          <aside className="layout-widget-tray" aria-label="Widgets to place">
-            <header className="layout-widget-tray__header">
-              <div>
-                <h2>Widgets to place</h2>
-                <p>Drag to canvas</p>
-              </div>
-              <span>{unplacedItems.length}</span>
-            </header>
+            <aside className="layout-widget-tray" aria-label="Widgets to place">
+              <header className="layout-widget-tray__header">
+                <button
+                  className="ghost-button ghost-button--back layout-widget-tray__back"
+                  type="button"
+                  onClick={handleBackToWidgets}
+                >
+                  <ArrowLeft size={15} aria-hidden="true" />
+                  Back to widgets
+                </button>
+                <div className="layout-widget-tray__heading">
+                  <div>
+                    <h2>Widgets to place</h2>
+                    <p>Drag to canvas</p>
+                  </div>
+                  <span aria-label={`${unplacedItems.length} widgets left to place`}>{unplacedItems.length}</span>
+                </div>
+              </header>
 
             <div className="layout-widget-tray__list">
               {unplacedItems.length === 0 ? (
@@ -683,6 +617,31 @@ export function DashboardBuilderLayoutPage({
                 ))
               )}
             </div>
+
+            <footer className="layout-widget-tray__footer">
+              {saveError ? (
+                <div className="layout-widget-tray__save-copy">
+                  <div className="status-pill status-pill--error" role="status" title={saveError}>
+                    <span />
+                    <span>Save failed. Draft kept.</span>
+                  </div>
+                  <div className="builder-layout-save-error" role="alert">
+                    <strong>Dashboard not saved</strong>
+                    <span>{saveError}</span>
+                    <span className="builder-layout-save-error__hint">Your local draft was kept.</span>
+                  </div>
+                </div>
+              ) : null}
+              <button
+                className="primary-button primary-button--compact layout-widget-tray__save"
+                type="button"
+                disabled={!allWidgetsPlaced || isSavingDashboard}
+                onClick={handleSaveDashboard}
+              >
+                <CheckCircle2 size={16} aria-hidden="true" />
+                {isSavingDashboard ? "Saving..." : "Save Dashboard"}
+              </button>
+            </footer>
           </aside>
 
           <DashboardCanvasFrame aria-label="Dashboard layout canvas">
@@ -749,7 +708,7 @@ export function DashboardBuilderLayoutPage({
                 />
               ) : null}
             </DashboardCanvasSurface>
-          </DashboardCanvasFrame>
+            </DashboardCanvasFrame>
           </div>
         )}
       </div>

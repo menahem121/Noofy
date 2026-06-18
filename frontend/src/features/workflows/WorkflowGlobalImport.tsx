@@ -1,14 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { AlertCircle, CheckCircle2, Loader2, UploadCloud, X } from "lucide-react";
+import { AlertCircle, Loader2, UploadCloud, X } from "lucide-react";
 
-import { workflowDisplayName } from "../../lib/workflowNames";
 import {
   importNeedsCustomNodeResolution,
   isSupportedWorkflowImportFile,
   type WorkflowImportFlowController,
   unsupportedWorkflowImportMessage,
 } from "./useWorkflowImportFlow";
-import { importNeedsConfiguration } from "./workflowImportUtils";
 
 const WORKFLOW_IMPORT_DROP_IGNORE_ATTR = "data-noofy-workflow-import-drop-ignore";
 
@@ -96,11 +94,9 @@ export function WorkflowGlobalDropImport({
 export function WorkflowImportStatusNotice({
   importFlow,
   hidden = false,
-  onConfigureDashboard,
 }: {
   importFlow: WorkflowImportFlowController;
   hidden?: boolean;
-  onConfigureDashboard?: (workflowId?: string, workflowName?: string) => void;
 }) {
   if (hidden) return null;
   const { state } = importFlow;
@@ -157,34 +153,7 @@ export function WorkflowImportStatusNotice({
         </div>
       );
     }
-    const workflowName = workflowDisplayName(state.importResult.workflow);
-    const needsConfiguration = importNeedsConfiguration(state.importResult);
-    return (
-      <div className="workflow-import-status workflow-import-status--success" role="status" aria-live="polite">
-        <CheckCircle2 size={18} aria-hidden="true" />
-        <div>
-          <strong>{state.importResult.user_facing_message}</strong>
-          <span>{workflowName} was added to your local workflows.</span>
-        </div>
-        {needsConfiguration && onConfigureDashboard ? (
-          <button
-            className="primary-button primary-button--compact"
-            type="button"
-            onClick={() => onConfigureDashboard(state.importResult?.workflow.id, workflowName)}
-          >
-            Configure dashboard
-          </button>
-        ) : null}
-        <button
-          className="icon-button"
-          type="button"
-          aria-label="Dismiss workflow import message"
-          onClick={importFlow.dismissImportResult}
-        >
-          <X size={16} aria-hidden="true" />
-        </button>
-      </div>
-    );
+    return null;
   }
 
   return null;

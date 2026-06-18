@@ -4066,6 +4066,12 @@ describe("WorkflowRunPage", () => {
     expect(canvasCss).toMatch(/\.canvas-widget-group__control--textarea\s*{[^}]*flex:\s*1 1 0;/);
   });
 
+  it("keeps the run canvas within the visible workspace width", () => {
+    expect(canvasCss).toMatch(
+      /\.canvas-dashboard \.layout-canvas__surface\s*{[^}]*min-width:\s*0;/,
+    );
+  });
+
   it("renders generated audio with backend-owned player, download, open, and Auto Save actions", async () => {
     const audioPackageData = {
       ...configuredPackageData,

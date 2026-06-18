@@ -615,7 +615,7 @@ describe("App workflow tabs", () => {
     fireEvent.dragLeave(window, { dataTransfer });
   });
 
-  it("starts the staged .noofy import flow when a workflow package is dropped on a workflow run page", async () => {
+  it("does not show a global success notification after importing on a workflow run page", async () => {
     const workflow = importedWorkflow("run_drop", "Run Drop");
     importPreviewResponses.set("run-drop.noofy", importResponse(workflow));
 
@@ -627,7 +627,8 @@ describe("App workflow tabs", () => {
     dropFiles([new File(["archive"], "run-drop.noofy", { type: "application/octet-stream" })]);
 
     await waitFor(() => expect(importPreviewWasRequested("run-drop.noofy")).toBe(true));
-    expect(await screen.findByText("Run Drop was added to your local workflows.")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText("Importing workflow")).not.toBeInTheDocument());
+    expect(screen.queryByText("Run Drop was added to your local workflows.")).not.toBeInTheDocument();
   });
 
   it("shows the duplicate workflow modal for a dropped duplicate .noofy package", async () => {
@@ -770,7 +771,7 @@ describe("App workflow tabs", () => {
     expect(screen.queryByText(/not a supported workflow import file/i)).not.toBeInTheDocument();
   });
 
-  it("hides the global setup import notice while configuring that workflow", async () => {
+  it("does not show a global setup notification after importing a workflow", async () => {
     importPreviewResponses.set("raw-workflow.json", {
       import_session_id: null,
       workflow_id: "raw_workflow",
@@ -795,9 +796,8 @@ describe("App workflow tabs", () => {
     await waitFor(() => expect(importPreviewWasRequested("raw-workflow.json")).toBe(true));
 
     fireEvent.click(screen.getByRole("button", { name: "Open settings" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Configure dashboard" }));
-
-    expect(await screen.findByRole("heading", { name: /Dashboard Builder/i })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Engine Settings" })).toBeInTheDocument();
+    expect(screen.queryByText("Needs input setup")).not.toBeInTheDocument();
     expect(screen.queryByText("Raw Workflow was added to your local workflows.")).not.toBeInTheDocument();
   });
 

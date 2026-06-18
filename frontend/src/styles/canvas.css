@@ -17,6 +17,10 @@
   overflow: hidden;
 }
 
+.canvas-dashboard .layout-canvas__surface {
+  min-width: 0;
+}
+
 .canvas-dashboard__canvas > .workflow-values-loading {
   position: absolute;
   inset: 0;

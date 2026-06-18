@@ -46,7 +46,11 @@ import { buildDashboardSchemaForEditing } from "./dashboardEditing";
 import { WorkflowActionMenu } from "./WorkflowActionMenu";
 import { WorkflowExportDialog } from "./WorkflowExportDialog";
 import { WorkflowImportDialogs } from "./WorkflowImportModals";
-import { useWorkflowImportFlow, type WorkflowImportFlowController } from "./useWorkflowImportFlow";
+import {
+  WORKFLOW_IMPORT_ACCEPT,
+  useWorkflowImportFlow,
+  type WorkflowImportFlowController,
+} from "./useWorkflowImportFlow";
 import { cleanupRemovedWorkflowFrontendState } from "./workflowRemoval";
 import { importNeedsConfiguration } from "./workflowImportUtils";
 import {
@@ -494,7 +498,7 @@ export function WorkflowsPage({
                 <FileUp size={16} aria-hidden="true" />
                 {importFlow.importing ? "Importing..." : "Import Workflow"}
               </button>
-              <input ref={fileInputRef} className="sr-only" type="file" accept=".noofy,.json" onChange={handleImport} />
+              <input ref={fileInputRef} className="sr-only" type="file" accept={WORKFLOW_IMPORT_ACCEPT} onChange={handleImport} />
             </div>
           </section>
 

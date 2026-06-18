@@ -533,7 +533,7 @@ describe("HomePage", () => {
 
     renderHomePage({ runtimeState: readyRuntimeState, skipInitialRefresh: true, onConfigureDashboard });
 
-    const fileInput = document.querySelector('input[type="file"][accept=".noofy"]') as HTMLInputElement;
+    const fileInput = document.querySelector('input[type="file"][accept=".noofy,.json"]') as HTMLInputElement;
     fireEvent.change(fileInput, { target: { files: [new File(["first"], "first.noofy")] } });
     expect(await screen.findByText("Imported First was added to your local workflows.")).toBeInTheDocument();
     window.localStorage.setItem(dashboardDraftKey("imported_first"), draftFor("imported_first", "Imported First"));
@@ -1312,7 +1312,7 @@ describe("HomePage", () => {
     // Wait for the page to load, then pick a file directly (community preparation is auto-allowed).
     await screen.findByText("Choose File");
     const file = new File(["archive"], "eraser.noofy");
-    const fileInput = document.querySelector('input[type="file"][accept=".noofy"]') as HTMLInputElement;
+    const fileInput = document.querySelector('input[type="file"][accept=".noofy,.json"]') as HTMLInputElement;
     fireEvent.change(fileInput, { target: { files: [file] } });
 
     await waitFor(() => {
@@ -1418,7 +1418,7 @@ describe("HomePage", () => {
 
     await screen.findByText("Choose File");
     const file = new File(["archive"], "portrait.noofy");
-    const fileInput = document.querySelector('input[type="file"][accept=".noofy"]') as HTMLInputElement;
+    const fileInput = document.querySelector('input[type="file"][accept=".noofy,.json"]') as HTMLInputElement;
     fireEvent.change(fileInput, { target: { files: [file] } });
 
     expect(await screen.findByRole("dialog", { name: "Portrait Workflow" })).toBeInTheDocument();
@@ -1493,7 +1493,7 @@ describe("HomePage", () => {
     renderHomePage();
 
     await screen.findByText("Choose File");
-    const fileInput = document.querySelector('input[type="file"][accept=".noofy"]') as HTMLInputElement;
+    const fileInput = document.querySelector('input[type="file"][accept=".noofy,.json"]') as HTMLInputElement;
     fireEvent.change(fileInput, { target: { files: [new File(["archive"], "cancel.noofy")] } });
 
     expect(await screen.findByRole("dialog", { name: "Cancel Me" })).toBeInTheDocument();
@@ -1586,7 +1586,7 @@ describe("HomePage", () => {
 
     await screen.findByText("Choose File");
     const file = new File(["archive"], "slow.noofy");
-    const fileInput = document.querySelector('input[type="file"][accept=".noofy"]') as HTMLInputElement;
+    const fileInput = document.querySelector('input[type="file"][accept=".noofy,.json"]') as HTMLInputElement;
     fireEvent.change(fileInput, { target: { files: [file] } });
 
     expect(await screen.findByRole("dialog", { name: "Slow Model Workflow" })).toBeInTheDocument();
@@ -1718,7 +1718,7 @@ describe("HomePage", () => {
 
     await screen.findByText("Choose File");
     const file = new File(["archive"], "progress.noofy");
-    const fileInput = document.querySelector('input[type="file"][accept=".noofy"]') as HTMLInputElement;
+    const fileInput = document.querySelector('input[type="file"][accept=".noofy,.json"]') as HTMLInputElement;
     fireEvent.change(fileInput, { target: { files: [file] } });
 
     expect(await screen.findByRole("dialog", { name: "Progress Workflow" })).toBeInTheDocument();
@@ -1852,7 +1852,7 @@ describe("HomePage", () => {
 
     await screen.findByText("Choose File");
     const file = new File(["archive"], "disk-space.noofy");
-    const fileInput = document.querySelector('input[type="file"][accept=".noofy"]') as HTMLInputElement;
+    const fileInput = document.querySelector('input[type="file"][accept=".noofy,.json"]') as HTMLInputElement;
     fireEvent.change(fileInput, { target: { files: [file] } });
 
     expect(await screen.findByRole("dialog", { name: "Disk Space Workflow" })).toBeInTheDocument();
@@ -1998,7 +1998,7 @@ describe("HomePage", () => {
 
     await screen.findByText("Choose File");
     const file = new File(["archive"], "ready.noofy");
-    const fileInput = document.querySelector('input[type="file"][accept=".noofy"]') as HTMLInputElement;
+    const fileInput = document.querySelector('input[type="file"][accept=".noofy,.json"]') as HTMLInputElement;
     fireEvent.change(fileInput, { target: { files: [file] } });
 
     expect(await screen.findByRole("dialog", { name: "Ready Workflow" })).toBeInTheDocument();
@@ -2284,7 +2284,7 @@ describe("HomePage", () => {
 
     await screen.findByText("Choose File");
     const file = new File(["archive"], "core_sd15_txt2img.noofy");
-    const fileInput = document.querySelector('input[type="file"][accept=".noofy"]') as HTMLInputElement;
+    const fileInput = document.querySelector('input[type="file"][accept=".noofy,.json"]') as HTMLInputElement;
     fireEvent.change(fileInput, { target: { files: [file] } });
 
     expect(await screen.findByRole("dialog", { name: "Core SD15 Text to Image" })).toBeInTheDocument();
@@ -2418,7 +2418,7 @@ describe("HomePage", () => {
 
     await screen.findByText("Choose File");
     const file = new File(["archive"], "runtime-only.noofy");
-    const fileInput = document.querySelector('input[type="file"][accept=".noofy"]') as HTMLInputElement;
+    const fileInput = document.querySelector('input[type="file"][accept=".noofy,.json"]') as HTMLInputElement;
     fireEvent.change(fileInput, { target: { files: [file] } });
 
     expect(await screen.findByRole("dialog", { name: "Runtime Only Workflow" })).toBeInTheDocument();
@@ -2548,7 +2548,7 @@ describe("HomePage", () => {
 
     await screen.findByText("Choose File");
     const file = new File(["archive"], "setup.noofy");
-    const fileInput = document.querySelector('input[type="file"][accept=".noofy"]') as HTMLInputElement;
+    const fileInput = document.querySelector('input[type="file"][accept=".noofy,.json"]') as HTMLInputElement;
     fireEvent.change(fileInput, { target: { files: [file] } });
 
     expect(await screen.findByRole("dialog", { name: "Setup Workflow" })).toBeInTheDocument();

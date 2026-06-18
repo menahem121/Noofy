@@ -477,7 +477,6 @@ function AppContent() {
       <WorkflowImportStatusNotice
         importFlow={workflowImportFlow}
         hidden={importStatusHidden}
-        onConfigureDashboard={configureDashboard}
       />
       <WorkflowImportDialogs
         importFlow={workflowImportFlow}

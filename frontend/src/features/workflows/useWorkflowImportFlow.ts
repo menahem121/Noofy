@@ -53,6 +53,7 @@ export const RAW_COMFY_JSON_IMPORT_UNSUPPORTED_MESSAGE =
   "Noofy can import raw ComfyUI .json workflow files here.";
 
 export const SUPPORTED_WORKFLOW_IMPORT_EXTENSIONS = [".noofy", ".json"] as const;
+export const WORKFLOW_IMPORT_ACCEPT = SUPPORTED_WORKFLOW_IMPORT_EXTENSIONS.join(",");
 
 export function workflowImportExtension(filename: string) {
   const match = /\.[^.\\/]+$/.exec(filename.trim().toLowerCase());

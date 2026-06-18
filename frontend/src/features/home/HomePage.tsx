@@ -39,7 +39,11 @@ import {
 import type { WorkflowExportReviewModel } from "../../lib/workflowExport";
 import { buildDashboardSchemaForEditing } from "../workflows/dashboardEditing";
 import { WorkflowImportDialogs } from "../workflows/WorkflowImportModals";
-import { useWorkflowImportFlow, type WorkflowImportFlowController } from "../workflows/useWorkflowImportFlow";
+import {
+  WORKFLOW_IMPORT_ACCEPT,
+  useWorkflowImportFlow,
+  type WorkflowImportFlowController,
+} from "../workflows/useWorkflowImportFlow";
 import { importNeedsConfiguration } from "../workflows/workflowImportUtils";
 import { WorkflowActionMenu } from "../workflows/WorkflowActionMenu";
 import { WorkflowExportDialog } from "../workflows/WorkflowExportDialog";
@@ -804,7 +808,7 @@ export function HomePage({
                 <input
                   className="sr-only"
                   type="file"
-                  accept=".noofy"
+                  accept={WORKFLOW_IMPORT_ACCEPT}
                   disabled={homeData.importing}
                   onChange={(event) => void handleWorkflowFileSelected(event)}
                 />

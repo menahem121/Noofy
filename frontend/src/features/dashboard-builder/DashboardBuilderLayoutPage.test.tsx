@@ -374,6 +374,75 @@ describe("DashboardBuilderLayoutPage", () => {
     });
   });
 
+  it("keeps the current schema as a local draft when navigating back", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+    const onBackToWidgets = vi.fn();
+
+    render(
+      <DashboardBuilderLayoutPage
+        workflowId="wf-1"
+        workflowName="Workflow"
+        initialSchema={placedSchema}
+        onBackToWidgets={onBackToWidgets}
+        onSaveComplete={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /back to widgets/i }));
+
+    expect(onBackToWidgets).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workflowId: "wf-1",
+        widgets: [
+          expect.objectContaining({
+            id: "ctrl-prompt",
+            layout: expect.objectContaining({ x: 0, y: 0, w: 16, h: 6 }),
+          }),
+        ],
+      }),
+    );
+    expect(JSON.parse(window.localStorage.getItem(dashboardDraftKey("wf-1")) ?? "{}")).toMatchObject({
+      workflowId: "wf-1",
+      status: "draft",
+      baseKey: dashboardSchemaFingerprint(placedSchema),
+    });
+  });
+
+  it("keeps layout actions in the widget tray and gives the canvas the full page height", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(
+      <DashboardBuilderLayoutPage
+        workflowId="wf-1"
+        workflowName="Workflow"
+        initialSchema={placedSchema}
+        onBackToWidgets={vi.fn()}
+        onSaveComplete={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    const tray = await screen.findByRole("complementary", { name: /widgets to place/i });
+    expect(tray).toContainElement(screen.getByRole("button", { name: /back to widgets/i }));
+    expect(tray).toContainElement(screen.getByRole("button", { name: /save dashboard/i }));
+    expect(screen.queryByRole("button", { name: /save as draft/i })).not.toBeInTheDocument();
+    expect(screen.queryByText("Dashboard Builder — Layout")).not.toBeInTheDocument();
+    expect(screen.queryByText("Changes save automatically")).not.toBeInTheDocument();
+    expect(screen.queryByText("Dashboard ready to save.")).not.toBeInTheDocument();
+    expect(document.querySelector(".builder-layout-topbar")).not.toBeInTheDocument();
+    expect(builderLayoutCss).toMatch(/\.builder-layout-page\s*{[^}]*grid-template-rows:\s*minmax\(0, 1fr\);/);
+    expect(builderLayoutCss).not.toMatch(/grid-template-rows:\s*74px/);
+  });
+
   it("keeps a local draft and does not navigate when dashboard save fails", async () => {
     const onSaveComplete = vi.fn();
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
