@@ -113,6 +113,7 @@ describe("App workflow tabs", () => {
   let workflowListSummary: typeof workflowSummary & Record<string, unknown> = workflowSummary;
   let importedWorkflowSummaries: Array<typeof workflowSummary & Record<string, unknown>> = [];
   let importPreviewResponses: Map<string, Record<string, unknown>> = new Map();
+  let missingWorkflowIds: Set<string> = new Set();
 
   beforeEach(() => {
     lastOpened = null;
@@ -123,6 +124,7 @@ describe("App workflow tabs", () => {
     workflowListSummary = workflowSummary;
     importedWorkflowSummaries = [];
     importPreviewResponses = new Map();
+    missingWorkflowIds = new Set();
     window.localStorage.clear();
     window.sessionStorage.clear();
     vi.stubGlobal("fetch", fetchMock);
@@ -132,6 +134,10 @@ describe("App workflow tabs", () => {
       const method = init?.method ?? "GET";
       if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(runtime));
       if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse({ cpu: null, ram: null, vram: null }));
+      const workflowEndpointMatch = url.match(/\/api\/workflows\/([^/?]+)\//);
+      if (workflowEndpointMatch && missingWorkflowIds.has(decodeURIComponent(workflowEndpointMatch[1]))) {
+        return Promise.resolve(jsonResponse({ detail: "Workflow not found." }, 404));
+      }
       if (url.endsWith("/api/workflows")) {
         return Promise.resolve(jsonResponse([
           { ...workflowListSummary, last_opened: lastOpened },
@@ -731,6 +737,33 @@ describe("App workflow tabs", () => {
     render(<App />);
 
     expect(await screen.findByText("Built-in Workflows")).toBeInTheDocument();
+  });
+
+  it("drops a restored workflow tab when the current backend no longer has that workflow", async () => {
+    const missingWorkflowId = "unknown__img2img_flux-klein-9b-turbo__0.1.0";
+    missingWorkflowIds = new Set([missingWorkflowId]);
+    window.localStorage.setItem(
+      "noofy.workflowTabs.v1",
+      JSON.stringify([{ workflowId: missingWorkflowId, workflowName: "Flux Klein", lastActivatedAt: 1 }]),
+    );
+    window.localStorage.setItem(
+      "noofy.appRoute.v1",
+      JSON.stringify({ name: "workflow", workflowId: missingWorkflowId }),
+    );
+
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Workflows" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Reload this workflow" })).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(JSON.parse(window.localStorage.getItem("noofy.workflowTabs.v1") ?? "[]")).toEqual([]);
+    });
+    expect(JSON.parse(window.localStorage.getItem("noofy.appRoute.v1") ?? "{}")).toMatchObject({ name: "workflows" });
+    const staleWorkflowRequests = fetchMock.mock.calls.filter(([url]) =>
+      String(url).includes(`/api/workflows/${encodeURIComponent(missingWorkflowId)}/`),
+    );
+    expect(staleWorkflowRequests.length).toBeGreaterThan(0);
+    expect(staleWorkflowRequests.length).toBeLessThanOrEqual(4);
   });
 
   it("keeps workflow progress visible across pages and avoids duplicate bars", async () => {

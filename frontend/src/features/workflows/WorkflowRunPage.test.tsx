@@ -1091,6 +1091,24 @@ describe("WorkflowRunPage", () => {
     expect(reloadPage).toHaveBeenCalledTimes(1);
   });
 
+  it("reports a missing workflow instead of asking for an impossible reload", async () => {
+    const onMissingWorkflow = vi.fn();
+    mockConfiguredDashboardFetch(fetchMock, readyRuntime, configuredPackageData, null, (url) => {
+      if (url.endsWith("/api/workflows/text_to_image_v0/package")) {
+        return jsonResponse({ detail: "Workflow not found." }, 404);
+      }
+      return undefined;
+    });
+
+    renderRunPage({ onMissingWorkflow });
+
+    expect(await screen.findByRole("heading", { name: "Workflow not installed" })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(onMissingWorkflow).toHaveBeenCalledWith("text_to_image_v0");
+    });
+    expect(screen.queryByRole("dialog", { name: "Reload this workflow" })).not.toBeInTheDocument();
+  });
+
   it("shows the refresh fallback over a canvas workflow when the backend session changed", async () => {
     const reloadPage = vi.fn();
     window.sessionStorage.setItem("noofy.tabBackendSession.v1", "bs-previous");

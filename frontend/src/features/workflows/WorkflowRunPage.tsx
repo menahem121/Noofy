@@ -39,6 +39,7 @@ import {
   galleryContentUrlById,
   workflowDefaultAssetMediaUrl,
   isEngineJob,
+  isApiError,
   saveJobOutputToGallery,
   cancelJobOutputGallerySave,
   closeWorkflowRunnerLease,
@@ -144,6 +145,7 @@ interface WorkflowRunPageProps {
   workflowId: string;
   onBack: () => void;
   onWorkflowNameChange?: (workflowName: string) => void;
+  onMissingWorkflow?: (workflowId: string) => void;
   onEditWidgets?: (schema: DashboardSchema) => void;
   onConfigureDashboard?: (workflowId?: string, workflowName?: string) => void;
   onNavigate: (route: AppRouteId) => void;
@@ -163,6 +165,7 @@ interface RunPageState {
   result: JobResult | null;
   error: string | null;
   packageLoadError: string | null;
+  packageLoadErrorStatus: number | null;
 }
 
 interface RunFailureDialogState {
@@ -257,6 +260,7 @@ const initialState: RunPageState = {
   result: null,
   error: null,
   packageLoadError: null,
+  packageLoadErrorStatus: null,
 };
 
 const workflowRunPageStateCache = new Map<string, RunPageState>();
@@ -294,6 +298,7 @@ export function WorkflowRunPage({
   workflowId,
   onBack,
   onWorkflowNameChange,
+  onMissingWorkflow,
   onEditWidgets,
   onConfigureDashboard,
   onNavigate,
@@ -334,6 +339,7 @@ export function WorkflowRunPage({
   const dashboardSetupRouteRequestedRef = useRef<string | null>(null);
   const runnerLeaseRequestRef = useRef<string | null>(null);
   const requirementsLoadSequenceRef = useRef(0);
+  const missingWorkflowNotifiedRef = useRef<string | null>(null);
   const activeWorkflowIdRef = useRef(workflowId);
   activeWorkflowIdRef.current = workflowId;
 
@@ -684,6 +690,7 @@ export function WorkflowRunPage({
         validationLoading: !hasCurrentWorkflowData || current.validation === null,
         error: null,
         packageLoadError: null,
+        packageLoadErrorStatus: null,
       };
     });
 
@@ -693,10 +700,11 @@ export function WorkflowRunPage({
 
     const workflowStatusPromise = fetchWorkflowStatus(targetWorkflowId).catch(() => null);
     const packagePromise = fetchWorkflowPackage(targetWorkflowId)
-      .then((packageData) => ({ packageData, error: null }))
+      .then((packageData) => ({ packageData, error: null, status: null }))
       .catch((error: unknown) => ({
         packageData: null,
         error: error instanceof Error ? error.message : String(error),
+        status: isApiError(error) ? error.status : null,
       }));
     const modelSummaryPromise = fetchWorkflowModelSummary(targetWorkflowId).catch(() => null);
     const apiKeySettingsPromise = fetchApiKeySettings().catch(() => null);
@@ -718,6 +726,7 @@ export function WorkflowRunPage({
           packageResult.packageData ??
           (current.firstLoadedWorkflowId === targetWorkflowId ? current.packageData : null),
         packageLoadError: packageResult.error,
+        packageLoadErrorStatus: packageResult.error ? packageResult.status : null,
       };
       workflowRunPageStateCache.set(targetWorkflowId, next);
       return next;
@@ -761,6 +770,7 @@ export function WorkflowRunPage({
   }
 
   useLayoutEffect(() => {
+    missingWorkflowNotifiedRef.current = null;
     void runtimeStatus.refreshRuntime({ silent: true });
     setState(cachedRunPageState(workflowId));
     void loadRequirements();
@@ -781,6 +791,16 @@ export function WorkflowRunPage({
       requirementsLoadSequenceRef.current += 1;
     };
   }, [workflowId, runtimeStatus.refreshRuntime]);
+
+  useEffect(() => {
+    if (state.firstLoadedWorkflowId !== workflowId || state.packageLoadErrorStatus !== 404) {
+      return;
+    }
+    if (missingWorkflowNotifiedRef.current === workflowId) return;
+    missingWorkflowNotifiedRef.current = workflowId;
+    invalidateWorkflowRunPageCache(workflowId);
+    onMissingWorkflow?.(workflowId);
+  }, [onMissingWorkflow, state.firstLoadedWorkflowId, state.packageLoadErrorStatus, workflowId]);
 
   useEffect(() => {
     if (!modelDownloadJob || !isModelDownloadActive(modelDownloadJob.status)) return;
@@ -2115,7 +2135,9 @@ export function WorkflowRunPage({
       </button>
     </div>
   ) : null;
-  const workflowRefreshRequired = runtimeStatus.pageRefreshRequired || Boolean(state.packageLoadError);
+  const workflowMissing = state.firstLoadedWorkflowId === workflowId && state.packageLoadErrorStatus === 404;
+  const workflowRefreshRequired =
+    runtimeStatus.pageRefreshRequired || Boolean(state.packageLoadError && !workflowMissing);
   const workflowRefreshMessage = runtimeStatus.pageRefreshRequired
     ? "Noofy restarted in the background. Reload this workflow to reconnect it to the current session."
     : "Noofy could not load this workflow. Reload it before continuing.";
@@ -2312,6 +2334,14 @@ export function WorkflowRunPage({
       onRefresh={runtimeStatus.refreshPage}
     />
   ) : null;
+
+  if (workflowMissing) {
+    return (
+      <AppLayout activeRoute="workflows" onNavigate={onNavigate}>
+        <WorkflowMissingPanel onBack={onBack} />
+      </AppLayout>
+    );
+  }
 
   if (dashboardSetupRequired) {
     return (
@@ -2602,6 +2632,22 @@ function MemoryLoadedPill() {
       <CheckCircle2 size={13} aria-hidden="true" />
       <span>Models loaded</span>
     </div>
+  );
+}
+
+function WorkflowMissingPanel({ onBack }: { onBack: () => void }) {
+  return (
+    <section className="page-heading page-heading--compact" aria-labelledby="workflow-missing-title">
+      <div>
+        <button className="ghost-button ghost-button--back" type="button" onClick={onBack}>
+          <ArrowLeft size={16} aria-hidden="true" />
+          Back to Home
+        </button>
+        <p className="eyebrow">Workflow unavailable</p>
+        <h1 id="workflow-missing-title">Workflow not installed</h1>
+        <p>This workflow is not available on the current Noofy server.</p>
+      </div>
+    </section>
   );
 }
 

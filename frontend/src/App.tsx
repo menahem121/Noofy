@@ -283,6 +283,16 @@ function AppContent() {
     if (nextRoute) setRoute(nextRoute);
   }
 
+  function handleMissingWorkflow(workflowId: string) {
+    workflowTabs.closeWorkflowTab(workflowId);
+    setCloseDialog((current) => (current?.workflowId === workflowId ? null : current));
+    setRoute((current) =>
+      current.name === "workflow" && current.workflowId === workflowId
+        ? { name: "workflows" }
+        : current,
+    );
+  }
+
   async function confirmStopAndClose() {
     if (!closeDialog) return;
     setCloseDialog((current) => (current ? { ...current, busy: true, error: null } : current));
@@ -310,6 +320,7 @@ function AppContent() {
           workflowId={route.workflowId}
           onBack={() => setRoute({ name: "home" })}
           onWorkflowNameChange={(workflowName) => workflowTabs.updateWorkflowTabName(route.workflowId, workflowName)}
+          onMissingWorkflow={handleMissingWorkflow}
           onEditWidgets={(schema) =>
             setRoute({
               name: "dashboard-builder",

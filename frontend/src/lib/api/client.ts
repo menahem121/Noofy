@@ -45,6 +45,24 @@ export function apiHeaders(contentType?: string) {
   return headers;
 }
 
+export class ApiError extends Error {
+  readonly status: number;
+  readonly statusText: string;
+  readonly url: string;
+
+  constructor(message: string, response: Response) {
+    super(message);
+    this.name = "ApiError";
+    this.status = response.status;
+    this.statusText = response.statusText;
+    this.url = response.url;
+  }
+}
+
+export function isApiError(error: unknown): error is ApiError {
+  return error instanceof ApiError;
+}
+
 export function createJobEventsUrl(jobId: string) {
   const url = `${getApiBaseUrl()}/jobs/${encodeURIComponent(jobId)}/events`;
   const token = getApiToken();
@@ -124,12 +142,16 @@ export async function apiErrorMessage(response: Response): Promise<string> {
   return fallback;
 }
 
+async function apiErrorFromResponse(response: Response): Promise<ApiError> {
+  return new ApiError(await apiErrorMessage(response), response);
+}
+
 export async function getJson<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`${getApiBaseUrl()}${path}`, {
     ...init,
     headers: apiHeaders(),
   });
-  if (!response.ok) throw new Error(await apiErrorMessage(response));
+  if (!response.ok) throw await apiErrorFromResponse(response);
   return response.json() as Promise<T>;
 }
 
@@ -139,7 +161,7 @@ export async function postJson<T>(path: string, body?: unknown): Promise<T> {
     headers: apiHeaders("application/json"),
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  if (!response.ok) throw new Error(await apiErrorMessage(response));
+  if (!response.ok) throw await apiErrorFromResponse(response);
   return response.json() as Promise<T>;
 }
 
@@ -149,7 +171,7 @@ export async function postBytes<T>(path: string, body: ArrayBuffer): Promise<T> 
     headers: apiHeaders("application/octet-stream"),
     body,
   });
-  if (!response.ok) throw new Error(await apiErrorMessage(response));
+  if (!response.ok) throw await apiErrorFromResponse(response);
   return response.json() as Promise<T>;
 }
 
@@ -159,7 +181,7 @@ export async function putJson<T>(path: string, body: unknown): Promise<T> {
     headers: apiHeaders("application/json"),
     body: JSON.stringify(body),
   });
-  if (!response.ok) throw new Error(await apiErrorMessage(response));
+  if (!response.ok) throw await apiErrorFromResponse(response);
   return response.json() as Promise<T>;
 }
 
@@ -168,6 +190,6 @@ export async function deleteJson<T>(path: string): Promise<T> {
     method: "DELETE",
     headers: apiHeaders(),
   });
-  if (!response.ok) throw new Error(await apiErrorMessage(response));
+  if (!response.ok) throw await apiErrorFromResponse(response);
   return response.json() as Promise<T>;
 }
