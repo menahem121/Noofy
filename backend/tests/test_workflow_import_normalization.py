@@ -9,6 +9,7 @@ from app.workflows.import_normalization import (
     normalize_custom_nodes,
     normalize_models,
     normalize_unresolved_runtime_inputs,
+    repair_misclassified_multimodal_text_inputs,
     reject_unsupported_exported_launch_options,
     required_models_from_comfyui_workflow,
 )
@@ -392,6 +393,66 @@ def test_detect_unresolved_runtime_inputs_finds_local_media_and_file_values() ->
         "__noofy_runtime_three_d_input_required__",
         "__noofy_runtime_text_input_required__",
     ]
+
+
+@pytest.mark.parametrize(
+    ("node_type", "input_name"),
+    [
+        ("TextEncodeQwenImageEdit", "image"),
+        ("TextEncodeWithAudio", "audio"),
+        ("TextEncodeWithVideo", "video"),
+        ("TextEncode3D", "model_file"),
+    ],
+)
+def test_detect_unresolved_runtime_inputs_ignores_multimodal_encoder_media_sockets(
+    node_type: str,
+    input_name: str,
+) -> None:
+    unresolved = detect_unresolved_runtime_inputs(
+        {
+            "22:4": {
+                "class_type": node_type,
+                "inputs": {
+                    input_name: "__noofy_runtime_text_input_required__",
+                    "prompt": "turn the dog red",
+                },
+            }
+        }
+    )
+
+    assert unresolved == []
+
+
+def test_repair_misclassified_multimodal_text_inputs_removes_legacy_sentinel() -> None:
+    graph = {
+        "22:4": {
+            "class_type": "TextEncodeQwenImageEdit",
+            "inputs": {
+                "image": "__noofy_runtime_text_input_required__",
+                "prompt": "turn the dog red",
+            },
+        }
+    }
+    declared = normalize_unresolved_runtime_inputs(
+        [
+            {
+                "node_id": "22:4",
+                "node_type": "TextEncodeQwenImageEdit",
+                "input_name": "image",
+                "expected_kind": "text",
+                "required": True,
+            }
+        ]
+    )
+
+    repaired_graph, repaired_inputs = repair_misclassified_multimodal_text_inputs(
+        graph,
+        declared,
+    )
+
+    assert repaired_graph["22:4"]["inputs"] == {"prompt": "turn the dog red"}
+    assert repaired_inputs == []
+    assert "image" in graph["22:4"]["inputs"]
 
 
 def test_detect_unresolved_runtime_inputs_ignores_generic_model_loaders() -> None:

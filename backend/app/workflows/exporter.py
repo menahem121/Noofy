@@ -26,6 +26,10 @@ from app.workflows.import_capsule_lock import (
     model_locks_from_package,
 )
 from app.workflows.import_policy import trust_level_from_string
+from app.workflows.import_normalization import (
+    normalize_unresolved_runtime_inputs,
+    repair_misclassified_multimodal_text_inputs,
+)
 from app.workflows.library import (
     WorkflowLibraryMetadata,
     WorkflowLibraryStore,
@@ -602,7 +606,16 @@ class WorkflowExporter:
         graph_file = stored_comfyui_graph_file(package_dir)
         if not graph_file.exists():
             return None
-        return json.loads(graph_file.read_text(encoding="utf-8"))
+        graph = json.loads(graph_file.read_text(encoding="utf-8"))
+        stored_package = _read_stored_package_json(package_dir / "package.json")
+        unresolved_inputs = normalize_unresolved_runtime_inputs(
+            stored_package.get("unresolved_runtime_inputs")
+        )
+        repaired_graph, _ = repair_misclassified_multimodal_text_inputs(
+            graph,
+            unresolved_inputs,
+        )
+        return repaired_graph
 
     def _stored_comfyui_workflow(
         self,

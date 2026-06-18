@@ -992,6 +992,55 @@ def test_exported_archive_applies_explicit_dashboard_values_without_mutating_sto
     assert json.loads(graph_file.read_text(encoding="utf-8")) == before
 
 
+def test_reexport_does_not_restore_legacy_multimodal_text_media_sentinel(
+    tmp_path: Path,
+) -> None:
+    archive = _archive_with_json_updates(
+        _make_archive(dashboard=_CONFIGURED_DASHBOARD),
+        {
+            "comfyui_graph.json": lambda graph: graph.update(
+                {
+                    "22:4": {
+                        "class_type": "TextEncodeQwenImageEdit",
+                        "inputs": {
+                            "image": "__noofy_runtime_text_input_required__",
+                            "prompt": "turn the dog red",
+                        },
+                    }
+                }
+            )
+        },
+    )
+    archive = _archive_with_package_update(
+        archive,
+        lambda package: package.update(
+            {
+                "unresolved_runtime_inputs": [
+                    {
+                        "node_id": "22:4",
+                        "node_type": "TextEncodeQwenImageEdit",
+                        "input_name": "image",
+                        "current_value": "__noofy_runtime_text_input_required__",
+                        "reason": "creator_local_text_not_bundled",
+                        "expected_kind": "text",
+                        "required": True,
+                    }
+                ]
+            }
+        ),
+    )
+    exporter, workflow_id, _ = _setup_with_configured_dashboard(
+        tmp_path,
+        archive_bytes=archive,
+    )
+
+    exported_archive, _ = exporter.export_archive(workflow_id)
+
+    with zipfile.ZipFile(io.BytesIO(exported_archive)) as zf:
+        graph = json.loads(zf.read("comfyui_graph.json"))
+    assert graph["22:4"]["inputs"] == {"prompt": "turn the dog red"}
+
+
 def test_exported_archive_applies_export_only_metadata_without_mutating_store(tmp_path: Path) -> None:
     exporter, workflow_id, _ = _setup_with_configured_dashboard(tmp_path)
     package_dir = exporter._find_package_dir(workflow_id)

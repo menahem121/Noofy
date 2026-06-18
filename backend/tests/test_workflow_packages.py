@@ -369,6 +369,54 @@ def test_loader_filters_unresolved_inputs_resolved_by_dashboard_override(tmp_pat
     assert package.unresolved_runtime_inputs == []
 
 
+def test_loader_repairs_legacy_multimodal_text_input_requirement(tmp_path: Path) -> None:
+    package_dir = tmp_path / "packages" / "multimodal_workflow"
+    package_dir.mkdir(parents=True)
+    (package_dir / "package.json").write_text(
+        json.dumps(
+            {
+                "metadata": {
+                    "id": "multimodal_workflow",
+                    "name": "Multimodal Workflow",
+                    "version": "0.1.0",
+                },
+                "engine": "comfyui",
+                "required_models": [],
+                "comfyui_graph": {
+                    "22:4": {
+                        "class_type": "TextEncodeQwenImageEdit",
+                        "inputs": {
+                            "image": "__noofy_runtime_text_input_required__",
+                            "prompt": "turn the dog red",
+                        },
+                    }
+                },
+                "unresolved_runtime_inputs": [
+                    {
+                        "node_id": "22:4",
+                        "node_type": "TextEncodeQwenImageEdit",
+                        "input_name": "image",
+                        "current_value": "__noofy_runtime_text_input_required__",
+                        "reason": "creator_local_text_not_bundled",
+                        "expected_kind": "text",
+                        "required": True,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    package = WorkflowPackageLoader(tmp_path / "packages").get_package(
+        "multimodal_workflow"
+    )
+
+    assert package.comfyui_graph["22:4"]["inputs"] == {
+        "prompt": "turn the dog red"
+    }
+    assert package.unresolved_runtime_inputs == []
+
+
 def test_loader_repairs_imported_custom_node_metadata_from_source_files(tmp_path: Path) -> None:
     package_dir = tmp_path / "packages" / "image_workflow"
     package_dir.mkdir(parents=True)

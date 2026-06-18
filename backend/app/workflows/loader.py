@@ -6,6 +6,7 @@ from app.artifacts import ModelVerificationLevel
 from app.workflows.import_normalization import (
     filter_resolved_runtime_inputs,
     normalize_custom_nodes,
+    repair_misclassified_multimodal_text_inputs,
     required_models_from_comfyui_workflow,
 )
 from app.workflows.package import (
@@ -238,6 +239,13 @@ class WorkflowPackageLoader:
                     package_unresolved.append(UnresolvedRuntimeInput.model_validate(item))
                 except Exception:
                     continue
+            repaired_graph, package_unresolved = repair_misclassified_multimodal_text_inputs(
+                data_clean.get("comfyui_graph")
+                if isinstance(data_clean.get("comfyui_graph"), dict)
+                else {},
+                package_unresolved,
+            )
+            data_clean["comfyui_graph"] = repaired_graph
             data_clean["unresolved_runtime_inputs"] = [
                 item.model_dump()
                 for item in filter_resolved_runtime_inputs(package_unresolved, inputs)

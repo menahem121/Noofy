@@ -121,30 +121,33 @@ function emptyWorkflow(workflowId: string, workflowName: string): MockWorkflow {
 
 function reconcileDashboardSchemaForWorkflow(schema: DashboardSchema, workflow: MockWorkflow): DashboardSchema {
   let changed = false;
-  const widgets = schema.widgets.map((widget) => {
-    const currentValue = workflow.nodes
-      .flatMap((node) => node.values)
-      .find((value) => value.id === widget.valueId);
+  const workflowValues = workflow.nodes.flatMap((node) => node.values);
+  const reconcileWidgets = (widgets: DashboardWidget[]) => widgets.flatMap((widget) => {
+    const currentValue = workflowValues.find((value) => value.id === widget.valueId);
     if (currentValue) return widget;
 
-    const boundValue = workflow.nodes
-      .flatMap((node) => node.values)
-      .find((value) => {
-        if (value.nodeId !== widget.binding.nodeId) return false;
-        if (value.inputName === widget.binding.inputName) return true;
-        return isOutputWidgetType(widget.widgetType) && value.valueKind === "image_output";
-      });
-    if (!boundValue) return widget;
+    const boundValue = workflowValues.find((value) => {
+      if (value.nodeId !== widget.binding.nodeId) return false;
+      if (value.inputName === widget.binding.inputName) return true;
+      return isOutputWidgetType(widget.widgetType) && value.valueKind.endsWith("_output");
+    });
+    if (!boundValue) {
+      if (widget.widgetType === "note" && widget.hasExecutableBinding !== true) return widget;
+      changed = true;
+      return [];
+    }
 
     changed = true;
-    return {
+    return [{
       ...widget,
       valueId: boundValue.id,
       binding: { nodeId: boundValue.nodeId, inputName: boundValue.inputName },
-    };
+    }];
   });
+  const widgets = reconcileWidgets(schema.widgets);
+  const hiddenWidgets = reconcileWidgets(schema.hiddenWidgets ?? []);
 
-  return changed ? { ...schema, widgets } : schema;
+  return changed ? normalizeDashboardSchema({ ...schema, widgets, hiddenWidgets }) : schema;
 }
 
 export function DashboardBuilderPage({

@@ -124,6 +124,7 @@ from app.workflows.import_normalization import (
     optional_string_field,
     raw_comfyui_api_graph,
     reject_unsupported_exported_launch_options,
+    repair_misclassified_multimodal_text_inputs,
     string_field,
 )
 from app.workflows.import_capsule_lock import (
@@ -1387,6 +1388,10 @@ class NoofyArchiveImporter:
                 _detect_unresolved_runtime_inputs(graph),
             ),
             dashboard_inputs,
+        )
+        graph, unresolved_inputs = repair_misclassified_multimodal_text_inputs(
+            graph,
+            unresolved_inputs,
         )
         observed_hardware = _observed_hardware(capsule_json, export_report)
 

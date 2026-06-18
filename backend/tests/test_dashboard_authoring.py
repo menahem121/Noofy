@@ -700,6 +700,53 @@ def test_bindable_inputs_mark_required_runtime_text_path_inputs(
     assert inputs_by_binding[("22:5", "image")]["required_runtime_kind"] == "text"
 
 
+def test_bindable_inputs_drop_legacy_multimodal_text_media_requirements(
+    tmp_path: Path,
+) -> None:
+    graph = {
+        "22:4": {
+            "class_type": "TextEncodeQwenImageEdit",
+            "inputs": {
+                "image": "__noofy_runtime_text_input_required__",
+                "prompt": "turn the dog red",
+            },
+        },
+        "9": {
+            "class_type": "SaveImage",
+            "inputs": {"images": ["22:4", 0], "filename_prefix": "out"},
+        },
+    }
+    archive = _make_minimal_archive(
+        graph=graph,
+        package_update={
+            "unresolved_runtime_inputs": [
+                {
+                    "node_id": "22:4",
+                    "node_type": "TextEncodeQwenImageEdit",
+                    "input_name": "image",
+                    "current_value": "__noofy_runtime_text_input_required__",
+                    "reason": "creator_local_text_not_bundled",
+                    "expected_kind": "text",
+                    "required": True,
+                }
+            ]
+        },
+    )
+    service, workflow_id = _import_and_setup(tmp_path, archive)
+
+    result = service.get_bindable_inputs(workflow_id)
+
+    text_encoder = next(
+        node for node in result["nodes"] if node["node_id"] == "22:4"
+    )
+    assert [item["input_name"] for item in text_encoder["inputs"]] == ["prompt"]
+    package = service._get_package(workflow_id)
+    assert package.comfyui_graph["22:4"]["inputs"] == {
+        "prompt": "turn the dog red"
+    }
+    assert package.unresolved_runtime_inputs == []
+
+
 def test_save_dashboard_rejects_hidden_required_text_path_inputs_with_empty_defaults(
     tmp_path: Path,
 ) -> None:

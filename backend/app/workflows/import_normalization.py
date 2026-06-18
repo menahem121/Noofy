@@ -23,6 +23,7 @@ LOCAL_AUDIO_NODE_TYPES = {"LoadAudio"}
 LOCAL_VIDEO_NODE_TYPES = {"LoadVideo", "VHS_LoadVideo", "VHS_LoadVideoPath"}
 LOCAL_THREE_D_NODE_TYPES = {"Load3D", "Load3DAnimation"}
 WORKFLOW_MEDIA_KINDS = frozenset({"image", "audio", "video", "3d", "text", "file"})
+MULTIMODAL_MEDIA_INPUT_NAMES = frozenset({"image", "audio", "video", "model_file"})
 FILE_INPUT_NAMES = frozenset(
     {
         "file",
@@ -1226,7 +1227,9 @@ def expected_runtime_input_kind(node_type: str, input_name: str, value: Any) -> 
     ) and normalized_input in {"model", "mesh", "model_file", "file", "filename", "path", "model_path", "mesh_path"}:
         return "3d"
     if "text" in normalized_node and normalized_input in FILE_INPUT_NAMES:
-        return "text"
+        value_kind = kind_from_path_like_value(value)
+        if normalized_input not in MULTIMODAL_MEDIA_INPUT_NAMES or value_kind == "text":
+            return "text"
     if is_generic_file_input(node_type, input_name, value):
         return kind_from_path_like_value(value) or "file"
     return None
@@ -1336,6 +1339,57 @@ def redacted_input_value(kind: str) -> str:
         return "__noofy_runtime_image_input_required__"
     safe_kind = "three_d" if kind == "3d" else kind
     return f"__noofy_runtime_{safe_kind}_input_required__"
+
+
+def repair_misclassified_multimodal_text_inputs(
+    graph: dict[str, Any],
+    unresolved_inputs: list[UnresolvedRuntimeInput],
+) -> tuple[dict[str, Any], list[UnresolvedRuntimeInput]]:
+    """Remove legacy text-file sentinels assigned to optional media sockets."""
+    protected_text_paths = {
+        (runtime_input.node_id, runtime_input.input_name)
+        for runtime_input in unresolved_inputs
+        if runtime_input.expected_kind == "text"
+        and runtime_input.extension_hint in TEXT_EXTENSIONS
+    }
+    invalid_bindings: set[tuple[str, str]] = set()
+    for raw_node_id, node in graph.items():
+        if not isinstance(node, dict):
+            continue
+        node_id = str(raw_node_id)
+        node_type = str(node.get("class_type") or node.get("type") or "").casefold()
+        if "text" not in node_type:
+            continue
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        for input_name, value in inputs.items():
+            normalized_input = str(input_name).casefold()
+            binding = (node_id, str(input_name))
+            if binding in protected_text_paths:
+                continue
+            if normalized_input not in MULTIMODAL_MEDIA_INPUT_NAMES:
+                continue
+            if value == redacted_input_value("text"):
+                invalid_bindings.add(binding)
+
+    if not invalid_bindings:
+        return graph, unresolved_inputs
+
+    repaired_graph = dict(graph)
+    for node_id, input_name in invalid_bindings:
+        node = repaired_graph.get(node_id)
+        if not isinstance(node, dict):
+            continue
+        repaired_inputs = dict(node.get("inputs") or {})
+        repaired_inputs.pop(input_name, None)
+        repaired_graph[node_id] = {**node, "inputs": repaired_inputs}
+
+    return repaired_graph, [
+        runtime_input
+        for runtime_input in unresolved_inputs
+        if (runtime_input.node_id, runtime_input.input_name) not in invalid_bindings
+    ]
 
 
 def unresolved_input_reason(kind: str) -> str:

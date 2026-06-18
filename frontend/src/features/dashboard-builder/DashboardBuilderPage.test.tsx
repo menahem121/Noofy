@@ -1819,6 +1819,85 @@ describe("DashboardBuilderPage", () => {
     expect(payload.dashboard.outputs ?? []).toEqual([]);
   });
 
+  it("removes stale draft controls when their workflow bindings no longer exist", async () => {
+    const workflowId = "wf-multimodal";
+    const staleDraft: DashboardSchema = {
+      version: 1,
+      workflowId,
+      workflowName: "Multimodal workflow",
+      layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      groups: [],
+      widgets: [
+        {
+          id: "note-1",
+          valueId: "note:note-1",
+          binding: { nodeId: "", inputName: "" },
+          widgetType: "note",
+          title: "Instructions",
+          description: "Keep this note.",
+          defaultValue: null,
+        },
+        {
+          id: "ctrl-node-22:4-image",
+          valueId: "node-22:4-image",
+          binding: { nodeId: "22:4", inputName: "image" },
+          widgetType: "string_field",
+          title: "Stale image input",
+          description: "",
+          defaultValue: "",
+          layout: { x: 0, y: 0, w: 16, h: 4 },
+        },
+      ],
+    };
+    saveDashboardDraft(staleDraft, dashboardSchemaFingerprint(staleDraft));
+    const onContinue = vi.fn();
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith(`/api/workflows/${workflowId}/bindable-inputs`)) {
+        return Promise.resolve(jsonResponse({
+          nodes: [
+            {
+              node_id: "22:4",
+              node_type: "TextEncodeQwenImageEdit",
+              node_title: "TextEncodeQwenImageEdit",
+              is_image_node: false,
+              is_lora_node: false,
+              inputs: [
+                {
+                  input_name: "prompt",
+                  current_value: "turn the dog red",
+                  kind: "string",
+                  suggested_widget_type: "textarea",
+                  widget_types: ["textarea", "string_field"],
+                },
+              ],
+            },
+          ],
+        }));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(
+      <DashboardBuilderPage
+        workflowId={workflowId}
+        workflowName="Multimodal workflow"
+        initialSchema={staleDraft}
+        onBack={vi.fn()}
+        onContinue={onContinue}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => expect(screen.queryByText("Stale image input")).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: /^continue$/i }));
+
+    expect(onContinue).toHaveBeenCalledTimes(1);
+    const reconciled = onContinue.mock.calls[0][0] as DashboardSchema;
+    expect(reconciled.widgets.map((widget) => widget.id)).toEqual(["note-1"]);
+  });
+
   it("preserves a removed input image widget as a hidden workflow input", async () => {
     const emptySchema: DashboardSchema = {
       version: 1,
