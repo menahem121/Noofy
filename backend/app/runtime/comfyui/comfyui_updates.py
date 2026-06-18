@@ -687,7 +687,7 @@ class ComfyUIUpdateService:
                     selected_version,
                     "Activating validated ComfyUI version.",
                 )
-                await self._activate(record)
+                await self._activate_and_restart_if_needed(record)
                 self._set_job(
                     job_id,
                     "completed",
@@ -794,7 +794,7 @@ class ComfyUIUpdateService:
                     resolved_tag=record.tag,
                     repair_reason="manual_rebuild",
                 )
-                await self._activate(rebuilt)
+                await self._activate_and_restart_if_needed(rebuilt)
                 self._set_job(
                     job_id,
                     "completed",
@@ -1349,6 +1349,19 @@ class ComfyUIUpdateService:
         finally:
             if activation_prepared and self.abort_runtime_activation is not None:
                 self.abort_runtime_activation(record)
+
+    async def _activate_and_restart_if_needed(
+        self, record: LocalComfyUIVersionRecord
+    ) -> None:
+        restart_after_activation = self.runtime_manager.is_managed_process_running()
+        await self._activate(record)
+        if not restart_after_activation:
+            return
+        started = await self.runtime_manager.start()
+        if started.status not in {"started", "already_running"}:
+            raise RuntimeError(
+                f"ComfyUI was activated but could not restart: {started.status}"
+            )
 
     async def _fetch_upstream_releases(self) -> list[UpstreamComfyUIRelease]:
         return await fetch_upstream_releases()

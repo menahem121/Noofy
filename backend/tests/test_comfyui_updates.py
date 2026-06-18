@@ -140,6 +140,39 @@ class FakeRepairManager:
         self.reconfigured = True
 
 
+class RunningActivationManager(FakeRepairManager):
+    def __init__(self, repo_dir: Path) -> None:
+        super().__init__(repo_dir)
+        self.running = True
+        self.stop_calls = 0
+
+    async def status(self) -> ComfyUIRuntimeStatus:
+        return ComfyUIRuntimeStatus(
+            mode="managed",
+            reachable=self.running,
+            base_url="http://127.0.0.1:9999",
+            repo_dir=str(self.repo_dir),
+            managed_process_running=self.running,
+            pid=123 if self.running else None,
+        )
+
+    async def start(self) -> ProcessActionResult:
+        self.start_calls += 1
+        self.running = self.next_start_status in {"started", "already_running"}
+        return ProcessActionResult(
+            status=self.next_start_status,
+            comfyui=await self.status(),
+        )
+
+    async def stop(self) -> ProcessActionResult:
+        self.stop_calls += 1
+        self.running = False
+        return ProcessActionResult(status="stopped", comfyui=await self.status())
+
+    def is_managed_process_running(self) -> bool:
+        return self.running
+
+
 def _write_active(paths, record: LocalComfyUIVersionRecord) -> None:
     import json
 
@@ -281,6 +314,47 @@ async def test_successful_update_installs_fresh_env_and_activates(
     assert manager.repo_dir == Path(versions.current.source_path)
     assert manager.environment is not None
     assert manager.environment.venv_dir == Path(versions.current.env_path)
+
+
+@pytest.mark.anyio
+async def test_successful_update_restarts_running_runtime_after_activation(
+    tmp_path: Path,
+) -> None:
+    source_archive = tmp_path / "source.zip"
+    _source_zip(source_archive)
+    paths = resolve_paths(env={"NOOFY_DATA_DIR": str(tmp_path / "data")})
+    paths.ensure_directories()
+    manager = RunningActivationManager(tmp_path / "bundled")
+
+    async def downloader(url: str, dest: Path) -> int:
+        dest.write_bytes(source_archive.read_bytes())
+        return dest.stat().st_size
+
+    service = ComfyUIUpdateService(
+        paths=paths,
+        runtime_manager=manager,  # type: ignore[arg-type]
+        mode="managed",
+        developer_override=False,
+        bootstrap_python_executable="python3",
+        torch_cuda_index_url=None,
+        torch_cpu_index_url="https://download.pytorch.org/whl/cpu",
+        release_fetcher=lambda: _async_releases([_release("v0.20.1")]),
+        archive_downloader=downloader,
+        command_runner=_fake_command,
+        smoke_tester=lambda *_: _async_noop(),
+        log_store=LogStore(),
+    )
+
+    await service._run_update("latest", "job-1")
+    status = service.update_status()
+
+    assert status.status == "completed"
+    assert status.activated_version == "v0.20.1"
+    assert manager.stop_calls == 1
+    assert manager.start_calls == 1
+    assert manager.running
+    assert manager.reconfigured
+    assert manager.repo_dir == Path(status.installed_path or "")
 
 
 @pytest.mark.anyio
