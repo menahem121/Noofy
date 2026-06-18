@@ -1261,8 +1261,10 @@ def is_generic_file_input(node_type: str, input_name: str, value: Any) -> bool:
 
 
 def value_contains_local_reference(value: Any) -> bool:
+    if is_graph_link(value):
+        return False
     if isinstance(value, str):
-        return bool(value.strip()) and not is_graph_link(value)
+        return bool(value.strip())
     if isinstance(value, dict):
         if is_package_asset_value(value):
             return False
@@ -1272,8 +1274,15 @@ def value_contains_local_reference(value: Any) -> bool:
     return False
 
 
-def is_graph_link(value: str) -> bool:
-    return bool(re.fullmatch(r"\d+", value))
+def is_graph_link(value: Any) -> bool:
+    return (
+        isinstance(value, list)
+        and len(value) == 2
+        and isinstance(value[0], (str, int))
+        and not isinstance(value[0], bool)
+        and isinstance(value[1], int)
+        and not isinstance(value[1], bool)
+    )
 
 
 def kind_from_path_like_value(value: Any) -> str | None:

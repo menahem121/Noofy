@@ -423,6 +423,25 @@ def test_detect_unresolved_runtime_inputs_ignores_multimodal_encoder_media_socke
     assert unresolved == []
 
 
+@pytest.mark.parametrize("source_node_id", ["22:14", "22.14"])
+def test_detect_unresolved_runtime_inputs_ignores_subgraph_links(
+    source_node_id: str,
+) -> None:
+    unresolved = detect_unresolved_runtime_inputs(
+        {
+            "22:4": {
+                "class_type": "TextEncodeQwenImageEdit",
+                "inputs": {
+                    "image": [source_node_id, 0],
+                    "prompt": "turn the dog red",
+                },
+            }
+        }
+    )
+
+    assert unresolved == []
+
+
 def test_repair_misclassified_multimodal_text_inputs_removes_legacy_sentinel() -> None:
     graph = {
         "22:4": {

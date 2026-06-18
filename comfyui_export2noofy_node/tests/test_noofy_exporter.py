@@ -279,6 +279,45 @@ def test_selected_input_asset_becomes_pinned_dashboard_default(tmp_path: Path) -
     assert str(image) not in json.dumps(documents)
 
 
+def test_subgraph_links_are_not_reported_or_redacted_as_input_assets(
+    tmp_path: Path,
+) -> None:
+    image = tmp_path / "green-dog.png"
+    image.write_bytes(b"image-bytes")
+    graph = {
+        "13": {
+            "class_type": "LoadImage",
+            "inputs": {"image": str(image)},
+        },
+        "22:14": {
+            "class_type": "ImageScaleToTotalPixels",
+            "inputs": {"image": ["13", 0]},
+        },
+        "22:4": {
+            "class_type": "TextEncodeQwenImageEdit",
+            "inputs": {"image": ["22:14", 0], "prompt": "turn the dog red"},
+        },
+        "22:5": {
+            "class_type": "TextEncodeQwenImageEdit",
+            "inputs": {"image": ["22.14", 0], "prompt": ""},
+        },
+    }
+
+    candidates = exporter.collect_input_asset_candidates(graph)
+
+    assert [(candidate.node_id, candidate.input_name) for candidate in candidates] == [
+        ("13", "image")
+    ]
+    bundled = exporter.bundle_selected_input_assets(candidates, [candidates[0].id])
+    package_graph, _adjustments, unresolved = exporter.redact_local_inputs_for_package(
+        graph,
+        bundled_input_assets=bundled,
+    )
+    assert package_graph["22:4"]["inputs"]["image"] == ["22:14", 0]
+    assert package_graph["22:5"]["inputs"]["image"] == ["22.14", 0]
+    assert unresolved == []
+
+
 def test_build_package_documents_preserves_sanitized_comfyui_widget_metadata() -> None:
     documents = exporter.build_package_documents(
         graph={
