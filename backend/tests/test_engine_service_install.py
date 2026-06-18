@@ -28,7 +28,16 @@ from app.runtime.dependencies.isolation import (
     SmokeTestReport,
     SmokeTestStatus,
 )
-from app.runtime.memory.memory_governor import MachineMemorySnapshot, MemoryBackend, MemoryPressureLevel
+from app.runtime.memory.memory_governor import (
+    MachineMemorySnapshot,
+    MemoryBackend,
+    MemoryDecisionAction,
+    MemoryGovernorDecision,
+    MemoryPressureLevel,
+    MemoryReleaseCheckResult,
+    MemoryReleaseStatus,
+    WorkflowMemoryEstimate,
+)
 from app.runtime.models.model_store import ModelStore
 from app.runtime.runners.runner_process import RunnerLaunchSpec, RunnerProcessHandle, RunnerProcessStatus
 from app.runtime.runners.supervisor import (
@@ -1207,6 +1216,98 @@ async def test_start_workflow_runner_blocks_when_memory_release_times_out_after_
     assert result["status"] == RunnerStatus.MEMORY_CLEANUP_FAILED.value
     assert result["memory_release_check"]["status"] == "timeout"
     assert coordinator.stopped_runner_ids == ["idle-light-runner"]
+    assert coordinator.started_specs == []
+
+
+@pytest.mark.anyio
+async def test_run_reports_memory_block_when_cleanup_succeeds_but_ram_is_insufficient(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    packages_dir = tmp_path / "packages"
+    capsule_payload = _runner_capsule_payload(runner_char="2")
+    capsule_payload["workflow"]["package_id"] = "text_to_image_v0"
+    capsule_payload["custom_nodes"] = [
+        {
+            "package_id": "custom-node-a",
+            "source": "https://example.invalid/custom-node-a.git",
+            "trust_level": "quarantined_community",
+            "node_types": ["CustomNodeA"],
+        }
+    ]
+    _write_workflow_with_capsule(packages_dir, "text_to_image_v0", capsule_payload)
+    shutil.copy2(
+        _bundled_packages_dir() / "text_to_image_v0" / "dashboard.json",
+        packages_dir / "text_to_image_v0" / "dashboard.json",
+    )
+    coordinator = None
+
+    def coordinator_factory(supervisor: RunnerSupervisor) -> RecordingRunnerCoordinator:
+        nonlocal coordinator
+        coordinator = RecordingRunnerCoordinator(supervisor)
+        return coordinator
+
+    service = _build_service(
+        tmp_path,
+        packages_dir=packages_dir,
+        runner_coordinator_factory=coordinator_factory,
+    )
+    await service.prepare_workflow("text_to_image_v0")
+    decision = MemoryGovernorDecision(
+        action=MemoryDecisionAction.EVICT_THEN_START,
+        reason_code="gpu_estimate_uncertain",
+        workflow_id="text_to_image_v0",
+        workflow_estimate=WorkflowMemoryEstimate(
+            workflow_id="text_to_image_v0",
+            estimated_peak_vram_mb=8_000,
+            estimated_peak_ram_mb=6_000,
+        ),
+    )
+
+    monkeypatch.setattr(
+        service.memory_service,
+        "decision_for_runner_start",
+        lambda **_kwargs: decision,
+    )
+
+    async def cleanup_succeeded(*_args, **_kwargs) -> bool:
+        return True
+
+    async def released_but_insufficient(*_args, **_kwargs) -> MemoryReleaseCheckResult:
+        return MemoryReleaseCheckResult(
+            status=MemoryReleaseStatus.RELEASED_INSUFFICIENT_MEMORY,
+            reason_code="memory_released_insufficient_memory",
+            required_free_vram_mb=11_000,
+            required_free_ram_mb=8_000,
+            baseline_free_vram_mb=4_000,
+            baseline_free_ram_mb=5_500,
+            final_free_vram_mb=22_000,
+            final_free_ram_mb=5_600,
+            blocking_constraints=["ram_below_required"],
+        )
+
+    monkeypatch.setattr(
+        service.memory_service,
+        "cleanup_idle_runners_for_memory_decision",
+        cleanup_succeeded,
+    )
+    monkeypatch.setattr(
+        service.memory_service,
+        "wait_for_memory_release_after_cleanup",
+        released_but_insufficient,
+    )
+
+    result = await service.run_workflow("text_to_image_v0", inputs={}, options={})
+
+    assert isinstance(result, EngineJob)
+    assert result.status == "blocked_by_memory"
+    assert result.error_code == "insufficient_memory"
+    assert result.memory_status is not None
+    assert result.memory_status["state"] == "blocked_by_memory"
+    assert result.memory_decision is not None
+    release_check = result.memory_decision["developer_details"]["memory_cleanup_block"]
+    assert release_check["release_check"]["status"] == "released_insufficient_memory"
+    assert coordinator is not None
     assert coordinator.started_specs == []
 
 

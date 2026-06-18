@@ -2712,6 +2712,85 @@ async def test_same_core_unconfirmed_free_keeps_residency_and_does_not_report_re
     assert core_after.observed_execution_peak_vram_mb == 6000
 
 
+@pytest.mark.anyio
+async def test_confirmed_core_cleanup_clears_residency_when_ram_still_blocks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = RecordingAdapter()
+    baseline = MachineMemorySnapshot(
+        backend=MemoryBackend.CUDA,
+        total_vram_mb=24_000,
+        free_vram_mb=4_000,
+        total_ram_mb=16_000,
+        free_ram_mb=5_500,
+        memory_pressure=MemoryPressureLevel.MEDIUM,
+    )
+    after_cleanup = baseline.model_copy(
+        update={
+            "free_vram_mb": 22_000,
+            "free_ram_mb": 5_600,
+            "memory_pressure": MemoryPressureLevel.LOW,
+        }
+    )
+    service, supervisor = _build_service(
+        adapter,
+        memory_observer=SequenceMemoryObserver(
+            [baseline, baseline, after_cleanup]
+        ),
+    )
+    supervisor.mark_runner_job_started(
+        CORE_RUNNER_ID,
+        "old-job",
+        workflow_id="workflow-a",
+    )
+    supervisor.mark_runner_job_finished(CORE_RUNNER_ID, "old-job")
+    supervisor.fill_runner_memory_observation(
+        CORE_RUNNER_ID,
+        observed_execution_peak_vram_mb=6000,
+        observed_execution_peak_ram_mb=1000,
+    )
+    core_before = supervisor.core_runner()
+    decision = MemoryGovernorDecision(
+        action=MemoryDecisionAction.EVICT_THEN_START,
+        reason_code="gpu_estimate_uncertain",
+        workflow_id="workflow-b",
+        evict_runner_ids=[CORE_RUNNER_ID],
+        workflow_estimate=WorkflowMemoryEstimate(
+            workflow_id="workflow-b",
+            estimated_peak_vram_mb=8_000,
+            estimated_peak_ram_mb=6_000,
+        ),
+        machine_snapshot=baseline,
+        runner_snapshots=[RunnerMemorySnapshot.from_descriptor(core_before)],
+        required_vram_margin_mb=3_000,
+        required_ram_margin_mb=2_000,
+    )
+    monkeypatch.setattr(
+        memory_service_module,
+        "settings",
+        replace(memory_service_module.settings, memory_release_timeout_seconds=0),
+    )
+
+    cleaned_up = await service.memory_service.cleanup_idle_runners_for_memory_decision(
+        decision,
+        metric_name="confirmed_cleanup_insufficient_ram",
+        log_source="test",
+        log_message="test cleanup",
+    )
+    release = await service.memory_service.wait_for_memory_release_after_cleanup(
+        decision
+    )
+
+    assert cleaned_up is True
+    assert release.status is MemoryReleaseStatus.RELEASED_INSUFFICIENT_MEMORY
+    assert release.blocking_constraints == ["ram_below_required"]
+    core_after = supervisor.core_runner()
+    assert core_after.status is RunnerStatus.IDLE
+    assert core_after.last_workflow_id is None
+    assert core_after.model_residency_signature is None
+    assert core_after.observed_execution_peak_vram_mb is None
+
+
 async def _same_core_unconfirmed_release(
     monkeypatch: pytest.MonkeyPatch,
     *,

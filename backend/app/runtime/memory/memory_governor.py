@@ -135,6 +135,10 @@ class MemoryObservationOutcome(StrEnum):
 
 class MemoryReleaseStatus(StrEnum):
     RELEASED = "released"
+    # Cleanup was observed, but another admission constraint remains unmet.
+    # The cleaned runner's residency may be cleared, while the next workflow
+    # must still remain blocked.
+    RELEASED_INSUFFICIENT_MEMORY = "released_insufficient_memory"
     # `/free` was acknowledged but no RAM/VRAM drop could be observed. This is
     # NOT a proven release: it is only used to allow a narrow same-process
     # cautious-start, and the runner's residency must stay intact.
@@ -2099,21 +2103,36 @@ async def wait_for_memory_release_async(
                 require_observed_drop=require_observed_drop or confirm_on_drop_only,
                 memory_drop_observed=memory_drop_observed,
             )
+            cleanup_observed_but_insufficient = (
+                require_observed_drop and memory_drop_observed
+            )
             timeline.append(
                 {
-                    "state": "timeout",
+                    "state": (
+                        "released_insufficient_memory"
+                        if cleanup_observed_but_insufficient
+                        else "timeout"
+                    ),
                     "free_vram_mb": snapshot.free_vram_mb,
                     "free_ram_mb": snapshot.free_ram_mb,
                     "blocking_constraints": blocking_constraints,
                 }
             )
             return MemoryReleaseCheckResult(
-                status=MemoryReleaseStatus.TIMEOUT,
+                status=(
+                    MemoryReleaseStatus.RELEASED_INSUFFICIENT_MEMORY
+                    if cleanup_observed_but_insufficient
+                    else MemoryReleaseStatus.TIMEOUT
+                ),
                 required_free_vram_mb=required_free_vram_mb,
                 required_free_ram_mb=required_free_ram_mb,
                 snapshots=snapshots,
                 timeline=timeline,
-                reason_code="memory_release_timeout",
+                reason_code=(
+                    "memory_released_insufficient_memory"
+                    if cleanup_observed_but_insufficient
+                    else "memory_release_timeout"
+                ),
                 baseline_free_vram_mb=baseline_snapshot.free_vram_mb
                 if baseline_snapshot is not None
                 else None,

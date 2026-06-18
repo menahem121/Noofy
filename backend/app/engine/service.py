@@ -928,6 +928,11 @@ class EngineService:
                 RunnerStatus.STARTING.value,
             }:
                 return start
+            if start.get("status") in {
+                RunnerStatus.BLOCKED_BY_MEMORY.value,
+                RunnerStatus.MEMORY_CLEANUP_FAILED.value,
+            }:
+                return start
             return _workflow_runner_unavailable_result(workflow_id, start)
         return None
 

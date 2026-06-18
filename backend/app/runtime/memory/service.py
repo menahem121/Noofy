@@ -616,9 +616,13 @@ class MemoryGovernorService:
             initial_poll_interval_seconds=settings.memory_release_initial_poll_interval_seconds,
             max_poll_interval_seconds=settings.memory_release_max_poll_interval_seconds,
         )
+        cleanup_confirmed = release_check.status in {
+            MemoryReleaseStatus.RELEASED,
+            MemoryReleaseStatus.RELEASED_INSUFFICIENT_MEMORY,
+        }
         self._finalize_release_reservations(
             reservation_tokens,
-            released=release_check.status is MemoryReleaseStatus.RELEASED,
+            released=cleanup_confirmed,
         )
         self._log_release_check(decision, release_check, narrow_same_core=False)
         return release_check
@@ -1142,10 +1146,23 @@ def _memory_cleanup_failed_job(
     reason_code: str,
     release_check: MemoryReleaseCheckResult | None = None,
 ) -> EngineJob:
+    cleanup_succeeded = (
+        release_check is not None
+        and release_check.status
+        is MemoryReleaseStatus.RELEASED_INSUFFICIENT_MEMORY
+    )
+    message = (
+        "Noofy freed memory, but the machine still does not have enough available memory."
+        if cleanup_succeeded
+        else "Noofy could not confirm that enough memory was released for this workflow."
+    )
     memory_decision = decision.model_dump(mode="json")
+    cleanup_details_key = (
+        "memory_cleanup_block" if cleanup_succeeded else "memory_cleanup_failure"
+    )
     memory_decision["developer_details"] = {
         **memory_decision["developer_details"],
-        "memory_cleanup_failure": {
+        cleanup_details_key: {
             "reason_code": reason_code,
             "release_check": release_check.model_dump(mode="json")
             if release_check is not None
@@ -1157,14 +1174,14 @@ def _memory_cleanup_failed_job(
         workflow_id=decision.workflow_id or "unknown",
         engine="noofy",
         status="blocked_by_memory",
-        message="Noofy could not confirm that enough memory was released for this workflow.",
+        message=message,
         error_code="insufficient_memory",
         memory_requirement=memory_requirement_for_decision(decision),
         memory_decision=memory_decision,
         memory_status={
             **memory_user_status_for_decision(decision).model_dump(mode="json"),
-            "state": "memory_cleanup_failed",
-            "message": "Noofy could not confirm that enough memory was released for this workflow.",
+            "state": "blocked_by_memory" if cleanup_succeeded else "memory_cleanup_failed",
+            "message": message,
         },
     )
 

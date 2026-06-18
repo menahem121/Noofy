@@ -892,6 +892,7 @@ async def test_wait_for_memory_release_async_requires_observed_drop_when_request
     )
 
     assert result.status is MemoryReleaseStatus.TIMEOUT
+    assert result.reason_code == "memory_release_timeout"
     assert result.timeline[-1]["state"] == "timeout"
     assert not any(
         event["state"] == "observed_memory_drop"
@@ -993,12 +994,14 @@ async def test_wait_for_memory_release_async_records_ram_and_vram_proof_on_block
         timeout_seconds=0,
     )
 
-    assert result.status is MemoryReleaseStatus.TIMEOUT
+    assert result.status is MemoryReleaseStatus.RELEASED_INSUFFICIENT_MEMORY
+    assert result.reason_code == "memory_released_insufficient_memory"
     assert result.baseline_free_vram_mb == 2_000
     assert result.baseline_free_ram_mb == 2_000
     assert result.final_free_vram_mb == 7_000
     assert result.final_free_ram_mb == 2_500
     assert result.blocking_constraints == ["ram_below_required"]
+    assert result.timeline[-1]["state"] == "released_insufficient_memory"
     assert result.timeline[-1]["blocking_constraints"] == ["ram_below_required"]
 
 

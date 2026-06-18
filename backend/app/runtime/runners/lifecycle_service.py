@@ -1159,6 +1159,25 @@ class WorkflowRunnerLifecycleService:
                             }
                         release_check = await self.memory_service.wait_for_memory_release_after_cleanup(memory_decision)
                         if release_check.status is not MemoryReleaseStatus.RELEASED:
+                            cleanup_succeeded = (
+                                release_check.status
+                                is MemoryReleaseStatus.RELEASED_INSUFFICIENT_MEMORY
+                            )
+                            blocked_status = (
+                                RunnerStatus.BLOCKED_BY_MEMORY
+                                if cleanup_succeeded
+                                else RunnerStatus.MEMORY_CLEANUP_FAILED
+                            )
+                            blocked_state = (
+                                "blocked_by_memory"
+                                if cleanup_succeeded
+                                else "memory_cleanup_failed"
+                            )
+                            blocked_message = (
+                                "Noofy freed memory, but the machine still does not have enough available memory."
+                                if cleanup_succeeded
+                                else "Noofy could not confirm that enough memory was released for this workflow."
+                            )
                             self.log_store.add(
                                 "warning",
                                 "Memory cleanup did not release enough memory",
@@ -1179,16 +1198,16 @@ class WorkflowRunnerLifecycleService:
                             )
                             return {
                                 "workflow_id": workflow_id,
-                                "status": RunnerStatus.MEMORY_CLEANUP_FAILED.value,
+                                "status": blocked_status.value,
                                 "runner": None,
                                 "pid": None,
                                 "install_status": InstallStatus.READY.value,
-                                "error": "Noofy freed memory, but the machine still does not have enough available memory.",
+                                "error": blocked_message,
                                 "memory_decision": memory_decision.model_dump(mode="json"),
                                 "memory_status": {
                                     **self.memory_service.memory_status_payload(memory_decision),
-                                    "state": "memory_cleanup_failed",
-                                    "message": "Noofy freed memory, but the machine still does not have enough available memory.",
+                                    "state": blocked_state,
+                                    "message": blocked_message,
                                 },
                                 "memory_release_check": release_check.model_dump(mode="json"),
                             }
