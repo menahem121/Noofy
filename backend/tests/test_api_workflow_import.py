@@ -2,10 +2,12 @@ import asyncio
 import dataclasses
 import hashlib
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
+from app import main as main_module
 from app.composition import ApiServices
 from app.diagnostics import LogStore
 from app.engine.models import RequiredModelSummary
@@ -397,12 +399,23 @@ class FakeImportService:
         self.shutdown_called = True
 
 
+class FakeComfyUISidecarService:
+    def __init__(self) -> None:
+        self.started = False
+        self.runtime_manager = SimpleNamespace(log_store=LogStore())
+
+    async def start_comfyui(self):
+        self.started = True
+        return SimpleNamespace(status="skipped")
+
+
 def _import_test_app(engine_service):
     placeholder = object()
+    sidecar_service = FakeComfyUISidecarService()
     return create_app(
         services=ApiServices(
             engine_service=engine_service,
-            comfyui_sidecar_service=placeholder,
+            comfyui_sidecar_service=sidecar_service,
             user_state_service=placeholder,
             asset_service=placeholder,
             gallery_store=placeholder,
@@ -433,6 +446,26 @@ def _import_test_app(engine_service):
             history_service=None,
         )
     )
+
+
+def test_import_test_app_lifespan_supports_managed_runtime_mode(monkeypatch) -> None:
+    fake_service = FakeImportService()
+    app = _import_test_app(fake_service)
+    sidecar_service = app.state.api_services.comfyui_sidecar_service
+    monkeypatch.setattr(
+        main_module,
+        "settings",
+        dataclasses.replace(main_module.settings, comfyui_runtime_mode="managed"),
+    )
+
+    async def run_lifespan() -> None:
+        async with main_module.lifespan(app):
+            await asyncio.sleep(0)
+
+    asyncio.run(run_lifespan())
+
+    assert sidecar_service.started is True
+    assert fake_service.shutdown_called is True
 
 
 def _staged_import_engine_service(tmp_path) -> EngineService:
