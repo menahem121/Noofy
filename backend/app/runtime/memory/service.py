@@ -41,6 +41,7 @@ from app.runtime.memory.memory_governor import (
     decide_memory_admission,
     likely_memory_error,
     memory_requirement_for_decision,
+    memory_release_blocking_constraints,
     memory_user_status_for_decision,
     record_memory_governor_decision,
     retry_after_memory_cleanup_decision,
@@ -144,6 +145,8 @@ class _CustomNodeMemoryUncertainty:
 @dataclass(frozen=True)
 class _PendingMemoryRelease:
     reservation_tokens: list[str] = field(default_factory=list)
+    isolated_teardown_tokens: list[str] = field(default_factory=list)
+    core_free_tokens: list[str] = field(default_factory=list)
     baseline_snapshot: MachineMemorySnapshot | None = None
     require_observed_drop: bool = False
     # True when every cleanup in this decision was a same-process core `/free`
@@ -580,6 +583,21 @@ class MemoryGovernorService:
             self._log_release_check(decision, release_check, narrow_same_core=True)
             return release_check
 
+        if (
+            pending_release.isolated_teardown_tokens
+            and _workflow_fits_total_capacity(decision)
+        ):
+            release_check = self._capacity_sufficient_release_check(
+                decision,
+                pending_release=pending_release,
+            )
+            for token in pending_release.isolated_teardown_tokens:
+                self.runner_supervisor.confirm_runner_memory_released(token)
+            for token in pending_release.core_free_tokens:
+                self.runner_supervisor.rollback_runner_reservation(token)
+            self._log_release_check(decision, release_check, narrow_same_core=False)
+            return release_check
+
         # Non-narrow cleanup keeps strict confirmation: an absent observer or
         # estimate must not let the run proceed.
         if self.memory_observer is None:
@@ -636,6 +654,7 @@ class MemoryGovernorService:
     ) -> None:
         proceeding = release_check.status in {
             MemoryReleaseStatus.RELEASED,
+            MemoryReleaseStatus.CAPACITY_SUFFICIENT,
             MemoryReleaseStatus.ACKNOWLEDGED_UNCONFIRMED,
         }
         message = (
@@ -660,9 +679,90 @@ class MemoryGovernorService:
                 "final_free_vram_mb": release_check.final_free_vram_mb,
                 "final_free_ram_mb": release_check.final_free_ram_mb,
                 "blocking_constraints": list(release_check.blocking_constraints),
+                "advisory_constraints": list(release_check.advisory_constraints),
                 "checks": len(release_check.snapshots),
                 "narrow_same_core_cautious_start": narrow_same_core,
             },
+        )
+
+    def _capacity_sufficient_release_check(
+        self,
+        decision: MemoryGovernorDecision,
+        *,
+        pending_release: _PendingMemoryRelease,
+    ) -> MemoryReleaseCheckResult:
+        """Resolve acknowledged Noofy cleanup without policing normal RAM use."""
+        required_free_vram_mb = _required_free_after_cleanup(
+            _estimated_vram_after_cleanup(decision),
+            decision.required_vram_margin_mb,
+        )
+        required_free_ram_mb = _required_free_after_cleanup(
+            _estimated_ram_after_cleanup(decision),
+            decision.required_ram_margin_mb,
+        )
+        snapshot = (
+            self.memory_observer.snapshot()
+            if self.memory_observer is not None
+            else None
+        )
+        constraints = (
+            memory_release_blocking_constraints(
+                snapshot,
+                required_free_vram_mb=required_free_vram_mb,
+                required_free_ram_mb=required_free_ram_mb,
+            )
+            if snapshot is not None and snapshot.available
+            else []
+        )
+        threshold_satisfied = (
+            not pending_release.core_free_tokens
+            and snapshot is not None
+            and snapshot.available
+            and not constraints
+        )
+        status = (
+            MemoryReleaseStatus.RELEASED
+            if threshold_satisfied
+            else MemoryReleaseStatus.CAPACITY_SUFFICIENT
+        )
+        reason_code = (
+            "memory_released"
+            if threshold_satisfied
+            else "noofy_cleanup_complete_total_capacity_sufficient"
+        )
+        timeline = [
+            {
+                "state": (
+                    "observed_safe_memory"
+                    if threshold_satisfied
+                    else "noofy_cleanup_complete_total_capacity_sufficient"
+                ),
+                "free_vram_mb": snapshot.free_vram_mb if snapshot is not None else None,
+                "free_ram_mb": snapshot.free_ram_mb if snapshot is not None else None,
+                "advisory_constraints": constraints,
+            }
+        ]
+        return MemoryReleaseCheckResult(
+            status=status,
+            required_free_vram_mb=required_free_vram_mb,
+            required_free_ram_mb=required_free_ram_mb,
+            snapshots=[snapshot] if snapshot is not None else [],
+            timeline=timeline,
+            reason_code=reason_code,
+            baseline_free_vram_mb=(
+                pending_release.baseline_snapshot.free_vram_mb
+                if pending_release.baseline_snapshot is not None
+                else None
+            ),
+            baseline_free_ram_mb=(
+                pending_release.baseline_snapshot.free_ram_mb
+                if pending_release.baseline_snapshot is not None
+                else None
+            ),
+            final_free_vram_mb=snapshot.free_vram_mb if snapshot is not None else None,
+            final_free_ram_mb=snapshot.free_ram_mb if snapshot is not None else None,
+            blocking_constraints=[],
+            advisory_constraints=constraints,
         )
 
     def _narrow_same_core_cautious_start_ok(
@@ -746,6 +846,25 @@ class MemoryGovernorService:
         )
         if release_check.status is MemoryReleaseStatus.RELEASED:
             return None
+        if release_check.status is MemoryReleaseStatus.CAPACITY_SUFFICIENT:
+            additional_release = await self.cleanup_remaining_idle_runners_for_memory_decision(
+                decision,
+                excluded_runner_ids={selected_runner_id}
+                if selected_runner_id is not None
+                else set(),
+            )
+            if additional_release is not None:
+                self.record_metric(
+                    "workflow_run_additional_cleanup_succeeded"
+                    if additional_release.status in {
+                        MemoryReleaseStatus.RELEASED,
+                        MemoryReleaseStatus.CAPACITY_SUFFICIENT,
+                        MemoryReleaseStatus.ACKNOWLEDGED_UNCONFIRMED,
+                    }
+                    else "workflow_run_additional_cleanup_inconclusive"
+                )
+            self.record_metric("workflow_run_isolated_teardown_capacity_sufficient")
+            return None
         if release_check.status is MemoryReleaseStatus.ACKNOWLEDGED_UNCONFIRMED:
             # Same-process core `/free` was acknowledged but unobservable; the
             # narrow cautious-start path lets the reused process try without
@@ -758,7 +877,10 @@ class MemoryGovernorService:
         )
         if additional_release is not None:
             release_check = additional_release
-            if release_check.status is MemoryReleaseStatus.RELEASED:
+            if release_check.status in {
+                MemoryReleaseStatus.RELEASED,
+                MemoryReleaseStatus.CAPACITY_SUFFICIENT,
+            }:
                 self.record_metric("workflow_run_additional_cleanup_succeeded")
                 return None
         self.record_metric("workflow_run_memory_cleanup_failed")
@@ -820,6 +942,8 @@ class MemoryGovernorService:
     ) -> bool:
         """Release idle Noofy-owned memory without terminating active work."""
         reservation_tokens: list[str] = []
+        isolated_teardown_tokens: list[str] = []
+        core_free_tokens: list[str] = []
         baseline_snapshot = (
             self.memory_observer.snapshot()
             if self.memory_observer is not None
@@ -924,6 +1048,7 @@ class MemoryGovernorService:
                 self.runner_supervisor.mark_runner_waiting_for_memory_release(reservation.token)
                 cleanup_status = "models_and_cache_release_requested"
                 cleanup_mode = MemoryCleanupMode.RUNNER_FREE.value
+                core_free_tokens.append(reservation.token)
             else:
                 if cleanup_mode not in {None, MemoryCleanupMode.ISOLATED_EVICTION.value}:
                     self.log_store.add(
@@ -979,6 +1104,7 @@ class MemoryGovernorService:
                 cleanup_status = stopped.status.value
                 cleanup_mode = MemoryCleanupMode.ISOLATED_EVICTION.value
                 teardown_occurred = True
+                isolated_teardown_tokens.append(reservation.token)
             reservation_tokens.append(reservation.token)
             self.record_metric(metric_name)
             self.log_store.add(
@@ -997,6 +1123,8 @@ class MemoryGovernorService:
             )
         self._pending_memory_releases[decision.decision_id] = _PendingMemoryRelease(
             reservation_tokens=reservation_tokens,
+            isolated_teardown_tokens=isolated_teardown_tokens,
+            core_free_tokens=core_free_tokens,
             baseline_snapshot=baseline_snapshot,
             require_observed_drop=require_observed_drop,
             same_process_free_only=bool(reservation_tokens) and not teardown_occurred,
@@ -1147,7 +1275,10 @@ class MemoryGovernorService:
             current_job_id=result.job_id,
             decision=decision,
         )
-        if release_check is not None and release_check.status is not MemoryReleaseStatus.RELEASED:
+        if release_check is not None and release_check.status not in {
+            MemoryReleaseStatus.RELEASED,
+            MemoryReleaseStatus.CAPACITY_SUFFICIENT,
+        }:
             self.record_metric("memory_retry_cleanup_failed")
             return None
 
@@ -1686,3 +1817,30 @@ def _estimated_ram_after_cleanup(decision: MemoryGovernorDecision) -> int | None
     }:
         return decision.workflow_estimate.estimated_peak_vram_mb
     return None
+
+
+def _workflow_fits_total_capacity(decision: MemoryGovernorDecision) -> bool:
+    """Whether the workflow peak itself fits every relevant known capacity.
+
+    Free-memory margins are intentionally excluded. They help choose which
+    Noofy runners to reclaim, but after isolated process teardown they are not
+    proof that the replacement runner cannot execute.
+    """
+    machine = decision.machine_snapshot
+    if machine is None or not machine.available or decision.workflow_estimate is None:
+        return False
+
+    checked_capacity = False
+    estimated_ram_mb = _estimated_ram_after_cleanup(decision)
+    if estimated_ram_mb is not None:
+        if machine.total_ram_mb is None or estimated_ram_mb > machine.total_ram_mb:
+            return False
+        checked_capacity = True
+
+    estimated_vram_mb = _estimated_vram_after_cleanup(decision)
+    if estimated_vram_mb is not None:
+        if machine.total_vram_mb is None or estimated_vram_mb > machine.total_vram_mb:
+            return False
+        checked_capacity = True
+
+    return checked_capacity

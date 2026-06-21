@@ -135,6 +135,11 @@ class MemoryObservationOutcome(StrEnum):
 
 class MemoryReleaseStatus(StrEnum):
     RELEASED = "released"
+    # An isolated runner was definitively stopped and the next workflow fits
+    # the machine's total capacity. A remaining free-memory shortfall is only
+    # advisory: the replacement runner may start and let the engine manage its
+    # normal model/allocator behavior.
+    CAPACITY_SUFFICIENT = "capacity_sufficient"
     # Cleanup was observed, but another admission constraint remains unmet.
     # The cleaned runner's residency may be cleared, while the next workflow
     # must still remain blocked.
@@ -530,6 +535,9 @@ class MemoryReleaseCheckResult(BaseModel):
     # Which requirements were still unmet when the check gave up. Empty for a
     # confirmed release.
     blocking_constraints: list[str] = Field(default_factory=list)
+    # Unmet scheduling margins that did not prevent launch because Noofy-owned
+    # isolated teardown completed and total machine capacity is sufficient.
+    advisory_constraints: list[str] = Field(default_factory=list)
 
 
 class MemoryUserStatus(BaseModel):

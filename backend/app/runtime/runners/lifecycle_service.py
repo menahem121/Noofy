@@ -1175,13 +1175,20 @@ class WorkflowRunnerLifecycleService:
                                 }
                             )
                         release_check = await self.memory_service.wait_for_memory_release_after_cleanup(memory_decision)
+                        capacity_sufficient = (
+                            release_check.status
+                            is MemoryReleaseStatus.CAPACITY_SUFFICIENT
+                        )
                         if release_check.status is not MemoryReleaseStatus.RELEASED:
                             additional_release = await self.memory_service.cleanup_remaining_idle_runners_for_memory_decision(
                                 memory_decision
                             )
                             if additional_release is not None:
                                 release_check = additional_release
-                        if release_check.status is not MemoryReleaseStatus.RELEASED:
+                        if not capacity_sufficient and release_check.status not in {
+                            MemoryReleaseStatus.RELEASED,
+                            MemoryReleaseStatus.CAPACITY_SUFFICIENT,
+                        }:
                             cleanup_succeeded = (
                                 release_check.status
                                 is MemoryReleaseStatus.RELEASED_INSUFFICIENT_MEMORY

@@ -2109,11 +2109,6 @@ export function WorkflowRunPage({
     memoryLoaded: showMemoryLoadedPill,
     cancelTitle: cancelTooltip,
     showStatusNotice: showUserFacingMemoryNotice,
-    statusIsProgress: Boolean(
-      showUserFacingMemoryNotice
-        && memoryStatus
-        && isMemoryPreparationState(memoryStatus.state),
-    ),
     statusTitle: showUserFacingMemoryNotice ? memoryNotice?.title ?? null : null,
     statusMessage: showUserFacingMemoryNotice ? memoryNotice?.message ?? null : null,
     disabledReason: memoryRefusesRun ? null : runDisabledReason,
@@ -2128,7 +2123,6 @@ export function WorkflowRunPage({
         ...workflowActionBarRunState,
         memoryLoaded: false,
         showStatusNotice: false,
-        statusIsProgress: false,
         disabledActionLabel: null,
         developerDetails: null,
       }}
@@ -2236,11 +2230,7 @@ export function WorkflowRunPage({
       ) : null}
       {memoryStatus && showUserFacingMemoryNotice ? (
         <div className={`notice ${memoryNoticeClass(memoryStatus)} notice--compact`} role="status">
-          {isMemoryPreparationState(memoryStatus.state) ? (
-            <Loader2 className="spin" size={16} aria-hidden="true" />
-          ) : (
-            <AlertCircle size={16} aria-hidden="true" />
-          )}
+          <AlertCircle size={16} aria-hidden="true" />
           <div>
             <strong>{memoryNotice?.title ?? memoryStatusTitle(memoryStatus.state)}</strong>
             <span>{memoryNotice?.message ?? memoryStatus.message}</span>
@@ -4019,25 +4009,24 @@ function isWarmReusableMemoryState(state: string) {
   return state === "ready_warm_co_resident" || state === "ready_reusing_runner";
 }
 
-// Routine queueing and core-model cleanup are expected background behavior:
-// progress controls communicate that the run is still active without showing
-// a warning notice.
+// Routine queueing and preparation are expected background behavior. Keep the
+// progress and Cancel controls visible without adding a notice the user cannot
+// act on.
 function isSilentQueuedMemoryState(state: string) {
-  return state === "queued_behind_active_run" || state === "freeing_previous_models";
+  return state === "preparing_run"
+    || state === "waiting_for_gpu"
+    || state === "waiting_for_active_workflow"
+    || state === "queued_behind_active_run"
+    || state === "freeing_previous_models"
+    || state === "unloading_previous_workflow"
+    || state === "freeing_memory"
+    || state === "waiting_for_memory_release"
+    || state === "retrying_after_memory_cleanup"
+    || state === "monitoring_memory";
 }
 
 function isBlockingMemoryState(state: string) {
   return state === "blocked_by_memory" || state === "memory_cleanup_failed" || state.startsWith("blocked_");
-}
-
-function isMemoryPreparationState(state: string) {
-  return state === "preparing_run"
-    || state === "waiting_for_gpu"
-    || state === "waiting_for_active_workflow"
-    || state === "unloading_previous_workflow"
-    || state === "freeing_memory"
-    || state === "waiting_for_memory_release"
-    || state === "retrying_after_memory_cleanup";
 }
 
 function clampBatchCount(value: number) {
@@ -4279,7 +4268,6 @@ function memoryStatusDeveloperDetails(job: EngineJob | null, progress: JobProgre
 
 function memoryNoticeClass(status: MemoryStatus) {
   if (status.state === "blocked_by_memory" || status.state === "memory_cleanup_failed" || status.state.startsWith("blocked_")) return "notice--error";
-  if (isMemoryPreparationState(status.state)) return "notice--progress";
   return "notice--warning";
 }
 

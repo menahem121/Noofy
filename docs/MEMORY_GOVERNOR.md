@@ -101,11 +101,11 @@ therefore never refused merely because `peak + margin > total`, nor even because
 machine. Local successful evidence overrides creator observations, so a proven
 smaller local peak supersedes a larger creator hint.
 
-Multi-runner protections are unchanged. The cautious-start downgrade is gated to
-the genuine single-runner case, so queue-behind-active, evict-idle, and
-co-residence compatibility denials (for example heavy/heavy without a large GPU
-and high-confidence local evidence) still apply when other warm runners are
-present.
+Multi-runner scheduling still queues behind active work and evicts incompatible
+idle peers before launching a replacement. After a confirmed isolated-process
+stop, however, a free-memory margin shortfall does not become a user-facing
+failure when the next workflow fits total machine capacity. ComfyUI remains the
+authority for normal single-runner model and allocator management.
 
 The same admission path now covers isolated runners and the core/default runner.
 Idle isolated runners can be evicted before a run. The core process stays
@@ -124,15 +124,18 @@ than claiming that engine execution has started; `memory_status.state` exposes
 
 Submission reserves the selected runner atomically before memory admission and
 before awaiting adapter submission. Cleanup uses separate eviction
-reservations. If bounded cleanup observes enough memory, the same queue record
-continues automatically into adapter submission. Cancellation at any point
-before submission prevents the graph from being submitted, although an
-already-started best-effort cleanup operation may finish. If trusted evidence
-shows the workflow peak alone exceeds total machine capacity, the queue moves
-directly to terminal `blocked_exceeds_capacity` without evicting runners or
-waiting for cleanup. After adapter submission the public queue ID resolves to
-the canonical submitted job ID for progress, result, cancellation, logs, SSE,
-and output reads.
+reservations. If cleanup observes enough free memory, the same queue record
+continues automatically into adapter submission. A confirmed isolated-runner
+stop also continues immediately when the next workflow peak fits total machine
+capacity; the free-memory margin remains scheduling guidance rather than a
+launch gate. Cancellation at any point before submission prevents the graph
+from being submitted, although an already-started best-effort cleanup operation
+may finish. If trusted evidence shows the workflow peak alone exceeds total
+machine capacity, the queue moves directly to terminal
+`blocked_exceeds_capacity` without evicting runners or waiting for cleanup.
+After adapter submission the public queue ID resolves to the canonical
+submitted job ID for progress, result, cancellation, logs, SSE, and output
+reads.
 
 When the first planned cleanup completes but still leaves a shortfall, Noofy
 makes one bounded fallback pass over remaining idle, reclaimable Noofy-owned
@@ -230,12 +233,18 @@ the baseline free RAM/VRAM captured before cleanup, the final free RAM/VRAM
 observed before the decision, and — when the check gives up — the named unmet
 constraints (`ram_below_required`, `vram_below_required`,
 `memory_pressure_high`, `no_observed_memory_drop`). A block can never silently
-rest on a single metric.
+rest on a single metric. When isolated teardown and sufficient total capacity
+allow launch, unmet margin checks are recorded separately as
+`advisory_constraints` and `blocking_constraints` remains empty.
 
 Core warm residency is cleared only after confirmed release. If observation is
-unavailable or release times out, Noofy preserves attribution, marks the runner
-`release_failed`, and reports `memory_cleanup_failed` — with one deliberate,
-narrow exception described next.
+unavailable or release times out, Noofy preserves core attribution and marks
+the core runner `release_failed`, with the narrow same-core exception described
+next. Isolated process teardown is different: a confirmed stopped process is
+definitive release of that Noofy-owned runner. When the replacement workflow
+fits every known relevant total-capacity dimension, an unmet free-memory margin
+is recorded as advisory and the replacement runner starts without a user-facing
+memory failure.
 
 ### Narrow Same-Core Cautious Start (`ACKNOWLEDGED_UNCONFIRMED`)
 
@@ -259,11 +268,13 @@ This is an honesty-preserving policy, not a loophole:
   memory, its failure is recorded as a trusted local memory failure, which
   disqualifies the narrow path on the next attempt.
 
-Tests covering this policy live in `backend/tests/test_runner_supervisor.py`
+Tests covering same-core policy live in `backend/tests/test_runner_supervisor.py`
 (`test_same_core_unconfirmed_free_*`,
 `test_same_core_cautious_start_rejected_*`,
-`test_non_narrow_cleanup_without_observer_still_blocks`,
-`test_isolated_runner_cleanup_timeout_still_blocks`).
+`test_non_narrow_cleanup_without_observer_still_blocks`). Confirmed isolated
+teardown with sufficient total capacity is covered in
+`backend/tests/test_engine_service_install.py` and
+`backend/tests/test_runner_supervisor.py`.
 
 Compatibility responses may retain `EngineJob.status = "blocked_by_memory"`,
 while `memory_status.state` exposes the precise backend condition:
@@ -275,9 +286,10 @@ external pressure only when observation includes explicit non-Noofy-process
 evidence; unexplained residual usage remains unattributed. Per the Single-Runner
 Advisory Policy above, a single-runner shortfall against an advisory estimate
 resolves to a `memory_warning` cautious-start rather than these blocked states;
-the blocked states apply when other runners are involved or when trusted
-evidence (local failure, attributed external pressure, or a peak that alone
-exceeds total) shows the run cannot proceed.
+the blocked states apply when cleanup itself cannot be performed or trusted
+evidence shows the workflow peak alone cannot fit total capacity. Availability
+pressure after confirmed Noofy-owned isolated teardown is not itself a reason
+to block.
 
 ## Library Advisory Warnings
 

@@ -2745,7 +2745,7 @@ describe("WorkflowRunPage", () => {
     expect(writeText.mock.calls[0][0]).toContain("CUDA out of memory");
   });
 
-  it("shows a memory waiting state and tracks the queue id", async () => {
+  it("keeps a memory waiting state quiet and tracks the queue id", async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
 
@@ -2804,8 +2804,6 @@ describe("WorkflowRunPage", () => {
     await waitForReadyStatus();
     fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
 
-    expect(await screen.findByText("Waiting for the GPU")).toBeInTheDocument();
-    expect(screen.getAllByText("This workflow is waiting until the current GPU work finishes.").length).toBeGreaterThan(0);
     await waitFor(() => {
       expect(
         fetchMock.mock.calls.some(([input]) =>
@@ -2813,6 +2811,10 @@ describe("WorkflowRunPage", () => {
         ),
       ).toBe(true);
     });
+    expect(screen.queryByText("Waiting for the GPU")).not.toBeInTheDocument();
+    expect(screen.queryByText("This workflow is waiting until the current GPU work finishes.")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel run" })).toBeEnabled();
+    expect(screen.getByRole("progressbar", { name: /workflow progress/i })).toBeInTheDocument();
   });
 
   it("does not show generic memory monitoring copy as a warning", async () => {
@@ -2860,24 +2862,6 @@ describe("WorkflowRunPage", () => {
   });
 
   it.each([
-    {
-      state: "waiting_for_active_workflow",
-      status: "queued_pending_memory",
-      title: "Waiting for another run",
-      message: "Noofy will start this workflow after the active run finishes.",
-    },
-    {
-      state: "unloading_previous_workflow",
-      status: "queued_pending_memory",
-      title: "Preparing run",
-      message: "Noofy is unloading the previous workflow before starting this one.",
-    },
-    {
-      state: "retrying_after_memory_cleanup",
-      status: "queued_pending_memory",
-      title: "Trying again",
-      message: "Noofy freed memory and is starting this workflow again.",
-    },
     {
       state: "memory_cleanup_failed",
       status: "blocked_by_memory",
@@ -2964,7 +2948,7 @@ describe("WorkflowRunPage", () => {
     renderRunPage();
 
     await waitForReadyStatus();
-    const runButton = screen.getByRole("button", { name: /run workflow/i });
+    const runButton = await screen.findByRole("button", { name: /run workflow/i });
     await waitFor(() => expect(runButton).toBeEnabled());
     fireEvent.click(runButton);
 
@@ -3002,7 +2986,7 @@ describe("WorkflowRunPage", () => {
   });
 
   it.each(["canvas", "classic"])(
-    "updates %s preparation progress while memory is being unloaded",
+    "keeps %s preparation quiet while memory is being unloaded",
     async (viewMode) => {
       window.localStorage.setItem("noofy.prefs", JSON.stringify({ viewMode }));
       mockConfiguredDashboardFetch(
@@ -3053,18 +3037,17 @@ describe("WorkflowRunPage", () => {
       await waitFor(() => expect(runButton).toBeEnabled());
       fireEvent.click(runButton);
 
-      expect((await screen.findAllByText("Preparing run")).length).toBeGreaterThan(0);
-      expect(screen.getAllByText(
+      await waitFor(() => {
+        expect(fetchMock.mock.calls.some(([input]) =>
+          String(input).endsWith("/api/jobs/workflow-run-queue-preparing/progress"),
+        )).toBe(true);
+      });
+      expect(screen.queryByText("Preparing run")).not.toBeInTheDocument();
+      expect(screen.queryByText(
         "Noofy is unloading the previous workflow before starting this one.",
-      ).length).toBeGreaterThan(0);
+      )).not.toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Cancel run" })).toBeEnabled();
-      if (viewMode === "canvas") {
-        expect(document.querySelector(".canvas-action-cluster__reason--progress .spin")).toBeInTheDocument();
-      } else {
-        expect(document.querySelector(".notice--progress .spin")).toBeInTheDocument();
-      }
-      fireEvent.click(screen.getByText("Developer details"));
-      expect(screen.getByText(/unloading_previous_workflow/)).toBeInTheDocument();
+      expect(screen.getByRole("progressbar", { name: /workflow progress/i })).toBeInTheDocument();
     },
   );
 

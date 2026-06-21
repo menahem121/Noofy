@@ -1152,7 +1152,7 @@ async def test_start_workflow_runner_uses_memory_governor_to_evict_light_runner_
 
 
 @pytest.mark.anyio
-async def test_start_workflow_runner_blocks_when_memory_release_times_out_after_eviction(
+async def test_start_workflow_runner_uses_total_capacity_after_confirmed_isolated_eviction(
     tmp_path: Path,
 ) -> None:
     packages_dir = tmp_path / "packages"
@@ -1179,16 +1179,16 @@ async def test_start_workflow_runner_blocks_when_memory_release_times_out_after_
                     backend=MemoryBackend.CUDA,
                     total_vram_mb=12_000,
                     free_vram_mb=500,
-                    total_ram_mb=64_000,
-                    free_ram_mb=50_000,
+                    total_ram_mb=16_000,
+                    free_ram_mb=750,
                     memory_pressure=MemoryPressureLevel.HIGH,
                 ),
                 MachineMemorySnapshot(
                     backend=MemoryBackend.CUDA,
                     total_vram_mb=12_000,
-                    free_vram_mb=1_000,
-                    total_ram_mb=64_000,
-                    free_ram_mb=50_000,
+                    free_vram_mb=10_000,
+                    total_ram_mb=16_000,
+                    free_ram_mb=750,
                     memory_pressure=MemoryPressureLevel.MEDIUM,
                 ),
             ]
@@ -1213,10 +1213,23 @@ async def test_start_workflow_runner_blocks_when_memory_release_times_out_after_
     result = await service.start_workflow_runner("runner_workflow")
 
     assert coordinator is not None
-    assert result["status"] == RunnerStatus.MEMORY_CLEANUP_FAILED.value
-    assert result["memory_release_check"]["status"] == "timeout"
+    assert result["status"] == RunnerStatus.READY.value
     assert coordinator.stopped_runner_ids == ["idle-light-runner"]
-    assert coordinator.started_specs == []
+    assert len(coordinator.started_specs) == 1
+    release_events = [
+        event
+        for event in service.log_store.list_events().events
+        if event.source == "memory_governor"
+        and event.message == "Memory release check completed"
+    ]
+    assert release_events[-1].details["status"] == "capacity_sufficient"
+    assert release_events[-1].details["reason_code"] == (
+        "noofy_cleanup_complete_total_capacity_sufficient"
+    )
+    assert release_events[-1].details["blocking_constraints"] == []
+    assert release_events[-1].details["advisory_constraints"] == [
+        "ram_below_required",
+    ]
 
 
 @pytest.mark.anyio

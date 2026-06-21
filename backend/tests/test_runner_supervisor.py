@@ -3294,7 +3294,7 @@ async def test_workflow_run_evicts_idle_isolated_runner_waits_for_release_then_s
 
 
 @pytest.mark.anyio
-async def test_workflow_run_blocks_only_after_idle_runner_release_times_out() -> None:
+async def test_workflow_run_starts_after_isolated_eviction_when_total_capacity_is_sufficient() -> None:
     adapter = RecordingAdapter(
         models=[
             ModelInfo(
@@ -3335,21 +3335,18 @@ async def test_workflow_run_blocks_only_after_idle_runner_release_times_out() ->
 
     assert coordinator is not None
     assert isinstance(job, EngineJob)
-    assert job.status == "blocked_by_memory"
-    assert job.error_code == "insufficient_memory"
-    assert job.memory_requirement is not None
-    assert job.memory_requirement["total_vram_mb"] == 12_000
-    assert job.memory_requirement["freeing_memory_may_help"] is True
-    assert job.memory_status is not None
-    assert job.memory_status["state"] == "memory_cleanup_failed"
+    assert job.status == "queued"
     assert job.memory_decision is not None
-    assert job.memory_decision["developer_details"]["memory_cleanup_failure"]["reason_code"] == "memory_release_timeout"
-    job_logs = service.list_job_logs(job.job_id).events
-    assert [event.message for event in job_logs] == [
-        "Workflow run blocked after memory cleanup"
-    ]
+    assert job.memory_decision["action"] == "evict_then_start"
     assert coordinator.stopped_runner_ids == ["idle-heavy"]
-    assert adapter.run_calls == []
+    assert len(adapter.run_calls) == 1
+    release_events = [
+        event
+        for event in service.log_store.list_events().events
+        if event.source == "memory_governor"
+        and event.message == "Memory release check completed"
+    ]
+    assert release_events[-1].details["status"] == "capacity_sufficient"
 
 
 @pytest.mark.anyio

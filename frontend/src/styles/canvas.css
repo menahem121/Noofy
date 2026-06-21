@@ -272,14 +272,6 @@
   color: var(--warning);
 }
 
-.canvas-action-cluster__reason--progress {
-  background: rgba(139, 92, 246, 0.12);
-}
-
-.canvas-action-cluster__reason--progress svg {
-  color: var(--primary-hover);
-}
-
 .canvas-action-cluster__reason-content {
   display: flex;
   min-width: 0;
