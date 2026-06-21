@@ -287,6 +287,39 @@ describe("useWorkflowUserState", () => {
     });
   });
 
+  it("uses creator media defaults over empty remote media values even when the dashboard version matches", async () => {
+    const packagedDefault = {
+      source: "package_asset",
+      asset_id: "input-defaults/starter.png",
+      kind: "image",
+      filename: "starter.png",
+    };
+    const remote: WorkflowUserState = {
+      ...emptyRemoteState("wf-1"),
+      dashboard_version: "1.0",
+      values: { image: null, prompt: "" },
+    };
+    fetchMock.mockResolvedValueOnce(jsonResponse(remote));
+    fetchMock.mockResolvedValue(jsonResponse(remote));
+
+    const inputIndex = makeInputIndex("image", "prompt");
+    inputIndex.set("image", {
+      ...inputIndex.get("image")!,
+      control: "load_image",
+    });
+    const { result } = renderHook(() =>
+      useWorkflowUserState(
+        "wf-1",
+        { image: packagedDefault, prompt: "creator prompt" },
+        "1.0",
+        inputIndex,
+      ),
+    );
+
+    await waitFor(() => expect(result.current.values.image).toEqual(packagedDefault));
+    expect(result.current.values.prompt).toBe("");
+  });
+
   it("keeps valid control layout overrides when dashboard_version changes", async () => {
     const remote: WorkflowUserState = {
       ...emptyRemoteState("wf-1"),

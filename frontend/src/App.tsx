@@ -34,6 +34,7 @@ import {
   type NativeWorkflowImportRequest,
   type NativeWorkflowOpenPayload,
 } from "./lib/nativeWorkflowFiles";
+import { invalidateWorkflowUserStateCache } from "./lib/useWorkflowUserState";
 import { workflowDisplayName } from "./lib/workflowNames";
 
 const DashboardBuilderPage = lazy(() =>
@@ -385,6 +386,8 @@ function AppContent() {
             })
           }
           onSaveComplete={(workflowId) => {
+            invalidateWorkflowRunPageCache(workflowId);
+            invalidateWorkflowUserStateCache(workflowId);
             removePendingImportedSetupReminder(workflowId);
             openWorkflow(workflowId, undefined, { skipDashboardSetupGuard: true });
             void workflowLibrary.refreshWorkflows();

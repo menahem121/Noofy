@@ -1051,10 +1051,11 @@ export function toBackendPayload(schema: DashboardSchema): BackendSavePayload {
   const groupedWidgetIds = groupedWidgetIdSet(normalized);
   const widgetById = new Map(normalized.widgets.map((widget) => [widget.id, widget]));
   const inputWidgets = [...normalized.widgets, ...(normalized.hiddenWidgets ?? [])];
+  const inputIdForWidget = (widget: DashboardWidget) => widget.backendInputId ?? widget.id;
   const inputs: BackendWorkflowInput[] = inputWidgets
     .filter((w) => !isOutputWidgetType(w.widgetType) && hasExecutableWorkflowBinding(w))
     .map((w) => ({
-      id: w.id,
+      id: inputIdForWidget(w),
       label: w.title,
       control: w.widgetType,
       binding: { node_id: w.binding.nodeId, input_name: w.binding.inputName },
@@ -1111,7 +1112,7 @@ export function toBackendPayload(schema: DashboardSchema): BackendSavePayload {
       id: widget.id,
       type: widget.widgetType,
       label: widget.title,
-      ...(!isOutputWidgetType(widget.widgetType) && hasExecutableWorkflowBinding(widget) ? { input_id: widget.id } : {}),
+      ...(!isOutputWidgetType(widget.widgetType) && hasExecutableWorkflowBinding(widget) ? { input_id: inputIdForWidget(widget) } : {}),
       ...(isOutputWidgetType(widget.widgetType) ? { output_id: outputIdForWidget(widget.id) } : {}),
       description: widget.description,
       layout,

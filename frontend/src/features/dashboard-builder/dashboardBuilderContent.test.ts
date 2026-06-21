@@ -548,6 +548,49 @@ describe("toBackendPayload", () => {
       expect.objectContaining({ id: "ctrl-result", type: "display_image", output_id: "image" }),
     ]);
   });
+
+  it("preserves backend input ids when saving edited dashboard controls", () => {
+    const packagedDefault = {
+      source: "package_asset",
+      asset_id: "input-defaults/starter.png",
+      kind: "image",
+      filename: "starter.png",
+    };
+    const schema: DashboardSchema = {
+      version: 1,
+      workflowId: "wf-1",
+      workflowName: "Workflow",
+      layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      groups: [],
+      widgets: [
+        {
+          id: "image-control",
+          valueId: "image",
+          backendInputId: "image",
+          binding: { nodeId: "10", inputName: "image" },
+          widgetType: "load_image",
+          title: "Input image",
+          description: "",
+          defaultValue: packagedDefault,
+          defaultPinned: true,
+          layout: { x: 0, y: 0, w: 16, h: 8 },
+        },
+      ],
+    };
+
+    const payload = toBackendPayload(schema);
+
+    expect(payload.inputs[0]).toMatchObject({
+      id: "image",
+      control: "load_image",
+      default: packagedDefault,
+      default_pinned: true,
+    });
+    expect(payload.dashboard.sections[0].controls[0]).toMatchObject({
+      id: "image-control",
+      input_id: "image",
+    });
+  });
 });
 
 describe("saveDashboardDraft", () => {

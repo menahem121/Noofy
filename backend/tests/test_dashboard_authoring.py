@@ -408,6 +408,17 @@ def test_imported_packaged_default_is_resolvable_from_archived_source_files(
     assert resolved_path.read_bytes() == asset_bytes
     assert resolved_reference == reference
 
+    service.save_dashboard(workflow_id, dashboard["inputs"], dashboard)
+    reloaded = service.workflow_loader.get_package(workflow_id)
+    assert reloaded.inputs[0].default == reference
+
+    resolved_after_save, reference_after_save = library.workflow_default_asset(
+        workflow_id,
+        "image",
+    )
+    assert resolved_after_save.read_bytes() == asset_bytes
+    assert reference_after_save == reference
+
 
 def test_save_dashboard_persists_action_bar_presentation(tmp_path: Path) -> None:
     archive = _make_minimal_archive()

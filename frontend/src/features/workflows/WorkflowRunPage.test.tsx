@@ -6662,6 +6662,7 @@ describe("WorkflowRunPage", () => {
         default_pinned: true,
       })),
     };
+    const dashboardVersion = dashboardUserStateVersionForTest(packageData);
     let runBody: { inputs?: Record<string, unknown> } | null = null;
     mockConfiguredDashboardFetch(
       fetchMock,
@@ -6676,7 +6677,7 @@ describe("WorkflowRunPage", () => {
           return jsonResponse({
             schema_version: "1",
             workflow_id: "text_to_image_v0",
-            dashboard_version: "previous-dashboard",
+            dashboard_version: dashboardVersion,
             values: { source_image: null },
             layout_overrides: {},
           });

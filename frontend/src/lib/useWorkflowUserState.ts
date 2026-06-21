@@ -18,6 +18,7 @@ const EMPTY_CONTROL_IDS: string[] = [];
 const EMPTY_VALUES: Record<string, unknown> = {};
 const EMPTY_LAYOUT_OVERRIDES: Record<string, GridItemLayout> = {};
 const EMPTY_OUTPUT_PREFERENCES: OutputPreferences = {};
+const MEDIA_INPUT_CONTROLS = new Set(["load_image", "load_image_mask", "load_audio", "load_video", "load_file", "load_3d"]);
 
 interface WorkflowUserStateCacheEntry {
   state: WorkflowUserState;
@@ -55,12 +56,12 @@ function mergeCurrentContext(
 ): WorkflowUserState {
   const values: Record<string, unknown> = {};
   const dashboardChanged = state.dashboard_version !== currentDashboardVersion;
-  for (const id of inputIndex.keys()) {
+  for (const [id, input] of inputIndex) {
     const hasExistingValue = Object.prototype.hasOwnProperty.call(state.values, id);
     const existingValue = hasExistingValue ? state.values[id] : undefined;
     const packageDefault = packageDefaults[id];
     values[id] = hasExistingValue &&
-      !(dashboardChanged && isEmptyWorkflowUserValue(existingValue) && !isEmptyWorkflowUserValue(packageDefault))
+      !shouldUseCreatorDefaultForEmptyValue(input, existingValue, packageDefault, dashboardChanged)
       ? existingValue
       : packageDefault;
   }
@@ -94,6 +95,16 @@ function mergeCurrentContext(
 
 function isEmptyWorkflowUserValue(value: unknown): boolean {
   return value === null || value === undefined || value === "";
+}
+
+function shouldUseCreatorDefaultForEmptyValue(
+  input: WorkflowInputDef,
+  existingValue: unknown,
+  packageDefault: unknown,
+  dashboardChanged: boolean,
+): boolean {
+  if (!isEmptyWorkflowUserValue(existingValue) || isEmptyWorkflowUserValue(packageDefault)) return false;
+  return dashboardChanged || MEDIA_INPUT_CONTROLS.has(input.control);
 }
 
 function sameRecord(
