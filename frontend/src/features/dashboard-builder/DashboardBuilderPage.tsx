@@ -4,6 +4,7 @@ import {
   ArrowDown,
   ArrowRight,
   ArrowUp,
+  AlertTriangle,
   Box,
   CheckCircle2,
   ChevronDown,
@@ -1109,26 +1110,64 @@ function RemoveDefaultDialog({
   onKeep: (widgetId: string) => void;
   onDelete: (widgetId: string) => void;
 }) {
+  useEffect(() => {
+    if (!removal) return;
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") onCancel();
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [onCancel, removal]);
+
   if (!removal) return null;
   return (
-    <div className="builder-remove-dialog" role="dialog" aria-modal="true" aria-label="Remove saved default">
-      <div className="builder-remove-dialog__panel">
-        <h2>Remove widget?</h2>
-        <p>
-          This widget has a saved default. Keep it as a hidden default, or delete it to restore the original workflow default.
-        </p>
-        <div className="builder-remove-dialog__actions">
-          <button className="secondary-button" type="button" onClick={onCancel}>
+    <div
+      className="builder-remove-dialog"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="builder-remove-dialog-title"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onCancel();
+      }}
+    >
+      <section className="builder-remove-dialog__panel">
+        <header className="builder-remove-dialog__header">
+          <div className="builder-remove-dialog__icon" aria-hidden="true">
+            <AlertTriangle size={22} />
+          </div>
+          <div>
+            <p className="builder-remove-dialog__eyebrow">Saved default</p>
+            <h2 id="builder-remove-dialog-title">Remove widget?</h2>
+            <p>
+              This widget is shown on the dashboard and also stores a creator default. Choose what should happen to
+              that saved value.
+            </p>
+          </div>
+        </header>
+        <div className="builder-remove-dialog__choices">
+          <article className="builder-remove-dialog__choice">
+            <strong>Keep the saved value</strong>
+            <span>The widget disappears, but runs still use this default in the background.</span>
+            <button className="primary-button" type="button" onClick={() => onKeep(removal.widget.id)}>
+              Keep hidden default
+            </button>
+          </article>
+          <article className="builder-remove-dialog__choice">
+            <strong>Restore the workflow default</strong>
+            <span>Remove the saved value too, so the original workflow setting is used again.</span>
+            <button className="secondary-button" type="button" onClick={() => onDelete(removal.widget.id)}>
+              Delete default
+            </button>
+          </article>
+        </div>
+        <footer className="builder-remove-dialog__actions">
+          <button className="secondary-button" type="button" autoFocus onClick={onCancel}>
             Cancel
           </button>
-          <button className="secondary-button" type="button" onClick={() => onDelete(removal.widget.id)}>
-            Delete default
-          </button>
-          <button className="primary-button" type="button" onClick={() => onKeep(removal.widget.id)}>
-            Keep hidden default
-          </button>
-        </div>
-      </div>
+        </footer>
+      </section>
     </div>
   );
 }

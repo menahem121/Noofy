@@ -1964,6 +1964,52 @@ describe("DashboardBuilderPage", () => {
     );
   });
 
+  it("explains saved-default removal choices and dismisses the dialog with Escape", async () => {
+    const emptySchema: DashboardSchema = {
+      version: 1,
+      workflowId: "wf-image",
+      workflowName: "Image workflow",
+      layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      groups: [],
+      widgets: [],
+    };
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/workflows/wf-image/bindable-inputs")) {
+        return Promise.resolve(jsonResponse(imageWorkflowBindableInputsResponse()));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(
+      <DashboardBuilderPage
+        workflowId="wf-image"
+        workflowName="Image workflow"
+        initialSchema={emptySchema}
+        onBack={vi.fn()}
+        onContinue={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByLabelText(/widget title/i)).toHaveValue("Input image");
+    fireEvent.click(screen.getByRole("button", { name: /save as default/i }));
+    expect(await screen.findByText("Default saved.")).toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByRole("button", { name: /remove widget/i })[0]);
+    const dialog = screen.getByRole("dialog", { name: "Remove widget?" });
+    expect(within(dialog).getByText("Saved default")).toBeInTheDocument();
+    expect(within(dialog).getByText("Keep the saved value")).toBeInTheDocument();
+    expect(within(dialog).getByText("Restore the workflow default")).toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Remove widget?" })).not.toBeInTheDocument();
+    });
+    expect(screen.getByLabelText(/widget title/i)).toHaveValue("Input image");
+  });
+
   it("shows creator default upload success only after a file upload", async () => {
     const emptySchema: DashboardSchema = {
       version: 1,
