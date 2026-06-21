@@ -129,7 +129,11 @@ class ModelInventoryService:
                 noofy_count=sum(model.source == "noofy" for model in models),
                 external_comfyui_count=sum(model.source == "external_comfyui" for model in models),
                 missing_count=sum(model.status == "missing" for model in models),
-                total_known_size_bytes=sum(model.size_bytes or 0 for model in models),
+                total_known_size_bytes=sum(
+                    model.size_bytes or 0
+                    for model in models
+                    if model.status != "missing"
+                ),
                 cleanable_size_bytes=sum(model.size_bytes or 0 for model in models if _is_cleanable(model)),
                 disk_free_bytes=self._disk_free_bytes(noofy_root),
             ),

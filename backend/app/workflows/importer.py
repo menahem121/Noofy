@@ -7,6 +7,7 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
+import xml.etree.ElementTree as ET
 import zipfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -234,12 +235,23 @@ class DefaultGitHubCustomNodeUrlResolver:
             if len(candidates) >= 8:
                 break
 
+        candidate_payloads = sorted(
+            candidates.values(),
+            key=lambda item: _github_search_candidate_sort_key(item, target),
+            reverse=True,
+        )
         inspected: list[GitHubCustomNodeCandidate] = []
-        for item in candidates.values():
+        for item in candidate_payloads:
             try:
-                inspected.append(_inspect_github_custom_node_candidate(item, target))
+                candidate = _inspect_github_custom_node_candidate(item, target)
             except GitHubCustomNodeUrlResolutionError:
                 continue
+            inspected.append(candidate)
+            if candidate.confidence == "high" and candidate.name_match in {
+                "exact",
+                "strong",
+            }:
+                break
         return inspected
 
 
@@ -2461,13 +2473,40 @@ def _github_search_term_variants(value: str) -> list[str]:
         return []
     normalized = cleaned.replace("_", "-").replace(" ", "-")
     words = [part for part in normalized.split("-") if part]
-    variants = {cleaned, cleaned.casefold(), normalized, normalized.casefold()}
+    variants = [cleaned, cleaned.casefold(), normalized, normalized.casefold()]
     if words:
-        variants.add("-".join(words))
-        variants.add("_".join(words))
-        variants.add(" ".join(words))
-        variants.add("".join(words))
-    return [item for item in variants if item.strip()]
+        variants.extend(
+            [
+                "-".join(words),
+                "_".join(words),
+                " ".join(words),
+                "".join(words),
+            ]
+        )
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for item in variants:
+        key = item.casefold()
+        if not item.strip() or key in seen:
+            continue
+        seen.add(key)
+        ordered.append(item)
+    return ordered
+
+
+def _github_search_candidate_sort_key(
+    payload: dict[str, Any],
+    target: GitHubCustomNodeSearchTarget,
+) -> tuple[int, int]:
+    repo = payload.get("name")
+    name_match = (
+        _github_candidate_name_match(repo, target)
+        if isinstance(repo, str) and repo
+        else "weak"
+    )
+    name_rank = {"exact": 3, "strong": 2, "weak": 1}.get(name_match, 0)
+    stars = payload.get("stargazers_count")
+    return name_rank, stars if isinstance(stars, int) else 0
 
 
 def _github_search_repositories(query: str) -> list[dict[str, Any]]:
@@ -2808,6 +2847,7 @@ def _github_commit_sha(owner: str, repo: str, ref: str | None) -> str:
         if ref
         else f"https://api.github.com/repos/{owner}/{repo}/commits/HEAD"
     )
+    api_error: Exception | None = None
     try:
         request = urllib.request.Request(
             api_url,
@@ -2819,13 +2859,58 @@ def _github_commit_sha(owner: str, repo: str, ref: str | None) -> str:
         with urllib.request.urlopen(request, timeout=30) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        api_error = exc
+        payload = None
+    sha = payload.get("sha") if isinstance(payload, dict) else None
+    if isinstance(sha, str) and _is_full_git_sha(sha):
+        return sha
+
+    try:
+        return _github_commit_sha_from_atom(owner, repo, ref or "HEAD")
+    except GitHubCustomNodeUrlResolutionError as fallback_error:
+        raise GitHubCustomNodeUrlResolutionError(
+            "Noofy could not resolve that GitHub repository to a pinned commit."
+        ) from (api_error or fallback_error)
+
+
+def _github_commit_sha_from_atom(owner: str, repo: str, ref: str) -> str:
+    encoded_owner = urllib.parse.quote(owner, safe="")
+    encoded_repo = urllib.parse.quote(repo, safe="")
+    encoded_ref = urllib.parse.quote(ref, safe="")
+    url = (
+        f"https://github.com/{encoded_owner}/{encoded_repo}/commits/"
+        f"{encoded_ref}.atom"
+    )
+    try:
+        request = urllib.request.Request(
+            url,
+            headers={
+                "Accept": "application/atom+xml",
+                "User-Agent": "Noofy",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=30) as response:
+            data = response.read(1024 * 1024 + 1)
+        if len(data) > 1024 * 1024:
+            raise GitHubCustomNodeUrlResolutionError(
+                "GitHub returned too much commit metadata."
+            )
+        root = ET.fromstring(data)
+    except (
+        urllib.error.URLError,
+        TimeoutError,
+        ET.ParseError,
+    ) as exc:
         raise GitHubCustomNodeUrlResolutionError(
             "Noofy could not resolve that GitHub repository to a pinned commit."
         ) from exc
-    sha = payload.get("sha") if isinstance(payload, dict) else None
-    if not isinstance(sha, str) or not _is_full_git_sha(sha):
+
+    atom_namespace = "{http://www.w3.org/2005/Atom}"
+    entry_id = root.findtext(f"{atom_namespace}entry/{atom_namespace}id") or ""
+    sha = entry_id.rsplit("/", 1)[-1]
+    if not _is_full_git_sha(sha):
         raise GitHubCustomNodeUrlResolutionError(
-            "Noofy could not resolve that GitHub repository to a pinned commit."
+            "GitHub did not return a pinned commit in its repository feed."
         )
     return sha
 

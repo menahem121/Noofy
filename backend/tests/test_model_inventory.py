@@ -225,6 +225,17 @@ def test_models_inventory_combines_local_external_engine_and_missing_models(tmp_
     assert data["summary"]["noofy_count"] == 2
     assert data["summary"]["external_comfyui_count"] == 3
     assert data["summary"]["missing_count"] == 1
+    assert data["summary"]["total_known_size_bytes"] == sum(
+        path.stat().st_size
+        for path in (
+            noofy_model,
+            external_model,
+            external_sam,
+            noofy_llm,
+            diffusion_model,
+            tmp_path / "Engine Visible" / "vae" / "engine-only.safetensors",
+        )
+    )
     assert isinstance(data["summary"]["disk_free_bytes"], int)
     assert data["summary"]["disk_free_bytes"] > 0
     assert by_key["checkpoints/base.safetensors"]["source_label"] == "Noofy Models"

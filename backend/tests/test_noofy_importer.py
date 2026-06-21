@@ -5,6 +5,7 @@ import io
 import hashlib
 import json
 import sys
+import urllib.error
 import zipfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -1082,6 +1083,113 @@ def test_raw_comfyui_json_import_does_not_recommend_generic_comfyui_candidate(
     assert details["candidate"]["repo"] == "avatar-graph-comfyui"
     assert details["candidate"]["confidence"] == "low"
     assert details["candidate"]["specific_match_score"] == 0
+
+
+def test_github_commit_resolution_uses_atom_feed_when_api_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commit_sha = "a" * 40
+    requested_urls: list[str] = []
+    atom_payload = f"""<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>tag:github.com,2008:Grit::Commit/{commit_sha}</id>
+  </entry>
+</feed>
+""".encode()
+
+    class AtomResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self, size: int = -1) -> bytes:
+            return atom_payload[:size] if size >= 0 else atom_payload
+
+    def fake_urlopen(request, timeout: int):
+        url = request.full_url
+        requested_urls.append(url)
+        if "api.github.com" in url:
+            raise urllib.error.HTTPError(url, 504, "Gateway Timeout", None, None)
+        return AtomResponse()
+
+    monkeypatch.setattr(importer_module.urllib.request, "urlopen", fake_urlopen)
+
+    resolved = importer_module._github_commit_sha(
+        "kijai",
+        "ComfyUI-KJNodes",
+        "main",
+    )
+
+    assert resolved == commit_sha
+    assert requested_urls == [
+        "https://api.github.com/repos/kijai/ComfyUI-KJNodes/commits/main",
+        "https://github.com/kijai/ComfyUI-KJNodes/commits/main.atom",
+    ]
+
+
+def test_github_search_stops_after_verified_exact_popular_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commit_sha = "b" * 40
+    archive = _source_archive_bytes(
+        {
+            f"ComfyUI-KJNodes-{commit_sha}/nodes.py": (
+                "NODE_CLASS_MAPPINGS = {'ColorMatchV2': object}\n"
+            ),
+            f"ComfyUI-KJNodes-{commit_sha}/README.md": (
+                "ComfyUI custom nodes including ColorMatchV2.\n"
+            ),
+        }
+    )
+    commit_requests: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(
+        importer_module,
+        "_github_search_repositories",
+        lambda query: [
+            _github_repo_payload(
+                owner="kijai",
+                repo="ComfyUI-KJNodes",
+                stars=2_700,
+            ),
+            _github_repo_payload(
+                owner="fork-owner",
+                repo="ComfyUI-KJNodes",
+                stars=0,
+            ),
+        ],
+    )
+
+    def fake_commit(owner: str, repo: str, ref: str | None) -> str:
+        commit_requests.append((owner, repo))
+        return commit_sha
+
+    monkeypatch.setattr(importer_module, "_github_commit_sha", fake_commit)
+    monkeypatch.setattr(
+        importer_module,
+        "_download_url_bytes",
+        lambda url, *, max_bytes=512 * 1024 * 1024: archive,
+    )
+    target = importer_module.GitHubCustomNodeSearchTarget(
+        package_id="comfyui-kjnodes",
+        names=("ComfyUI-KJNodes",),
+        node_types=("ColorMatchV2",),
+        node_titles=("ColorMatchV2",),
+        family_terms=("color match",),
+    )
+
+    candidates = importer_module.DefaultGitHubCustomNodeUrlResolver().find_candidates(
+        target
+    )
+
+    assert [candidate.html_url for candidate in candidates] == [
+        "https://github.com/kijai/ComfyUI-KJNodes"
+    ]
+    assert candidates[0].confidence == "high"
+    assert commit_requests == [("kijai", "ComfyUI-KJNodes")]
 
 
 def test_noofy_importer_streams_source_file_extraction(
