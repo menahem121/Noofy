@@ -68,6 +68,7 @@ export type WorkflowValueKind =
 
 export interface WorkflowNodeValue {
   id: string;
+  backendInputId?: string;
   nodeId: string;
   inputName: string;
   label: string;
@@ -81,6 +82,7 @@ export interface WorkflowNodeValue {
   technical?: boolean;
   requiredRuntimeInput?: boolean;
   requiredRuntimeKind?: string | null;
+  defaultPinned?: boolean;
 }
 
 export type NodeIconKind = "text" | "note" | "sampler" | "image" | "image-input" | "audio" | "video" | "file" | "3d" | "lora" | "tune" | "output" | "save";
@@ -673,11 +675,13 @@ export function createDashboardWidgetForValue(value: WorkflowNodeValue, node: Wo
   return {
     id: `ctrl-${value.id}`,
     valueId: value.id,
+    backendInputId: value.backendInputId,
     binding: { nodeId: value.nodeId, inputName: value.inputName },
     widgetType,
     title: suggestTitle(value, node.title),
     description: suggestDescription(value),
     defaultValue,
+    defaultPinned: value.defaultPinned,
     options: value.options,
     acceptedExtensions: widgetType === "load_file" ? DEFAULT_FILE_ACCEPTED_EXTENSIONS : undefined,
     min: numericRange?.min,
@@ -962,7 +966,9 @@ export function workflowFromBindableInputs(
     is_lora_node: boolean;
     inputs: Array<{
       input_name: string;
+      backend_input_id?: string;
       current_value: unknown;
+      default_pinned?: boolean;
       kind: string;
       suggested_widget_type: string;
       widget_types: string[];
@@ -1020,6 +1026,7 @@ export function workflowFromBindableInputs(
     iconKind: node.is_three_d_node ? "3d" : node.is_audio_node ? "audio" : nodeIconKind(node.node_type, node.is_image_node, node.is_lora_node),
     values: node.inputs.map((inp) => ({
       id: `node-${node.node_id}-${inp.input_name}`,
+      backendInputId: inp.backend_input_id,
       nodeId: node.node_id,
       inputName: inp.input_name,
       label: inp.suggested_label ?? inp.input_name,
@@ -1031,6 +1038,7 @@ export function workflowFromBindableInputs(
       autoSelect: inp.auto_select,
       requiredRuntimeInput: inp.required_runtime_input === true,
       requiredRuntimeKind: inp.required_runtime_kind,
+      defaultPinned: inp.default_pinned === true,
       technical: ["steps", "cfg", "denoise", "batch_size", "scheduler", "sampler_name", "filename_prefix"].includes(
         inp.input_name
       ),

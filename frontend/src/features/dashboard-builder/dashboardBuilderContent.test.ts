@@ -1293,6 +1293,53 @@ describe("workflowFromBindableInputs", () => {
     ]);
   });
 
+  it("builds an initial image widget from an exported packaged default", () => {
+    const packagedDefault = {
+      source: "package_asset",
+      asset_id: "input-defaults/starter.png",
+      kind: "image",
+      filename: "starter.png",
+    };
+    const workflow = workflowFromBindableInputs("wf-exported-default", "Exported default", [
+      {
+        node_id: "13",
+        node_type: "LoadImage",
+        is_image_node: true,
+        is_lora_node: false,
+        inputs: [
+          {
+            input_name: "image",
+            backend_input_id: "input-13-image",
+            current_value: packagedDefault,
+            default_pinned: true,
+            kind: "image_input",
+            suggested_widget_type: "load_image",
+            widget_types: ["load_image", "load_image_mask"],
+          },
+        ],
+      },
+    ]);
+
+    const schema = buildInitialDashboard(workflow);
+
+    expect(schema.widgets).toEqual([
+      expect.objectContaining({
+        backendInputId: "input-13-image",
+        binding: { nodeId: "13", inputName: "image" },
+        widgetType: "load_image",
+        defaultValue: packagedDefault,
+        defaultPinned: true,
+      }),
+    ]);
+    expect(toBackendPayload(schema).inputs).toEqual([
+      expect.objectContaining({
+        id: "input-13-image",
+        default: packagedDefault,
+        default_pinned: true,
+      }),
+    ]);
+  });
+
   it("does not re-add intentionally removed optional output widgets while repairing a draft", () => {
     const workflow = workflowFromBindableInputs("wf-required-text", "Required Text Workflow", [
       {

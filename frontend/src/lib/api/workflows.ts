@@ -614,7 +614,9 @@ export interface WorkflowPackageResponse {
 
 export interface BindableInputEntry {
   input_name: string;
+  backend_input_id?: string;
   current_value: unknown;
+  default_pinned?: boolean;
   kind: string;
   suggested_widget_type: string;
   widget_types: string[];

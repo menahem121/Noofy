@@ -2029,10 +2029,75 @@ describe("DashboardBuilderPage", () => {
     const payload = toBackendPayload(onContinue.mock.calls[0][0] as DashboardSchema);
     expect(payload.inputs).toEqual([
       expect.objectContaining({
-        id: "image-control",
+        id: "image",
         control: "load_image",
         default: null,
         default_pinned: false,
+      }),
+    ]);
+  });
+
+  it("loads an exported packaged image default during initial dashboard setup", async () => {
+    const packagedDefault = {
+      source: "package_asset",
+      asset_id: "input-defaults/starter.png",
+      kind: "image",
+      filename: "starter.png",
+      content_type: "image/png",
+      size_bytes: 123,
+    };
+    const onContinue = vi.fn();
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/workflows/wf-exported-image/bindable-inputs")) {
+        return Promise.resolve(jsonResponse({
+          nodes: [
+            {
+              node_id: "13",
+              node_type: "LoadImage",
+              is_image_node: true,
+              is_lora_node: false,
+              inputs: [
+                {
+                  input_name: "image",
+                  backend_input_id: "input-13-image",
+                  current_value: packagedDefault,
+                  default_pinned: true,
+                  kind: "image_input",
+                  suggested_widget_type: "load_image",
+                  widget_types: ["load_image", "load_image_mask"],
+                },
+              ],
+            },
+          ],
+        }));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(
+      <DashboardBuilderPage
+        workflowId="wf-exported-image"
+        workflowName="Exported image workflow"
+        onBack={vi.fn()}
+        onContinue={onContinue}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    expect((await screen.findAllByAltText("Default image: starter.png"))[0]).toHaveAttribute(
+      "src",
+      "/api/workflows/wf-exported-image/inputs/input-13-image/default-asset?asset_id=input-defaults%2Fstarter.png",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /^continue$/i }));
+    const payload = toBackendPayload(onContinue.mock.calls[0][0] as DashboardSchema);
+    expect(payload.inputs).toEqual([
+      expect.objectContaining({
+        id: "input-13-image",
+        default: packagedDefault,
+        default_pinned: true,
       }),
     ]);
   });

@@ -17,6 +17,7 @@ from typing import Any
 from app.diagnostics import DiagnosticsSink
 from app.workflows.import_normalization import (
     detect_unresolved_runtime_inputs,
+    filter_resolved_runtime_inputs,
 )
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.media_values import (
@@ -95,6 +96,7 @@ class DashboardAuthoringService:
             object_info=object_info,
             widget_metadata=package.comfyui_widget_metadata,
         )
+        nodes = _overlay_dashboard_input_defaults(nodes, package.inputs)
         nodes = _annotate_required_runtime_inputs(nodes, _required_runtime_inputs(package))
         nodes, filter_events = filter_bindable_input_nodes_for_architecture(package, nodes)
         self._log_architecture_filter_events(workflow_id, filter_events)
@@ -553,7 +555,50 @@ def _required_runtime_inputs(
             continue
         seen.add(key)
         merged.append(runtime_input)
-    return merged
+    return filter_resolved_runtime_inputs(merged, candidate.inputs)
+
+
+def _overlay_dashboard_input_defaults(
+    nodes: list[dict[str, Any]],
+    workflow_inputs: list[WorkflowInput],
+) -> list[dict[str, Any]]:
+    inputs_by_binding = {
+        (workflow_input.binding.node_id, workflow_input.binding.input_name): workflow_input
+        for workflow_input in workflow_inputs
+    }
+    if not inputs_by_binding:
+        return nodes
+
+    overlaid_nodes: list[dict[str, Any]] = []
+    for node in nodes:
+        node_id = str(node.get("node_id", ""))
+        raw_inputs = node.get("inputs")
+        if not isinstance(raw_inputs, list):
+            overlaid_nodes.append(node)
+            continue
+        inputs: list[dict[str, Any]] = []
+        changed = False
+        for input_record in raw_inputs:
+            if not isinstance(input_record, dict):
+                inputs.append(input_record)
+                continue
+            workflow_input = inputs_by_binding.get(
+                (node_id, str(input_record.get("input_name", "")))
+            )
+            if workflow_input is None:
+                inputs.append(input_record)
+                continue
+            inputs.append(
+                {
+                    **input_record,
+                    "backend_input_id": workflow_input.id,
+                    "current_value": workflow_input.default,
+                    "default_pinned": workflow_input.default_pinned,
+                }
+            )
+            changed = True
+        overlaid_nodes.append({**node, "inputs": inputs} if changed else node)
+    return overlaid_nodes
 
 
 def _annotate_required_runtime_inputs(

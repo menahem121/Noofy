@@ -883,7 +883,6 @@ export function DashboardBuilderPage({
                 <Sparkles size={16} aria-hidden="true" />
                 Run workflow
               </button>
-              <p>Preview only. End-users will see this dashboard when they open the workflow.</p>
             </footer>
           </aside>
           </div>

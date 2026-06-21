@@ -1069,6 +1069,58 @@ def test_get_bindable_inputs_works_without_runner(tmp_path: Path) -> None:
     assert text_inputs, "text input should be classified"
 
 
+def test_bindable_inputs_preserve_exported_packaged_image_default(
+    tmp_path: Path,
+) -> None:
+    asset_bytes = b"\x89PNG\r\n\x1a\nexported-default"
+    digest = hashlib.sha256(asset_bytes).hexdigest()
+    asset_id = f"input-defaults/{digest[:16]}-starter.png"
+    reference = {
+        "source": "package_asset",
+        "asset_id": asset_id,
+        "kind": "image",
+        "filename": "starter.png",
+        "content_type": "image/png",
+        "size_bytes": len(asset_bytes),
+        "sha256": f"sha256:{digest}",
+    }
+    archive = _make_minimal_archive(
+        graph={
+            "13": {
+                "class_type": "LoadImage",
+                "inputs": {"image": "__noofy_runtime_image_input_required__"},
+            }
+        },
+        dashboard={
+            "version": "0.1.0",
+            "status": "not_configured",
+            "inputs": [
+                {
+                    "id": "input-13-image",
+                    "label": "Image",
+                    "control": "load_image",
+                    "binding": {"node_id": "13", "input_name": "image"},
+                    "default": reference,
+                    "default_pinned": True,
+                    "validation": {},
+                }
+            ],
+            "outputs": [],
+            "sections": [],
+        },
+        extra_files={f"assets/{asset_id}": asset_bytes},
+    )
+    service, workflow_id = _import_and_setup(tmp_path, archive)
+
+    result = service.get_bindable_inputs(workflow_id)
+
+    image_input = result["nodes"][0]["inputs"][0]
+    assert image_input["backend_input_id"] == "input-13-image"
+    assert image_input["current_value"] == reference
+    assert image_input["default_pinned"] is True
+    assert "required_runtime_input" not in image_input
+
+
 def test_get_bindable_inputs_uses_exported_widget_metadata_without_runner(
     tmp_path: Path,
 ) -> None:
