@@ -6671,6 +6671,18 @@ describe("WorkflowRunPage", () => {
         runBody = JSON.parse(String(init?.body ?? "{}"));
         return validWorkflow;
       },
+      (url, init) => {
+        if (url.endsWith("/api/workflows/text_to_image_v0/user-state") && (!init?.method || init.method === "GET")) {
+          return jsonResponse({
+            schema_version: "1",
+            workflow_id: "text_to_image_v0",
+            dashboard_version: "previous-dashboard",
+            values: { source_image: null },
+            layout_overrides: {},
+          });
+        }
+        return undefined;
+      },
     );
 
     renderRunPage();

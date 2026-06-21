@@ -380,6 +380,57 @@ describe("useWorkflowUserState", () => {
     });
   });
 
+  it("replaces an empty stale value with a new creator default when the package changes locally", async () => {
+    const remote: WorkflowUserState = {
+      ...emptyRemoteState("wf-1"),
+      dashboard_version: "1.0",
+      values: { image: null, prompt: "kept prompt" },
+    };
+    fetchMock.mockImplementation((_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") return Promise.resolve(jsonResponse(remote));
+      return Promise.resolve(jsonResponse(remote));
+    });
+    const packagedDefault = {
+      source: "package_asset",
+      asset_id: "input-defaults/starter.png",
+      kind: "image",
+      filename: "starter.png",
+    };
+    const inputIndex = makeInputIndex("image", "prompt");
+
+    const { result, rerender } = renderHook(
+      ({ defaults, version }: { defaults: Record<string, unknown>; version: string }) =>
+        useWorkflowUserState("wf-1", defaults, version, inputIndex),
+      {
+        initialProps: {
+          defaults: { image: null, prompt: "old prompt" } as Record<string, unknown>,
+          version: "1.0",
+        },
+      },
+    );
+    await waitFor(() => expect(result.current.values.prompt).toBe("kept prompt"));
+    expect(result.current.values.image).toBeNull();
+
+    rerender({
+      defaults: { image: packagedDefault, prompt: "new prompt" },
+      version: "1.1",
+    });
+
+    await waitFor(() => {
+      expect(result.current.values).toEqual({
+        image: packagedDefault,
+        prompt: "kept prompt",
+      });
+    });
+
+    await act(async () => vi.advanceTimersByTime(700));
+    const putCall = fetchMock.mock.calls.find(([, init]) => (init as RequestInit)?.method === "PUT");
+    expect(JSON.parse((putCall![1] as RequestInit).body as string).values).toEqual({
+      image: packagedDefault,
+      prompt: "kept prompt",
+    });
+  });
+
   it("flushes a pending debounced save when the hook unmounts", async () => {
     const remote: WorkflowUserState = {
       ...emptyRemoteState("wf-1"),

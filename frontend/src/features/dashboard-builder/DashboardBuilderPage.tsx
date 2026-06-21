@@ -68,6 +68,7 @@ import {
   type WorkflowNode,
   type WorkflowNodeValue,
 } from "./dashboardBuilderContent";
+import { builderDefaultMediaPreview, hasBuilderDefaultMedia } from "./defaultMediaPreview";
 import { DEFAULT_SEED_MODE, SEED_MODES, SEED_MODE_LABELS, type SeedMode } from "../../lib/seedControl";
 import { SEED_MODE_ICONS } from "../../lib/seedModeIcon";
 
@@ -851,6 +852,7 @@ export function DashboardBuilderPage({
                 </div>
               ) : (
                 <CreatedWidgetsList
+                  workflowId={activeWorkflowId}
                   items={createdItems}
                   selectedWidgetId={selectedWidgetId}
                   selectedGroupId={selectedGroupId}
@@ -2424,6 +2426,8 @@ function DefaultAssetUploader({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const accept = uploadAcceptForWidget(widget);
   const statusMessage = status?.widgetId === widget.id ? status.message : null;
+  const preview = builderDefaultMediaPreview(workflowId, widget);
+  const hasDefault = hasBuilderDefaultMedia(widget);
 
   useEffect(() => {
     setStatus(null);
@@ -2440,12 +2444,39 @@ function DefaultAssetUploader({
       setStatus({ widgetId: widget.id, message: error instanceof Error ? error.message : "Default upload failed." });
     }
   }
+
+  function clearDefault() {
+    onPatch({ defaultValue: null, defaultPinned: false });
+    setStatus({ widgetId: widget.id, message: "Default cleared." });
+  }
+
+  const Icon = iconForMediaDefault(widget.widgetType);
   return (
     <div className="builder-default-asset" data-noofy-workflow-import-drop-ignore>
-      <button className="secondary-button secondary-button--small" type="button" onClick={() => fileInputRef.current?.click()}>
-        <File size={14} aria-hidden="true" />
-        Upload default
-      </button>
+      {preview ? (
+        <div className="builder-default-asset__preview">
+          {preview.kind === "image" && preview.url ? (
+            <img src={preview.url} alt={`Default image: ${preview.label}`} />
+          ) : (
+            <span className="builder-default-asset__icon" aria-hidden="true">
+              <Icon size={18} />
+            </span>
+          )}
+          <span title={preview.label}>{preview.label}</span>
+        </div>
+      ) : null}
+      <div className="builder-default-asset__actions">
+        <button className="secondary-button secondary-button--small" type="button" onClick={() => fileInputRef.current?.click()}>
+          <File size={14} aria-hidden="true" />
+          {hasDefault ? "Replace default" : "Upload default"}
+        </button>
+        {hasDefault ? (
+          <button className="secondary-button secondary-button--small secondary-button--danger" type="button" onClick={clearDefault}>
+            <Trash2 size={14} aria-hidden="true" />
+            Clear default
+          </button>
+        ) : null}
+      </div>
       <input
         ref={fileInputRef}
         type="file"
@@ -2475,6 +2506,14 @@ async function uploadDefaultAssetForWidget(workflowId: string, widget: Dashboard
     return uploadDashboardThreeDAsset(workflowId, file);
   }
   return uploadDashboardFileAsset(workflowId, widget.id, file);
+}
+
+function iconForMediaDefault(widgetType: WidgetType) {
+  if (widgetType === "load_audio") return FileAudio;
+  if (widgetType === "load_video") return Video;
+  if (widgetType === "load_3d") return Box;
+  if (widgetType === "load_file") return File;
+  return ImagePlus;
 }
 
 function uploadAcceptForWidget(widget: DashboardWidget): string | undefined {
@@ -2571,6 +2610,7 @@ function ToggleRow({
 }
 
 function CreatedWidgetsList({
+  workflowId,
   items,
   selectedWidgetId,
   selectedGroupId,
@@ -2593,6 +2633,7 @@ function CreatedWidgetsList({
   onGroupInsertDragOver,
   onGroupInsertDrop,
 }: {
+  workflowId: string;
   items: DashboardTopLevelItem[];
   selectedWidgetId: string | null;
   selectedGroupId: string | null;
@@ -2632,6 +2673,7 @@ function CreatedWidgetsList({
             />
             {item.kind === "group" ? (
               <PreviewGroup
+                workflowId={workflowId}
                 item={item}
                 selectedGroupId={selectedGroupId}
                 selectedWidgetId={selectedWidgetId}
@@ -2654,6 +2696,7 @@ function CreatedWidgetsList({
               />
             ) : (
               <PreviewWidget
+                workflowId={workflowId}
                 widget={item.widget}
                 isSelected={selectedWidgetId === item.id}
                 dragging={draggingWidgetId === item.id}
@@ -2710,6 +2753,7 @@ function PreviewInsertDropZone({
 }
 
 function PreviewGroup({
+  workflowId,
   item,
   selectedGroupId,
   selectedWidgetId,
@@ -2730,6 +2774,7 @@ function PreviewGroup({
   onGroupInsertDragOver,
   onGroupInsertDrop,
 }: {
+  workflowId: string;
   item: Extract<DashboardTopLevelItem, { kind: "group" }>;
   selectedGroupId: string | null;
   selectedWidgetId: string | null;
@@ -2792,6 +2837,7 @@ function PreviewGroup({
               onDrop={(event) => onGroupInsertDrop(event, item.id, widget.id)}
             />
             <PreviewWidget
+              workflowId={workflowId}
               widget={widget}
               compact
               isSelected={selectedWidgetId === widget.id}
@@ -2824,6 +2870,7 @@ function PreviewGroup({
 }
 
 function PreviewWidget({
+  workflowId,
   widget,
   isSelected,
   dragging = false,
@@ -2837,6 +2884,7 @@ function PreviewWidget({
   onDragOver,
   onDrop,
 }: {
+  workflowId: string;
   widget: DashboardWidget;
   isSelected: boolean;
   dragging?: boolean;
@@ -2917,7 +2965,7 @@ function PreviewWidget({
           )}
           {widget.widgetType !== "note" && widget.description ? <p>{widget.description}</p> : null}
         </div>
-        <PreviewWidgetInput widget={widget} />
+        <PreviewWidgetInput workflowId={workflowId} widget={widget} />
       </div>
 
       <div className="preview-widget__actions" onClick={(e) => e.stopPropagation()}>
@@ -2935,7 +2983,7 @@ function PreviewWidget({
   );
 }
 
-function PreviewWidgetInput({ widget }: { widget: DashboardWidget }) {
+function PreviewWidgetInput({ workflowId, widget }: { workflowId: string; widget: DashboardWidget }) {
   if (widget.widgetType === "note") {
     return <p className="preview-note-card">{widget.description}</p>;
   }
@@ -3011,6 +3059,15 @@ function PreviewWidgetInput({ widget }: { widget: DashboardWidget }) {
   }
 
   if (widget.widgetType === "load_image") {
+    const preview = builderDefaultMediaPreview(workflowId, widget);
+    if (preview?.kind === "image" && preview.url) {
+      return (
+        <div className="preview-image-input preview-image-input--has-default">
+          <img src={preview.url} alt={`Default image: ${preview.label}`} />
+          <span title={preview.label}>{preview.label}</span>
+        </div>
+      );
+    }
     return (
       <div className="preview-image-input">
         <ImagePlus size={20} aria-hidden="true" />
@@ -3020,6 +3077,15 @@ function PreviewWidgetInput({ widget }: { widget: DashboardWidget }) {
   }
 
   if (widget.widgetType === "load_image_mask") {
+    const preview = builderDefaultMediaPreview(workflowId, widget);
+    if (preview?.kind === "image" && preview.url) {
+      return (
+        <div className="preview-image-input preview-image-input--has-default">
+          <img src={preview.url} alt={`Default image: ${preview.label}`} />
+          <span title={preview.label}>{preview.label}</span>
+        </div>
+      );
+    }
     return (
       <div className="preview-image-input">
         <ImagePlus size={20} aria-hidden="true" />

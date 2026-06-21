@@ -92,10 +92,15 @@ function mergeCurrentContext(
   currentDashboardVersion: string,
 ): WorkflowUserState {
   const values: Record<string, unknown> = {};
+  const dashboardChanged = state.dashboard_version !== currentDashboardVersion;
   for (const id of inputIndex.keys()) {
-    values[id] = Object.prototype.hasOwnProperty.call(state.values, id)
-      ? state.values[id]
-      : packageDefaults[id];
+    const hasExistingValue = Object.prototype.hasOwnProperty.call(state.values, id);
+    const existingValue = hasExistingValue ? state.values[id] : undefined;
+    const packageDefault = packageDefaults[id];
+    values[id] = hasExistingValue &&
+      !(dashboardChanged && isEmptyWorkflowUserValue(existingValue) && !isEmptyWorkflowUserValue(packageDefault))
+      ? existingValue
+      : packageDefault;
   }
 
   const validLayoutIdSet = new Set(validLayoutIds);
@@ -123,6 +128,10 @@ function mergeCurrentContext(
     layout_overrides: layoutOverrides,
     output_preferences: outputPreferences,
   };
+}
+
+function isEmptyWorkflowUserValue(value: unknown): boolean {
+  return value === null || value === undefined || value === "";
 }
 
 function sameRecord(

@@ -1964,6 +1964,79 @@ describe("DashboardBuilderPage", () => {
     );
   });
 
+  it("shows and clears an exported packaged image default in the builder", async () => {
+    const packagedDefault = {
+      source: "package_asset",
+      asset_id: "input-defaults/starter.png",
+      kind: "image",
+      filename: "starter.png",
+      content_type: "image/png",
+      size_bytes: 123,
+    };
+    const schema: DashboardSchema = {
+      version: 1,
+      workflowId: "wf-image",
+      workflowName: "Image workflow",
+      layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+      groups: [],
+      widgets: [
+        {
+          id: "image-control",
+          valueId: "image",
+          backendInputId: "image",
+          binding: { nodeId: "10", inputName: "image" },
+          widgetType: "load_image",
+          title: "Input image",
+          description: "",
+          defaultValue: packagedDefault,
+          defaultPinned: true,
+          layout: { x: 0, y: 0, w: 10, h: 8 },
+        },
+      ],
+    };
+    const onContinue = vi.fn();
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/workflows/wf-image/bindable-inputs")) {
+        return Promise.resolve(jsonResponse(imageWorkflowBindableInputsResponse()));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(
+      <DashboardBuilderPage
+        workflowId="wf-image"
+        workflowName="Image workflow"
+        initialSchema={schema}
+        onBack={vi.fn()}
+        onContinue={onContinue}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    await screen.findByLabelText(/widget title/i);
+    expect(screen.getAllByAltText("Default image: starter.png")[0]).toHaveAttribute(
+      "src",
+      "/api/workflows/wf-image/inputs/image/default-asset?asset_id=input-defaults%2Fstarter.png",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /clear default/i }));
+    expect(await screen.findByText("Default cleared.")).toBeInTheDocument();
+    expect(screen.queryByAltText("Default image: starter.png")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /^continue$/i }));
+    const payload = toBackendPayload(onContinue.mock.calls[0][0] as DashboardSchema);
+    expect(payload.inputs).toEqual([
+      expect.objectContaining({
+        id: "image-control",
+        control: "load_image",
+        default: null,
+        default_pinned: false,
+      }),
+    ]);
+  });
+
   it("explains saved-default removal choices and dismisses the dialog with Escape", async () => {
     const emptySchema: DashboardSchema = {
       version: 1,
@@ -2020,6 +2093,7 @@ describe("DashboardBuilderPage", () => {
       widgets: [],
     };
     const onContinue = vi.fn();
+    const uploadedAssetId = "12345678-1234-1234-1234-123456789abc.png";
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
@@ -2027,7 +2101,7 @@ describe("DashboardBuilderPage", () => {
         return Promise.resolve(jsonResponse(imageWorkflowBindableInputsResponse()));
       }
       if (url.endsWith("/api/workflows/wf-image/assets/image")) {
-        return Promise.resolve(jsonResponse({ asset_id: "assets/defaults/creator.png", original_filename: "creator.png" }));
+        return Promise.resolve(jsonResponse({ asset_id: uploadedAssetId, original_filename: "creator.png" }));
       }
       return Promise.reject(new Error(`Unexpected request: ${url}`));
     });
@@ -2062,6 +2136,10 @@ describe("DashboardBuilderPage", () => {
     await waitFor(() => {
       expect(screen.getByText("creator.png saved as default.")).toBeInTheDocument();
     }, { timeout: 3000 });
+    expect(screen.getAllByAltText(`Default image: ${uploadedAssetId}`)[0]).toHaveAttribute(
+      "src",
+      `/api/assets/${uploadedAssetId}`,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: /^continue$/i }));
     const payload = toBackendPayload(onContinue.mock.calls[0][0] as DashboardSchema);
@@ -2069,7 +2147,7 @@ describe("DashboardBuilderPage", () => {
       expect.arrayContaining([
         expect.objectContaining({
           control: "load_image",
-          default: "assets/defaults/creator.png",
+          default: uploadedAssetId,
           default_pinned: true,
         }),
       ]),

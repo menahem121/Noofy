@@ -278,6 +278,25 @@ def test_selected_input_asset_becomes_pinned_dashboard_default(tmp_path: Path) -
     assert dashboard_input["default"]["asset_id"].startswith("input-defaults/")
     assert str(image) not in json.dumps(documents)
 
+    target = tmp_path / "asset-workflow.noofy"
+    exporter.write_noofy_package(
+        target_path=target,
+        graph=package_graph,
+        documents=documents,
+        custom_nodes=[],
+        thumbnail_bytes=b"thumbnail",
+        bundled_input_assets=bundled,
+        workflow={"nodes": []},
+        workflow_widget_bindings={"nodes": []},
+    )
+
+    with zipfile.ZipFile(target) as package:
+        archived_dashboard = json.loads(package.read("dashboard.json"))
+        archived_default = archived_dashboard["inputs"][0]["default"]
+        assert archived_default == dashboard_input["default"]
+        assert package.read(f"assets/{archived_default['asset_id']}") == b"image-bytes"
+        assert json.loads(package.read(f"assets/{archived_default['asset_id']}.meta.json")) == archived_default
+
 
 def test_subgraph_links_are_not_reported_or_redacted_as_input_assets(
     tmp_path: Path,

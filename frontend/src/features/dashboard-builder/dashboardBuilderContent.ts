@@ -129,6 +129,7 @@ export interface DashboardWidget {
   id: string;
   binding: { nodeId: string; inputName: string };
   valueId: string;
+  backendInputId?: string;
   widgetType: WidgetType;
   title: string;
   description: string;
@@ -301,6 +302,7 @@ function widgetFingerprintShape(widget: DashboardWidget) {
   return {
     id: widget.id,
     valueId: widget.valueId,
+    backendInputId: widget.backendInputId,
     binding: widget.binding,
     widgetType: widget.widgetType,
     title: widget.title,

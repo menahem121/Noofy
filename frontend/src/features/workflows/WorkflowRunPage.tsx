@@ -5202,6 +5202,7 @@ function buildDashboardSchemaForEditing(
       widgets.push({
         id: control.id,
         valueId: input?.id ?? `note:${control.id}`,
+        ...(input ? { backendInputId: input.id } : {}),
         binding: input
           ? { nodeId: input.binding.node_id, inputName: input.binding.input_name }
           : { nodeId: "", inputName: "" },
@@ -5223,6 +5224,7 @@ function buildDashboardSchemaForEditing(
       widgets.push({
         id: control.id,
         valueId: input.id,
+        backendInputId: input.id,
         binding: { nodeId: input.binding.node_id, inputName: input.binding.input_name },
         widgetType: toBuilderWidgetType(control.type),
         title: control.label,
@@ -5313,6 +5315,7 @@ function hiddenBuilderWidgetForInput(
   const widget: DashboardWidget = {
     id: input.id,
     valueId: input.id,
+    backendInputId: input.id,
     binding: { nodeId: input.binding.node_id, inputName: input.binding.input_name },
     widgetType,
     title: input.label,

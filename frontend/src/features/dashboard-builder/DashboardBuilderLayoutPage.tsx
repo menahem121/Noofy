@@ -68,6 +68,7 @@ import {
   type MockWorkflow,
   type WidgetType,
 } from "./dashboardBuilderContent";
+import { builderDefaultMediaPreview } from "./defaultMediaPreview";
 import { DEFAULT_SEED_MODE, SEED_MODE_LABELS } from "../../lib/seedControl";
 import { SEED_MODE_ICONS } from "../../lib/seedModeIcon";
 
@@ -665,6 +666,7 @@ export function DashboardBuilderLayoutPage({
 
               {dropPreview ? (
                 <DragPreviewItem
+                  workflowId={activeWorkflowId}
                   item={topLevelItems.find((item) => item.id === dropPreview.itemId) ?? null}
                   layout={dropPreview.layout}
                   columns={schema.layout.gridColumns}
@@ -682,6 +684,7 @@ export function DashboardBuilderLayoutPage({
 
                 return (
                   <PlacedDashboardItem
+                    workflowId={activeWorkflowId}
                     key={item.id}
                     item={item}
                     layout={displayLayout}
@@ -700,6 +703,7 @@ export function DashboardBuilderLayoutPage({
 
               {dragPreview ? (
                 <DragPreviewItem
+                  workflowId={activeWorkflowId}
                   item={topLevelItems.find((item) => item.id === dragPreview.itemId) ?? null}
                   layout={dragPreview.layout}
                   columns={schema.layout.gridColumns}
@@ -761,6 +765,7 @@ function TrayDashboardItem({
 }
 
 function PlacedDashboardItem({
+  workflowId,
   item,
   layout,
   columns,
@@ -775,6 +780,7 @@ function PlacedDashboardItem({
   preview = false,
   dropPreview = false,
 }: {
+  workflowId: string;
   item: DashboardTopLevelItem;
   layout: DashboardWidgetLayout;
   columns: number;
@@ -833,7 +839,9 @@ function PlacedDashboardItem({
       </header>
 
       <div className="layout-canvas-widget__preview-surface">
-        {item.kind === "group" ? <GroupSurfacePreview item={item} /> : <WidgetSurfacePreview widget={item.widget} />}
+        {item.kind === "group"
+          ? <GroupSurfacePreview workflowId={workflowId} item={item} />
+          : <WidgetSurfacePreview workflowId={workflowId} widget={item.widget} />}
       </div>
       {!preview ? <DashboardCanvasResizeHandles label={title} onResizeStart={(handle, event) => onResizeStart(event, handle)} /> : null}
     </DashboardCanvasWidgetShell>
@@ -841,6 +849,7 @@ function PlacedDashboardItem({
 }
 
 function DragPreviewItem({
+  workflowId,
   item,
   layout,
   columns,
@@ -848,6 +857,7 @@ function DragPreviewItem({
   rowHeight,
   dropPreview = false,
 }: {
+  workflowId: string;
   item: DashboardTopLevelItem | null;
   layout: DashboardWidgetLayout;
   columns: number;
@@ -859,6 +869,7 @@ function DragPreviewItem({
 
   return (
     <PlacedDashboardItem
+      workflowId={workflowId}
       item={item}
       layout={layout}
       columns={columns}
@@ -953,7 +964,13 @@ function removeDashboardItemLayout(schema: DashboardSchema, itemId: string): Das
   };
 }
 
-function GroupSurfacePreview({ item }: { item: Extract<DashboardTopLevelItem, { kind: "group" }> }) {
+function GroupSurfacePreview({
+  workflowId,
+  item,
+}: {
+  workflowId: string;
+  item: Extract<DashboardTopLevelItem, { kind: "group" }>;
+}) {
   return (
     <div className="layout-group-preview">
       {item.widgets.map((widget) => (
@@ -962,14 +979,20 @@ function GroupSurfacePreview({ item }: { item: Extract<DashboardTopLevelItem, { 
             <span>{widget.title}</span>
             <small>{WIDGET_TYPE_LABELS[widget.widgetType]}</small>
           </div>
-          <WidgetSurfacePreview widget={widget} />
+          <WidgetSurfacePreview workflowId={workflowId} widget={widget} />
         </div>
       ))}
     </div>
   );
 }
 
-function WidgetSurfacePreview({ widget }: { widget: DashboardWidget }) {
+function WidgetSurfacePreview({
+  workflowId,
+  widget,
+}: {
+  workflowId: string;
+  widget: DashboardWidget;
+}) {
   if (widget.widgetType === "note") {
     return <p className="layout-preview-note-card">{widget.description}</p>;
   }
@@ -1051,6 +1074,15 @@ function WidgetSurfacePreview({ widget }: { widget: DashboardWidget }) {
   }
 
   if (widget.widgetType === "load_image" || widget.widgetType === "load_image_mask") {
+    const preview = builderDefaultMediaPreview(workflowId, widget);
+    if (preview?.kind === "image" && preview.url) {
+      return (
+        <div className="layout-preview-image-input layout-preview-image-input--has-default">
+          <img src={preview.url} alt={`Default image: ${preview.label}`} />
+          <span title={preview.label}>{preview.label}</span>
+        </div>
+      );
+    }
     return (
       <div className="layout-preview-image-input">
         <ImagePlus size={22} aria-hidden="true" />
