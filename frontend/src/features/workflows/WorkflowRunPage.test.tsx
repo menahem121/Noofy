@@ -1110,7 +1110,7 @@ describe("WorkflowRunPage", () => {
     expect(screen.queryByRole("dialog", { name: "Reload this workflow" })).not.toBeInTheDocument();
   });
 
-  it("shows the refresh fallback over a canvas workflow when the backend session changed", async () => {
+  it("does not show the refresh fallback when a fresh page adopts the current backend session", async () => {
     const reloadPage = vi.fn();
     window.sessionStorage.setItem("noofy.tabBackendSession.v1", "bs-previous");
     mockConfiguredDashboardFetch(fetchMock, { ...readyRuntime, backend_session_id: "bs-current" });
@@ -1130,13 +1130,8 @@ describe("WorkflowRunPage", () => {
     );
 
     expect(await screen.findByRole("main", { name: /workflow dashboard canvas/i })).toBeInTheDocument();
-    const dialog = await screen.findByRole("dialog", { name: "Reload this workflow" });
-    expect(within(dialog).getByText("Noofy restarted in the background. Reload this workflow to reconnect it to the current session.")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Reload this workflow" })).not.toBeInTheDocument();
     expect(reloadPage).not.toHaveBeenCalled();
-
-    fireEvent.click(within(dialog).getByRole("button", { name: "Reload workflow" }));
-
-    expect(reloadPage).toHaveBeenCalledTimes(1);
   });
 
   it("opens the CivitAI LoRA modal and searches through the Noofy backend only", async () => {

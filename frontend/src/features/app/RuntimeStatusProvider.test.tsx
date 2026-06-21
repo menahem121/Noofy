@@ -290,8 +290,6 @@ describe("RuntimeStatusProvider", () => {
     });
 
     expect(reloadPage).not.toHaveBeenCalled();
-    expect(window.localStorage.getItem("noofy.backendSession.v1")).toBe("bs-third");
-    expect(window.sessionStorage.getItem("noofy.tabBackendSession.v1")).toBe("bs-third");
     expect(JSON.parse(window.sessionStorage.getItem("noofy.sessionRestart.v1") ?? "{}")).toMatchObject({
       backendSessionId: "bs-third",
     });
@@ -299,7 +297,7 @@ describe("RuntimeStatusProvider", () => {
     expect(result.current.backendStatus).toBe("reachable");
   });
 
-  it("recovers in-app when the first runtime response differs from the session previously observed by this tab", async () => {
+  it("adopts the first runtime session without marking a freshly loaded page stale", async () => {
     const reloadPage = vi.fn();
     window.localStorage.setItem("noofy.backendSession.v1", "bs-current-in-another-tab");
     window.sessionStorage.setItem("noofy.tabBackendSession.v1", "bs-previous-in-this-tab");
@@ -317,9 +315,9 @@ describe("RuntimeStatusProvider", () => {
     });
 
     expect(reloadPage).not.toHaveBeenCalled();
-    expect(result.current.pageRefreshRequired).toBe(true);
+    expect(result.current.pageRefreshRequired).toBe(false);
     expect(result.current.backendStatus).toBe("reachable");
-    expect(window.sessionStorage.getItem("noofy.tabBackendSession.v1")).toBe("bs-current-in-another-tab");
+    expect(window.sessionStorage.getItem("noofy.sessionRestart.v1")).toBeNull();
   });
 
   it("observes backend sessions adopted through action responses without reloading on the first one", () => {
@@ -339,7 +337,6 @@ describe("RuntimeStatusProvider", () => {
     });
 
     expect(reloadPage).not.toHaveBeenCalled();
-    expect(window.sessionStorage.getItem("noofy.tabBackendSession.v1")).toBe("bs-first");
     expect(result.current.pageRefreshRequired).toBe(false);
   });
 

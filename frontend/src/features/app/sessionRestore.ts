@@ -1,5 +1,3 @@
-const BACKEND_SESSION_STORAGE_KEY = "noofy.backendSession.v1";
-const TAB_BACKEND_SESSION_STORAGE_KEY = "noofy.tabBackendSession.v1";
 const SESSION_RESTART_STORAGE_KEY = "noofy.sessionRestart.v1";
 const ACTIVE_RUN_WORKFLOWS_STORAGE_KEY = "noofy.activeRunWorkflows.v1";
 const RESTART_MARKER_MAX_AGE_MS = 10 * 60 * 1000;
@@ -17,29 +15,7 @@ interface ActiveRunWorkflowsMarker {
   updatedAt: number;
 }
 
-export function adoptBackendSessionId(backendSessionId: string) {
-  try {
-    window.localStorage.setItem(BACKEND_SESSION_STORAGE_KEY, backendSessionId);
-  } catch {
-    // Session observation must not depend on browser storage availability.
-  }
-  try {
-    window.sessionStorage.setItem(TAB_BACKEND_SESSION_STORAGE_KEY, backendSessionId);
-  } catch {
-    // Per-tab restart detection is best effort when storage is unavailable.
-  }
-}
-
-export function loadObservedBackendSessionId() {
-  try {
-    return window.sessionStorage.getItem(TAB_BACKEND_SESSION_STORAGE_KEY)?.trim() || null;
-  } catch {
-    return null;
-  }
-}
-
 export function recordBackendSessionRestart(backendSessionId: string) {
-  adoptBackendSessionId(backendSessionId);
   try {
     window.sessionStorage.setItem(
       SESSION_RESTART_STORAGE_KEY,

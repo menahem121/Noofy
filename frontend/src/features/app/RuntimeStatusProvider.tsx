@@ -2,11 +2,7 @@ import { createContext, type ReactNode, useCallback, useContext, useEffect, useM
 
 import { fetchRuntimeStatus, type RuntimeStatus } from "../../lib/api/noofyApi";
 import type { AppStatusView } from "./AppLayout";
-import {
-  adoptBackendSessionId,
-  loadObservedBackendSessionId,
-  recordBackendSessionRestart,
-} from "./sessionRestore";
+import { recordBackendSessionRestart } from "./sessionRestore";
 
 export type BackendStatus = "unknown" | "reachable" | "unreachable";
 export type EngineStatus = "unknown" | "ready" | "starting" | "busy" | "offline";
@@ -86,15 +82,13 @@ export function RuntimeStatusProvider({
   const observeBackendSession = useCallback((runtime: RuntimeStatus) => {
     const backendSessionId = runtime.backend_session_id?.trim();
     if (!backendSessionId) return;
-    const previous = backendSessionIdRef.current ?? loadObservedBackendSessionId();
+    const previous = backendSessionIdRef.current;
     if (!previous) {
       backendSessionIdRef.current = backendSessionId;
-      adoptBackendSessionId(backendSessionId);
       return;
     }
     if (previous === backendSessionId) {
       backendSessionIdRef.current = backendSessionId;
-      adoptBackendSessionId(backendSessionId);
       return;
     }
     backendSessionIdRef.current = backendSessionId;
