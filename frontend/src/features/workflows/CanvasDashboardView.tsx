@@ -56,6 +56,7 @@ import {
 import {
   defaultLayoutForWidgetGroup,
   defaultLayoutForWidgetType,
+  defaultSizeForWidgetType,
   isWidgetGroupLayoutCompact,
   isWidgetLayoutCompact,
   withCurrentWidgetGroupMinimum,
@@ -1053,7 +1054,12 @@ function GroupedCanvasControls({
           control.type === "textarea" ? "canvas-widget-group__control--textarea" : "",
         ].filter(Boolean).join(" ");
         return (
-          <div className={controlClasses} key={control.id} data-dashboard-control-id={control.id}>
+          <div
+            className={controlClasses}
+            key={control.id}
+            data-dashboard-control-id={control.id}
+            style={{ flexGrow: defaultSizeForWidgetType(control.type).h }}
+          >
             {control.type === "note" ? (
               <DashboardNoteBody
                 title={control.label}

@@ -914,6 +914,33 @@ describe("DashboardBuilderLayoutPage", () => {
     expect(canvasCss).toMatch(/\.canvas-widget-textarea\s*{[^}]*overflow:\s*auto;/);
   });
 
+  it("distributes group height across child widgets using their sizing policy", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(
+      <DashboardBuilderLayoutPage
+        workflowId="wf-1"
+        workflowName="Workflow"
+        initialSchema={groupedPlacedSchema}
+        onBackToWidgets={vi.fn()}
+        onSaveComplete={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    const groupItems = document.querySelectorAll(".layout-group-preview__item");
+    expect(groupItems).toHaveLength(2);
+    expect(groupItems[0]).toHaveStyle({ flexGrow: "6" });
+    expect(groupItems[1]).toHaveStyle({ flexGrow: "4" });
+    expect(builderLayoutCss).toMatch(/\.layout-group-preview\s*{[^}]*flex:\s*1 1 0;/);
+    expect(builderLayoutCss).toMatch(/\.layout-group-preview__item\s*{[^}]*flex-basis:\s*0;[^}]*flex-shrink:\s*1;/);
+    expect(builderLayoutCss).toMatch(/\.layout-canvas-widget--compact \.layout-group-preview__item\s*{[^}]*overflow:\s*auto;/);
+  });
+
   it("lets media placeholder frames fill resized preview widgets", () => {
     expect(builderLayoutCss).toMatch(
       /\.layout-canvas-widget__preview-surface > :is\(\.layout-preview-image-input, \.layout-preview-output\)\s*{[^}]*flex:\s*1 1 0;/,

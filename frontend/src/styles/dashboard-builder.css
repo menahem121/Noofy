@@ -2516,6 +2516,10 @@
   overflow: auto;
 }
 
+.layout-canvas-widget--compact .layout-group-preview__item {
+  overflow: auto;
+}
+
 .layout-canvas-widget--compact .layout-group-preview__label small {
   display: none;
 }
@@ -2551,6 +2555,7 @@
 
 .layout-group-preview {
   display: flex;
+  flex: 1 1 0;
   flex-direction: column;
   gap: 10px;
   min-height: 0;
@@ -2559,13 +2564,26 @@
 
 .layout-group-preview__item {
   display: flex;
+  flex-basis: 0;
+  flex-shrink: 1;
   flex-direction: column;
   gap: 6px;
   min-height: 0;
+  overflow: hidden;
   padding: 8px;
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.035);
   border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.layout-group-preview__item > :is(
+  .layout-preview-input--textarea,
+  .layout-preview-image-input,
+  .layout-preview-output,
+  .layout-preview-note-card
+) {
+  flex: 1 1 0;
+  min-height: 0;
 }
 
 .layout-group-preview__label {

@@ -32,6 +32,7 @@ import {
 import {
   defaultLayoutForWidgetGroup,
   defaultLayoutForWidgetType,
+  defaultSizeForWidgetType,
   isWidgetGroupLayoutCompact,
   isWidgetLayoutCompact,
 } from "../../lib/widgetSizes";
@@ -974,7 +975,11 @@ function GroupSurfacePreview({
   return (
     <div className="layout-group-preview">
       {item.widgets.map((widget) => (
-        <div className="layout-group-preview__item" key={widget.id}>
+        <div
+          className="layout-group-preview__item"
+          key={widget.id}
+          style={{ flexGrow: defaultSizeForWidgetType(widget.widgetType).h }}
+        >
           <div className="layout-group-preview__label">
             <span>{widget.title}</span>
             <small>{WIDGET_TYPE_LABELS[widget.widgetType]}</small>

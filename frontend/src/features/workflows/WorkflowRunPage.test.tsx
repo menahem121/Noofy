@@ -4062,8 +4062,10 @@ describe("WorkflowRunPage", () => {
     expect(within(groupedTextareaControls[1] as HTMLElement).getByText("Describe what you don't want to create.")).toBeInTheDocument();
     groupedTextareaControls.forEach((control) => {
       expect(control.querySelector(".canvas-widget-textarea")).toBeInTheDocument();
+      expect(control).toHaveStyle({ flexGrow: "6" });
     });
-    expect(canvasCss).toMatch(/\.canvas-widget-group__control--textarea\s*{[^}]*flex:\s*1 1 0;/);
+    expect(canvasCss).toMatch(/\.canvas-widget-group__control\s*{[^}]*flex-basis:\s*0;[^}]*flex-shrink:\s*1;/);
+    expect(canvasCss).toMatch(/\.layout-canvas-widget--compact \.canvas-widget-group__control\s*{[^}]*overflow:\s*auto;/);
   });
 
   it("keeps the run canvas within the visible workspace width", () => {

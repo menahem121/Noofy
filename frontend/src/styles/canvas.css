@@ -395,6 +395,7 @@
 
 .layout-canvas-widget--compact .canvas-widget-group__control {
   gap: 5px;
+  overflow: auto;
   padding: 8px;
 }
 
@@ -423,17 +424,16 @@
 
 .canvas-widget-group__control {
   display: flex;
+  flex-basis: 0;
+  flex-shrink: 1;
   flex-direction: column;
   gap: 7px;
   min-height: 0;
+  overflow: hidden;
   padding: 10px;
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.035);
   border: 1px solid rgba(255, 255, 255, 0.07);
-}
-
-.canvas-widget-group__control--textarea {
-  flex: 1 1 0;
 }
 
 .canvas-widget-group__control-header {
