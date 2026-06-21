@@ -42,13 +42,30 @@ export function modelDownloadPercentLabel(job: DownloadJob, percent: number | nu
 }
 
 export function failedModelStatusLabel(job: DownloadJob) {
-  const failedModel = job.models.find((model) => isModelDownloadFailure(model.status));
+  const failedModel = highestPriorityFailedModel(job);
   return failedModel?.status_label ?? failedModelStatusFromStatus(failedModel?.status);
 }
 
 export function failedModelMessage(job: DownloadJob) {
-  const failedModel = job.models.find((model) => isModelDownloadFailure(model.status));
+  const failedModel = highestPriorityFailedModel(job);
   return failedModel?.message ?? null;
+}
+
+function highestPriorityFailedModel(job: DownloadJob) {
+  return job.models
+    .filter((model) => isModelDownloadFailure(model.status))
+    .reduce<(typeof job.models)[number] | undefined>((selected, model) => {
+      if (!selected) return model;
+      return failurePriority(model.status) < failurePriority(selected.status) ? model : selected;
+    }, undefined);
+}
+
+function failurePriority(status: string) {
+  if (status === "not_enough_disk_space") return 0;
+  if (status === "authentication_required" || status === "access_denied") return 1;
+  if (status === "verification_failed" || status === "hash_mismatch") return 2;
+  if (status === "rate_limited") return 3;
+  return 4;
 }
 
 function failedModelStatusFromStatus(status: string | null | undefined) {

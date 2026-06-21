@@ -45,6 +45,9 @@ from app.workflows.package import RequiredModel, WorkflowPackage
 DISK_SPACE_SAFETY_MARGIN_BYTES = 512 * 1024 * 1024
 DOWNLOAD_CHUNK_BYTES = 1 << 20
 DOWNLOAD_STATE_UPDATE_INTERVAL_SECONDS = 1.0
+PROVIDER_RATE_LIMIT_DOWNLOAD_ATTEMPTS = 3
+PROVIDER_RATE_LIMIT_RETRY_BASE_SECONDS = 1.0
+PROVIDER_RATE_LIMIT_RETRY_MAX_SECONDS = 10.0
 DEFAULT_MODEL_DOWNLOAD_CONCURRENCY = 3
 DEFAULT_MODEL_VERIFICATION_CONCURRENCY = 3
 # Network/remote filesystem types where parallel full-file hashing tends to hurt
@@ -249,8 +252,19 @@ class ProviderModelResolver:
             )
             return []
         candidates: list[ProviderModelCandidate] = []
+        civitai_rate_limit: ProviderRateLimited | None = None
         if _model_sha256(model) is not None:
-            civitai_by_hash = await self._search_civitai_by_hash(model)
+            try:
+                civitai_by_hash = await self._search_civitai_by_hash(model)
+            except ProviderRateLimited as exc:
+                civitai_by_hash = []
+                civitai_rate_limit = exc
+                self._record_provider_status(
+                    model,
+                    provider="civitai",
+                    step="by_hash",
+                    status="rate_limited",
+                )
             self._record_provider_step(
                 model,
                 provider="civitai",
@@ -278,6 +292,9 @@ class ProviderModelResolver:
         if selected:
             self._adopt_provider_identity(model, selected[0])
             return [candidate.download_url for candidate in selected]
+
+        if civitai_rate_limit is not None:
+            raise civitai_rate_limit
 
         civitai_query = await self._search_civitai_query(model)
         self._record_provider_step(
@@ -1637,20 +1654,18 @@ class ModelAvailabilityService:
 
                 headers = self.provider_resolver.auth_headers_for_provider(provider)
                 stream_started_at = time.monotonic()
-                if progress_callback is None and cancel_event is None:
-                    await _stream_with_optional_headers(
-                        url,
-                        transaction.part_path,
-                        headers=headers,
-                    )
-                else:
-                    await _stream_with_optional_headers(
-                        url,
-                        transaction.part_path,
-                        headers=headers,
-                        progress_callback=stream_progress,
-                        cancel_event=cancel_event,
-                    )
+                await self._stream_model_source_with_rate_limit_retry(
+                    url,
+                    transaction.part_path,
+                    headers=headers,
+                    progress_callback=(
+                        stream_progress
+                        if progress_callback is not None or cancel_event is not None
+                        else None
+                    ),
+                    cancel_event=cancel_event,
+                    model=model,
+                )
                 stream_duration_seconds = max(
                     time.monotonic() - stream_started_at,
                     0.000001,
@@ -1746,8 +1761,12 @@ class ModelAvailabilityService:
                         raise last_error from exc
                     continue
                 if status_code == 429:
+                    provider_name = {
+                        "civitai": "Civitai",
+                        "hugging_face": "Hugging Face",
+                    }.get(provider, "The provider")
                     last_error = ProviderRateLimited(
-                        "The provider is rate limiting downloads; try again later."
+                        f"{provider_name} is rate limiting downloads; try again later."
                     )
                     if index == len(urls) - 1:
                         raise last_error from exc
@@ -1764,6 +1783,53 @@ class ModelAvailabilityService:
         ):
             raise last_error
         raise ModelAvailabilityError(f"All model sources failed: {last_error}")
+
+    async def _stream_model_source_with_rate_limit_retry(
+        self,
+        url: str,
+        part_path: Path,
+        *,
+        headers: dict[str, str],
+        progress_callback: Callable[[int, int | None], None] | None,
+        cancel_event: asyncio.Event | None,
+        model: RequiredModel,
+    ) -> None:
+        for attempt in range(1, PROVIDER_RATE_LIMIT_DOWNLOAD_ATTEMPTS + 1):
+            try:
+                await _stream_with_optional_headers(
+                    url,
+                    part_path,
+                    headers=headers,
+                    progress_callback=progress_callback,
+                    cancel_event=cancel_event,
+                )
+                return
+            except httpx.HTTPStatusError as exc:
+                if (
+                    exc.response.status_code != 429
+                    or attempt >= PROVIDER_RATE_LIMIT_DOWNLOAD_ATTEMPTS
+                ):
+                    raise
+                if part_path.exists():
+                    part_path.unlink()
+                delay_seconds = _provider_rate_limit_retry_delay(
+                    exc.response,
+                    attempt=attempt,
+                )
+                self.log_store.add(
+                    "info",
+                    "Retrying rate-limited required model source",
+                    "workflow.models",
+                    details={
+                        "provider": _provider_from_url(url),
+                        "folder": model.folder,
+                        "filename": model.filename,
+                        "attempt": attempt + 1,
+                        "max_attempts": PROVIDER_RATE_LIMIT_DOWNLOAD_ATTEMPTS,
+                        "delay_seconds": delay_seconds,
+                    },
+                )
+                await asyncio.sleep(delay_seconds)
 
     def _cleanup_transaction(self, transaction_dir: Path) -> None:
         if not transaction_dir.exists():
@@ -2074,7 +2140,15 @@ def _download_failure_for_error(error: str) -> ModelDownloadFailure:
         "continue importing with the workflow marked not ready, or cancel the import."
     )
     normalized = error.casefold()
-    if "not enough free disk space" in normalized:
+    if any(
+        marker in normalized
+        for marker in (
+            "not enough free disk space",
+            "no space left on device",
+            "[errno 28]",
+            "not enough space on the disk",
+        )
+    ):
         return ModelDownloadFailure(
             status="not_enough_disk_space",
             status_label="Not enough disk space",
@@ -2114,6 +2188,26 @@ def _download_failure_for_error(error: str) -> ModelDownloadFailure:
         status="download_failed",
         status_label="Download failed",
         message="The model download failed." + base_suffix,
+    )
+
+
+def _provider_rate_limit_retry_delay(
+    response: httpx.Response,
+    *,
+    attempt: int,
+) -> float:
+    retry_after = response.headers.get("Retry-After")
+    if retry_after is not None:
+        try:
+            return min(
+                max(float(retry_after), 0.0),
+                PROVIDER_RATE_LIMIT_RETRY_MAX_SECONDS,
+            )
+        except ValueError:
+            pass
+    return min(
+        PROVIDER_RATE_LIMIT_RETRY_BASE_SECONDS * (2 ** (attempt - 1)),
+        PROVIDER_RATE_LIMIT_RETRY_MAX_SECONDS,
     )
 
 

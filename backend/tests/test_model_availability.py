@@ -72,6 +72,10 @@ def _http_error(url: str, status_code: int) -> httpx.HTTPStatusError:
     return httpx.HTTPStatusError("provider error", request=request, response=response)
 
 
+async def _record_async_delay(delays: list[float], delay: float) -> None:
+    delays.append(delay)
+
+
 def test_model_summary_detects_noofy_owned_sha256_model(tmp_path: Path) -> None:
     payload = b"model-bytes"
     sha = hashlib.sha256(payload).hexdigest()
@@ -942,15 +946,20 @@ async def test_parallel_provider_rate_limit_fails_only_that_model(
     payload = b"unrelated-model"
     noofy_root = tmp_path / "Noofy Models"
     service = _service(noofy_root=noofy_root, max_parallel_downloads=2)
+    retry_delays: list[float] = []
 
     async def fake_stream(url: str, part_path: Path, **kwargs: object) -> None:
         if "rate-limited" in url:
             raise _http_error(url, 429)
-        await asyncio.sleep(0.01)
         part_path.parent.mkdir(parents=True, exist_ok=True)
         part_path.write_bytes(payload)
 
     monkeypatch.setattr(availability_module, "_stream_url", fake_stream)
+    monkeypatch.setattr(
+        availability_module.asyncio,
+        "sleep",
+        lambda delay: _record_async_delay(retry_delays, delay),
+    )
 
     result = await service.download_missing(
         _package(
@@ -978,9 +987,90 @@ async def test_parallel_provider_rate_limit_fails_only_that_model(
     assert result.downloaded_count == 1
     assert result.failed_count == 1
     assert models_by_filename["rate-limited.safetensors"].status == "rate_limited"
+    assert "Hugging Face is rate limiting" in (
+        models_by_filename["rate-limited.safetensors"].message or ""
+    )
     assert models_by_filename["unrelated.safetensors"].status == "available"
     assert (noofy_root / "checkpoints" / "unrelated.safetensors").read_bytes() == payload
     assert not (noofy_root / "checkpoints" / "rate-limited.safetensors").exists()
+    assert retry_delays == [1.0, 2.0]
+
+
+@pytest.mark.anyio
+async def test_download_retries_rate_limited_source_then_succeeds(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"retry-success"
+    noofy_root = tmp_path / "Noofy Models"
+    attempts = 0
+    retry_delays: list[float] = []
+
+    async def fake_stream(url: str, part_path: Path, **kwargs: object) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise _http_error(url, 429)
+        part_path.parent.mkdir(parents=True, exist_ok=True)
+        part_path.write_bytes(payload)
+
+    monkeypatch.setattr(availability_module, "_stream_url", fake_stream)
+    monkeypatch.setattr(
+        availability_module.asyncio,
+        "sleep",
+        lambda delay: _record_async_delay(retry_delays, delay),
+    )
+
+    result = await _service(noofy_root=noofy_root).download_missing(
+        _package(
+            [
+                RequiredModel(
+                    folder="checkpoints",
+                    filename="retry-success.safetensors",
+                    size_bytes=len(payload),
+                    verification_level="filename_size",
+                    source_urls=["https://civitai.com/api/download/models/123"],
+                )
+            ]
+        )
+    )
+
+    assert result.failed_count == 0
+    assert result.downloaded_count == 1
+    assert attempts == 3
+    assert retry_delays == [1.0, 2.0]
+
+
+@pytest.mark.anyio
+async def test_os_disk_full_error_is_reported_as_not_enough_disk_space(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    noofy_root = tmp_path / "Noofy Models"
+
+    async def fake_stream(url: str, part_path: Path, **kwargs: object) -> None:
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(availability_module, "_stream_url", fake_stream)
+
+    result = await _service(noofy_root=noofy_root).download_missing(
+        _package(
+            [
+                RequiredModel(
+                    folder="checkpoints",
+                    filename="disk-full.safetensors",
+                    verification_level="filename_only",
+                    source_urls=["https://example.com/disk-full.safetensors"],
+                )
+            ]
+        )
+    )
+
+    assert result.failed_count == 1
+    assert result.model_summary.models[0].status == "not_enough_disk_space"
+    assert "Not enough free disk space" in (
+        result.model_summary.models[0].message or ""
+    )
 
 
 @pytest.mark.anyio
@@ -3408,6 +3498,74 @@ async def test_provider_rate_limits_do_not_crash_import_flow(
 
     assert result.failed_count == 1
     assert expected_message in (result.model_summary.models[0].message or "")
+
+
+@pytest.mark.anyio
+async def test_civitai_hash_rate_limit_falls_back_to_hugging_face(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"hugging-face-fallback"
+    sha = hashlib.sha256(payload).hexdigest()
+    noofy_root = tmp_path / "Noofy Models"
+    streamed_urls: list[str] = []
+
+    async def fake_fetch_json(
+        method: str,
+        url: str,
+        params: dict[str, str],
+        headers: dict[str, str],
+    ) -> object:
+        if "/by-hash/" in url:
+            raise _http_error(url, 429)
+        if url == "https://huggingface.co/api/models":
+            if params["search"] == "fallback.safetensors":
+                return [{"modelId": "creator/fallback"}]
+            return []
+        if url.endswith("/creator/fallback"):
+            return {
+                "siblings": [
+                    {
+                        "rfilename": "fallback.safetensors",
+                        "size": len(payload),
+                        "lfs": {"sha256": sha, "size": len(payload)},
+                    }
+                ]
+            }
+        raise AssertionError(f"unexpected provider request: {url}")
+
+    async def fake_stream(url: str, part_path: Path, **kwargs: object) -> None:
+        streamed_urls.append(url)
+        part_path.parent.mkdir(parents=True, exist_ok=True)
+        part_path.write_bytes(payload)
+
+    service = _service(
+        noofy_root=noofy_root,
+        provider_resolver=ProviderModelResolver(
+            api_key_resolver=lambda provider: None,
+            fetch_json=fake_fetch_json,
+        ),
+    )
+    monkeypatch.setattr(availability_module, "_stream_url", fake_stream)
+
+    result = await service.download_missing(
+        _package(
+            [
+                RequiredModel(
+                    folder="checkpoints",
+                    filename="fallback.safetensors",
+                    checksum=f"sha256:{sha}",
+                    size_bytes=len(payload),
+                    verification_level="sha256_size",
+                )
+            ]
+        )
+    )
+
+    assert result.failed_count == 0
+    assert streamed_urls == [
+        "https://huggingface.co/creator/fallback/resolve/main/fallback.safetensors"
+    ]
 
 
 @pytest.mark.anyio
