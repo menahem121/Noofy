@@ -2240,7 +2240,12 @@ def likely_memory_error(message: str | None) -> bool:
     return any(marker in normalized for marker in markers)
 
 
-def memory_requirement_for_decision(decision: MemoryGovernorDecision) -> dict[str, Any]:
+def memory_requirement_for_decision(
+    decision: MemoryGovernorDecision,
+    *,
+    available_vram_mb: int | None = None,
+    available_ram_mb: int | None = None,
+) -> dict[str, Any]:
     estimate = decision.workflow_estimate
     machine = decision.machine_snapshot
     unified_memory = machine is not None and machine.backend in {MemoryBackend.MPS, MemoryBackend.CPU}
@@ -2262,10 +2267,18 @@ def memory_requirement_for_decision(decision: MemoryGovernorDecision) -> dict[st
     return _memory_requirement_payload(
         required_vram_mb=required_vram_mb,
         total_vram_mb=machine.total_vram_mb if machine is not None else None,
-        available_vram_mb=machine.free_vram_mb if machine is not None else None,
+        available_vram_mb=(
+            available_vram_mb
+            if available_vram_mb is not None
+            else machine.free_vram_mb if machine is not None else None
+        ),
         required_ram_mb=required_ram_mb,
         total_ram_mb=machine.total_ram_mb if machine is not None else None,
-        available_ram_mb=machine.free_ram_mb if machine is not None else None,
+        available_ram_mb=(
+            available_ram_mb
+            if available_ram_mb is not None
+            else machine.free_ram_mb if machine is not None else None
+        ),
         source="memory_governor_decision",
         confidence=decision.confidence.value,
     )

@@ -155,6 +155,14 @@ def test_memory_requirement_for_decision_reports_when_freeing_memory_may_help() 
     assert requirement["capacity_exceeded"] is False
     assert requirement["freeing_memory_may_help"] is True
 
+    post_cleanup_requirement = memory_requirement_for_decision(
+        decision,
+        available_vram_mb=9_000,
+    )
+
+    assert post_cleanup_requirement["available_vram_mb"] == 9_000
+    assert post_cleanup_requirement["freeing_memory_may_help"] is True
+
 
 def test_conservative_memory_class_treats_unknown_and_medium_as_heavy() -> None:
     assert conservative_memory_class(RunnerMemoryClass.UNKNOWN) is RunnerMemoryClass.GPU_HEAVY

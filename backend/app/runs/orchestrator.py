@@ -602,6 +602,7 @@ class RunOrchestrator:
                 memory_status=self.memory_status_payload(memory_decision, queue_id=queued.queue_id),
             )
         if memory_decision.action is MemoryDecisionAction.BLOCKED_BY_MEMORY:
+            blocked_job_id = f"blocked-memory-{workflow_id}"
             self.runner_supervisor.rollback_runner_reservation(
                 reservation_token,
                 notify_state_change=False,
@@ -612,6 +613,7 @@ class RunOrchestrator:
                 "warning",
                 "Workflow run blocked by memory policy",
                 "runs.orchestrator",
+                job_id=blocked_job_id,
                 workflow_id=workflow_id,
                 details={
                     "runner_id": runner.runner_id,
@@ -620,7 +622,7 @@ class RunOrchestrator:
                 },
             )
             return EngineJob(
-                job_id=f"blocked-memory-{workflow_id}",
+                job_id=blocked_job_id,
                 workflow_id=workflow_id,
                 engine="noofy",
                 status="blocked_by_memory",
@@ -635,10 +637,24 @@ class RunOrchestrator:
                 reservation_token,
                 notify_state_change=False,
             )
-            return await self.evict_idle_runners(
+            blocked_job = await self.evict_idle_runners(
                 memory_decision,
                 selected_runner_id=runner.runner_id,
             )
+            if blocked_job is not None and blocked_job.status == "blocked_by_memory":
+                self.log_store.add(
+                    "warning",
+                    "Workflow run blocked after memory cleanup",
+                    "runs.orchestrator",
+                    job_id=blocked_job.job_id,
+                    workflow_id=workflow_id,
+                    details={
+                        "memory_decision_id": memory_decision.decision_id,
+                        "reason": memory_decision.reason_code,
+                        "memory_status": (blocked_job.memory_status or {}).get("state"),
+                    },
+                )
+            return blocked_job
         return None
 
     def _record_run_blocked(self, package: WorkflowPackage, reason: str) -> None:
@@ -678,6 +694,16 @@ class RunOrchestrator:
             else None
         )
         release_check = payload.get("memory_release_check")
+        final_free_vram_mb = (
+            release_check.get("final_free_vram_mb")
+            if isinstance(release_check, dict)
+            else None
+        )
+        final_free_ram_mb = (
+            release_check.get("final_free_ram_mb")
+            if isinstance(release_check, dict)
+            else None
+        )
         if memory_decision_payload is not None and isinstance(release_check, dict):
             memory_decision_payload["developer_details"] = {
                 **memory_decision_payload["developer_details"],
@@ -688,10 +714,12 @@ class RunOrchestrator:
             }
         self.record_memory_metric("workflow_run_blocked_by_memory")
         self._record_run_blocked(package, message)
+        blocked_job_id = f"blocked-memory-{workflow_id}"
         self.log_store.add(
             "warning",
             "Workflow run blocked by workflow runner memory admission",
             "runs.orchestrator",
+            job_id=blocked_job_id,
             workflow_id=workflow_id,
             details={
                 "runner_status": payload.get("status"),
@@ -701,17 +729,51 @@ class RunOrchestrator:
                 "reason": (
                     memory_decision.reason_code if memory_decision is not None else None
                 ),
+                "release_status": (
+                    release_check.get("status")
+                    if isinstance(release_check, dict)
+                    else None
+                ),
+                "required_free_vram_mb": (
+                    release_check.get("required_free_vram_mb")
+                    if isinstance(release_check, dict)
+                    else None
+                ),
+                "required_free_ram_mb": (
+                    release_check.get("required_free_ram_mb")
+                    if isinstance(release_check, dict)
+                    else None
+                ),
+                "final_free_vram_mb": final_free_vram_mb,
+                "final_free_ram_mb": final_free_ram_mb,
+                "blocking_constraints": (
+                    release_check.get("blocking_constraints")
+                    if isinstance(release_check, dict)
+                    else None
+                ),
             },
         )
         return EngineJob(
-            job_id=f"blocked-memory-{workflow_id}",
+            job_id=blocked_job_id,
             workflow_id=workflow_id,
             engine="noofy",
             status="blocked_by_memory",
             message=message,
             error_code="insufficient_memory",
             memory_requirement=(
-                memory_requirement_for_decision(memory_decision)
+                memory_requirement_for_decision(
+                    memory_decision,
+                    available_vram_mb=(
+                        final_free_vram_mb
+                        if isinstance(final_free_vram_mb, int)
+                        else None
+                    ),
+                    available_ram_mb=(
+                        final_free_ram_mb
+                        if isinstance(final_free_ram_mb, int)
+                        else None
+                    ),
+                )
                 if memory_decision is not None
                 else None
             ),

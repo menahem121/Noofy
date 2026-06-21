@@ -1033,6 +1033,7 @@ describe("WorkflowRunPage", () => {
       diagnosticEvent("runtime.runner_process.stdout", "runner traceback"),
       diagnosticEvent("future.engine", "runner failed", { runner_id: "runner-1" }),
       diagnosticEvent("engine.service", "Submitting workflow run", { runner_id: "runner-1" }),
+      diagnosticEvent("runs.orchestrator", "Workflow run blocked", { runner_id: "runner-1" }),
       diagnosticEvent("memory_governor", "Started memory sampling"),
       diagnosticEvent("workflow.models", "Model validation failed"),
     ]);
@@ -1046,6 +1047,7 @@ describe("WorkflowRunPage", () => {
     ]);
     expect(noofyLogs.map((event) => event.source)).toEqual([
       "engine.service",
+      "runs.orchestrator",
       "memory_governor",
       "workflow.models",
     ]);
@@ -2916,9 +2918,9 @@ describe("WorkflowRunPage", () => {
         required_vram_mb: exceedsCapacity ? 26_000 : 10_000,
         total_vram_mb: 24_000,
         available_vram_mb: 5_000,
-        required_ram_mb: null,
-        total_ram_mb: 64_000,
-        available_ram_mb: 50_000,
+        required_ram_mb: state === "memory_cleanup_failed" ? 9_367 : null,
+        total_ram_mb: state === "memory_cleanup_failed" ? 15_782 : 64_000,
+        available_ram_mb: state === "memory_cleanup_failed" ? 5_352 : 50_000,
         capacity_exceeded: exceedsCapacity,
         freeing_memory_may_help: !exceedsCapacity,
         source: "memory_governor_decision",
@@ -2933,6 +2935,20 @@ describe("WorkflowRunPage", () => {
         can_retry_after_cleanup: state === "retrying_after_memory_cleanup",
       },
     }, (url) => {
+      if (status === "blocked_by_memory" && url.endsWith(`/api/jobs/memory-${state}/logs?limit=200`)) {
+        return jsonResponse({
+          events: [
+            {
+              ...diagnosticEvent("runs.orchestrator", "Workflow run blocked by workflow runner memory admission", {
+                required_free_ram_mb: 8_000,
+                final_free_ram_mb: 5_600,
+                blocking_constraints: ["ram_below_required"],
+              }),
+              job_id: `memory-${state}`,
+            },
+          ],
+        });
+      }
       if (status !== "queued_pending_memory" || !url.endsWith(`/api/jobs/memory-${state}/progress`)) return undefined;
       return jsonResponse({
         job_id: `memory-${state}`,
@@ -2958,9 +2974,14 @@ describe("WorkflowRunPage", () => {
       const dialog = screen.getByRole("dialog", { name: title });
       expect(within(dialog).getByText(
         exceedsCapacity
-          ? "GPU memory: about 25.4 GB required; this machine has about 23.4 GB."
-          : "GPU memory: about 9.77 GB required; this machine has about 23.4 GB.",
+          ? "GPU memory: about 25.4 GB required; about 4.88 GB free when checked (23.4 GB total)."
+          : "GPU memory: about 9.77 GB required; about 4.88 GB free when checked (23.4 GB total).",
       )).toBeInTheDocument();
+      if (state === "memory_cleanup_failed") {
+        expect(within(dialog).getByText(
+          "RAM: about 9.15 GB required; about 5.23 GB free when checked (15.4 GB total).",
+        )).toBeInTheDocument();
+      }
       if (exceedsCapacity) {
         expect(within(dialog).queryByText("Close other apps that may be using memory.")).not.toBeInTheDocument();
       } else {
@@ -2969,6 +2990,11 @@ describe("WorkflowRunPage", () => {
       expect(screen.queryByText(/test_memory_state/)).not.toBeInTheDocument();
       fireEvent.click(within(dialog).getByRole("button", { name: "Developer details" }));
       expect(within(dialog).getByText(/test_memory_state/)).toBeInTheDocument();
+      fireEvent.click(within(dialog).getByRole("button", { name: "View logs" }));
+      expect(await within(dialog).findByText(
+        "ComfyUI did not run because Noofy stopped this workflow before submission.",
+      )).toBeInTheDocument();
+      expect(within(dialog).getByText(/Workflow run blocked by workflow runner memory admission/)).toBeInTheDocument();
     } else {
       expect(screen.getByText(/test_memory_state/)).toBeInTheDocument();
     }

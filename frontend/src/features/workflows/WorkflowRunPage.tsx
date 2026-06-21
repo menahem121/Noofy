@@ -1364,6 +1364,7 @@ export function WorkflowRunPage({
         comfyuiLogs,
         noofyLogs,
         logsLoaded: true,
+        errorCode: dialogSnapshot.errorCode,
       }),
     );
     setFailureDialog((current) => (current ? { ...current, logsCopied: true } : current));
@@ -2901,7 +2902,7 @@ function WorkflowFailureDialog({
                 title="ComfyUI engine logs"
                 events={dialog.comfyuiLogs}
                 loading={dialog.logsLoading}
-                emptyMessage="No ComfyUI engine logs were returned for this failure."
+                emptyMessage={emptyComfyUiFailureLogsMessage(dialog.errorCode)}
               />
               <DiagnosticLogSection
                 title="Noofy logs"
@@ -3858,6 +3859,7 @@ function isComfyUIDiagnostic(event: DiagnosticEvent) {
 function isKnownNoofyDiagnosticSource(source: string) {
   return (
     source === "engine.service" ||
+    source.startsWith("runs.") ||
     source === "memory_governor" ||
     source.startsWith("workflow.") ||
     source === "runtime.workspace" ||
@@ -3886,7 +3888,7 @@ function formatFailureReport(workflowId: string, dialog: RunFailureDialogState) 
     JSON.stringify(dialog.developerDetails, null, 2),
     "",
     "ComfyUI engine logs",
-    formatDiagnosticEvents(dialog.comfyuiLogs) || (dialog.logsLoaded ? "No ComfyUI engine logs were returned for this failure." : "Logs were not loaded."),
+    formatDiagnosticEvents(dialog.comfyuiLogs) || (dialog.logsLoaded ? emptyComfyUiFailureLogsMessage(dialog.errorCode) : "Logs were not loaded."),
     "",
     "Noofy logs",
     formatDiagnosticEvents(dialog.noofyLogs) || (dialog.logsLoaded ? "No Noofy logs were returned for this failure." : "Logs were not loaded."),
@@ -3897,10 +3899,11 @@ function formatFailureLogsReport({
   comfyuiLogs,
   noofyLogs,
   logsLoaded,
-}: Pick<RunFailureDialogState, "comfyuiLogs" | "noofyLogs" | "logsLoaded">) {
+  errorCode,
+}: Pick<RunFailureDialogState, "comfyuiLogs" | "noofyLogs" | "logsLoaded" | "errorCode">) {
   return [
     "ComfyUI engine logs",
-    formatDiagnosticEvents(comfyuiLogs) || (logsLoaded ? "No ComfyUI engine logs were returned for this failure." : "Logs were not loaded."),
+    formatDiagnosticEvents(comfyuiLogs) || (logsLoaded ? emptyComfyUiFailureLogsMessage(errorCode) : "Logs were not loaded."),
     "",
     "Noofy logs",
     formatDiagnosticEvents(noofyLogs) || (logsLoaded ? "No Noofy logs were returned for this failure." : "Logs were not loaded."),
@@ -3991,11 +3994,29 @@ function isMemoryFailureCode(code: JobResult["error_code"]) {
   return code === "memory_oom" || code === "insufficient_memory";
 }
 
+function emptyComfyUiFailureLogsMessage(code: JobResult["error_code"]) {
+  return code === "insufficient_memory"
+    ? "ComfyUI did not run because Noofy stopped this workflow before submission."
+    : "No ComfyUI engine logs were returned for this failure.";
+}
+
 function MemoryRequirementSummary({ requirement }: { requirement: MemoryRequirement | null }) {
   if (!requirement) return null;
   const rows = [
-    memoryRequirementRow("GPU memory", requirement.required_vram_mb, requirement.total_vram_mb, requirement.source),
-    memoryRequirementRow("RAM", requirement.required_ram_mb, requirement.total_ram_mb, requirement.source),
+    memoryRequirementRow(
+      "GPU memory",
+      requirement.required_vram_mb,
+      requirement.total_vram_mb,
+      requirement.available_vram_mb,
+      requirement.source,
+    ),
+    memoryRequirementRow(
+      "RAM",
+      requirement.required_ram_mb,
+      requirement.total_ram_mb,
+      requirement.available_ram_mb,
+      requirement.source,
+    ),
   ].filter((row): row is string => Boolean(row));
   if (rows.length === 0) return null;
   return (
@@ -4011,8 +4032,26 @@ function MemoryRequirementSummary({ requirement }: { requirement: MemoryRequirem
   );
 }
 
-function memoryRequirementRow(label: string, requiredMb: number | null, totalMb: number | null, source: string) {
-  if (requiredMb == null && totalMb == null) return null;
+function memoryRequirementRow(
+  label: string,
+  requiredMb: number | null,
+  totalMb: number | null,
+  availableMb: number | null,
+  source: string,
+) {
+  if (requiredMb == null && totalMb == null && availableMb == null) return null;
+  if (source === "memory_governor_decision" && availableMb != null) {
+    if (requiredMb != null && totalMb != null) {
+      return `${label}: about ${formatMemoryGb(requiredMb)} required; about ${formatMemoryGb(availableMb)} free when checked (${formatMemoryGb(totalMb)} total).`;
+    }
+    if (requiredMb != null) {
+      return `${label}: about ${formatMemoryGb(requiredMb)} required; about ${formatMemoryGb(availableMb)} free when checked.`;
+    }
+    if (totalMb != null) {
+      return `${label}: about ${formatMemoryGb(availableMb)} free when checked (${formatMemoryGb(totalMb)} total).`;
+    }
+    return `${label}: about ${formatMemoryGb(availableMb)} free when checked.`;
+  }
   if (requiredMb != null && totalMb != null) {
     if (source === "runtime_oom") {
       return `${label}: about ${formatMemoryGb(requiredMb)} required; about ${formatMemoryGb(totalMb)} was available to this workflow.`;

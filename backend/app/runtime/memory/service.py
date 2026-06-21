@@ -1176,7 +1176,15 @@ def _memory_cleanup_failed_job(
         status="blocked_by_memory",
         message=message,
         error_code="insufficient_memory",
-        memory_requirement=memory_requirement_for_decision(decision),
+        memory_requirement=memory_requirement_for_decision(
+            decision,
+            available_vram_mb=(
+                release_check.final_free_vram_mb if release_check is not None else None
+            ),
+            available_ram_mb=(
+                release_check.final_free_ram_mb if release_check is not None else None
+            ),
+        ),
         memory_decision=memory_decision,
         memory_status={
             **memory_user_status_for_decision(decision).model_dump(mode="json"),

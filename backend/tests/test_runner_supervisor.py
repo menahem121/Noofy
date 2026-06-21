@@ -3318,6 +3318,10 @@ async def test_workflow_run_blocks_only_after_idle_runner_release_times_out() ->
     assert job.memory_status["state"] == "memory_cleanup_failed"
     assert job.memory_decision is not None
     assert job.memory_decision["developer_details"]["memory_cleanup_failure"]["reason_code"] == "memory_release_timeout"
+    job_logs = service.list_job_logs(job.job_id).events
+    assert [event.message for event in job_logs] == [
+        "Workflow run blocked after memory cleanup"
+    ]
     assert coordinator.stopped_runner_ids == ["idle-heavy"]
     assert adapter.run_calls == []
 

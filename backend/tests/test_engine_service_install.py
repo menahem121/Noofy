@@ -1304,9 +1304,19 @@ async def test_run_reports_memory_block_when_cleanup_succeeds_but_ram_is_insuffi
     assert result.error_code == "insufficient_memory"
     assert result.memory_status is not None
     assert result.memory_status["state"] == "blocked_by_memory"
+    assert result.memory_requirement is not None
+    assert result.memory_requirement["available_vram_mb"] == 22_000
+    assert result.memory_requirement["available_ram_mb"] == 5_600
     assert result.memory_decision is not None
     release_check = result.memory_decision["developer_details"]["memory_cleanup_block"]
     assert release_check["release_check"]["status"] == "released_insufficient_memory"
+    job_logs = service.list_job_logs(result.job_id).events
+    assert [event.message for event in job_logs] == [
+        "Workflow run blocked by workflow runner memory admission"
+    ]
+    assert job_logs[0].details["required_free_ram_mb"] == 8_000
+    assert job_logs[0].details["final_free_ram_mb"] == 5_600
+    assert job_logs[0].details["blocking_constraints"] == ["ram_below_required"]
     assert coordinator is not None
     assert coordinator.started_specs == []
 
