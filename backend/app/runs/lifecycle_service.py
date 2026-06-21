@@ -99,6 +99,19 @@ class RunLifecycleService:
     async def _handoff_record(self, record: WorkflowRunQueueRecord) -> Any:
         if self.submit_queued_run is None:
             return self._requeue(record, reason="dispatcher_not_wired", transient=True)
+        self.queue_service.update_progress(
+            record.queue_id,
+            reason="preparing_run",
+            message="Preparing this workflow to run.",
+            memory_status={
+                "state": "preparing_run",
+                "message": "Preparing this workflow to run.",
+                "risk_level": "unknown",
+                "queue_id": record.queue_id,
+                "can_cancel": True,
+                "can_retry_after_cleanup": False,
+            },
+        )
         self.log_store.add(
             "info",
             "Handing off queued workflow run",
@@ -111,8 +124,21 @@ class RunLifecycleService:
         except Exception as exc:
             return self._requeue(record, reason=f"submission_error:{exc}", transient=True)
         latest = self.queue_service.get(record.queue_id)
-        if latest is not None and latest.cancel_requested and isinstance(result, EngineJob):
-            return result
+        if latest is not None and latest.cancel_requested:
+            self.queue_service.mark_terminal(
+                record.queue_id,
+                status=WorkflowRunQueueStatus.CANCELED,
+                reason="canceled_during_preparation",
+                message="Workflow run canceled.",
+            )
+            return EngineJob(
+                job_id=record.queue_id,
+                queue_id=record.queue_id,
+                workflow_id=record.workflow_id,
+                engine="noofy",
+                status="canceled",
+                message="Workflow run canceled.",
+            )
         if isinstance(result, EngineJob):
             if result.status == "canceled":
                 self.queue_service.mark_terminal(
@@ -127,12 +153,21 @@ class RunLifecycleService:
                     reason=(result.memory_status or {}).get("state", "waiting_for_memory"),
                     transient=False,
                     wait_for_state_change=True,
+                    message=result.message,
+                    memory_status=result.memory_status,
+                    memory_requirement=result.memory_requirement,
+                    memory_decision=result.memory_decision,
                 )
             if result.status == "blocked_by_memory":
                 self.queue_service.mark_terminal(
                     record.queue_id,
                     status=WorkflowRunQueueStatus.FAILED,
                     reason=(result.memory_status or {}).get("state", result.message),
+                    message=result.message,
+                    error_code=result.error_code,
+                    memory_status=result.memory_status,
+                    memory_requirement=result.memory_requirement,
+                    memory_decision=result.memory_decision,
                 )
                 return result
             submitted = self.queue_service.mark_submitted(record.queue_id, job_id=result.job_id)
@@ -142,6 +177,7 @@ class RunLifecycleService:
                 record.queue_id,
                 status=WorkflowRunQueueStatus.FAILED,
                 reason="; ".join(result.errors) or "workflow_validation_failed",
+                message="; ".join(result.errors) or "Workflow validation failed.",
             )
         return result
 
@@ -152,12 +188,20 @@ class RunLifecycleService:
         reason: str,
         transient: bool,
         wait_for_state_change: bool = False,
+        message: str | None = None,
+        memory_status: dict[str, Any] | None = None,
+        memory_requirement: dict[str, Any] | None = None,
+        memory_decision: dict[str, Any] | None = None,
     ) -> WorkflowRunQueueRecord | None:
         updated = self.queue_service.requeue(
             record.queue_id,
             reason=reason,
             transient=transient,
             wait_for_state_change=wait_for_state_change,
+            message=message,
+            memory_status=memory_status,
+            memory_requirement=memory_requirement,
+            memory_decision=memory_decision,
         )
         self.log_store.add(
             "warning" if transient else "info",

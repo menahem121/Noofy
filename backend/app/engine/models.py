@@ -312,6 +312,7 @@ class JobProgress(BaseModel):
     message: str | None = None
     error_code: MemoryFailureCode | None = None
     memory_requirement: dict[str, Any] | None = None
+    memory_status: dict[str, Any] | None = None
     developer_details: dict[str, Any] = Field(default_factory=dict)
     live_preview_sequence: int | None = None
     live_preview: JobLivePreview | None = None

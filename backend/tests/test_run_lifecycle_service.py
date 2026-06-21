@@ -137,6 +137,52 @@ def test_queued_run_progress_reads_as_queue_state_not_memory_wait() -> None:
         assert progress.message == message, reason
 
 
+def test_queue_progress_preserves_preparation_and_terminal_memory_details() -> None:
+    queue = WorkflowRunQueueService()
+    preparing = {
+        "state": "unloading_previous_workflow",
+        "message": "Noofy is unloading the previous workflow before starting this one.",
+        "can_cancel": True,
+    }
+    record = queue.enqueue(
+        workflow_id="wf",
+        inputs={},
+        options={},
+        run_submission_snapshot=_snapshot(),
+        reason="unloading_previous_workflow",
+        message=preparing["message"],
+        memory_status=preparing,
+    )
+
+    active = queue.progress(record.queue_id)
+    queue.mark_terminal(
+        record.queue_id,
+        status=WorkflowRunQueueStatus.FAILED,
+        reason="blocked_exceeds_capacity",
+        message="This workflow needs more memory than this machine can provide.",
+        error_code="insufficient_memory",
+        memory_status={"state": "blocked_exceeds_capacity"},
+        memory_requirement={"required_ram_mb": 20_000, "total_ram_mb": 16_000},
+        memory_decision={"reason_code": "estimated_peak_exceeds_capacity"},
+    )
+    failed = queue.progress(record.queue_id)
+
+    assert active is not None
+    assert active.status == "queued_pending_memory"
+    assert active.memory_status == preparing
+    assert failed is not None
+    assert failed.status == "failed"
+    assert failed.error_code == "insufficient_memory"
+    assert failed.memory_status == {"state": "blocked_exceeds_capacity"}
+    assert failed.memory_requirement == {
+        "required_ram_mb": 20_000,
+        "total_ram_mb": 16_000,
+    }
+    assert failed.developer_details["memory_decision"] == {
+        "reason_code": "estimated_peak_exceeds_capacity"
+    }
+
+
 def test_workflow_queue_fails_after_eight_transient_handoff_failures() -> None:
     queue = WorkflowRunQueueService()
     record = queue.enqueue(
@@ -532,3 +578,47 @@ async def test_run_lifecycle_requeues_under_same_id_until_state_change() -> None
     assert submitted.submitted_job_id == "job-1"
     assert calls == 2
     await lifecycle.shutdown()
+
+
+@pytest.mark.anyio
+async def test_run_lifecycle_keeps_memory_failure_on_queue_handle() -> None:
+    queue = WorkflowRunQueueService()
+    record = queue.enqueue(
+        workflow_id="wf",
+        inputs={},
+        options={},
+        run_submission_snapshot=_snapshot(),
+        reason="preparing_run",
+    )
+    lifecycle = RunLifecycleService(queue_service=queue, log_store=LogStore())
+
+    async def submit(queued):
+        return EngineJob(
+            job_id=queued.queue_id,
+            queue_id=queued.queue_id,
+            workflow_id="wf",
+            engine="noofy",
+            status="blocked_by_memory",
+            message="This workflow needs more memory than this machine can provide.",
+            error_code="insufficient_memory",
+            memory_status={"state": "blocked_exceeds_capacity"},
+            memory_requirement={"required_ram_mb": 20_000, "total_ram_mb": 16_000},
+            memory_decision={"reason_code": "estimated_peak_exceeds_capacity"},
+        )
+
+    lifecycle.submit_queued_run = submit
+    await lifecycle.handoff(record.queue_id)
+
+    progress = queue.progress(record.queue_id)
+    assert progress is not None
+    assert progress.status == "failed"
+    assert progress.error_code == "insufficient_memory"
+    assert progress.memory_status == {"state": "blocked_exceeds_capacity"}
+    assert progress.memory_requirement == {
+        "required_ram_mb": 20_000,
+        "total_ram_mb": 16_000,
+    }
+    terminal = queue.terminal_job(record.queue_id)
+    assert terminal is not None
+    assert terminal.status == "blocked_by_memory"
+    assert terminal.error_code == "insufficient_memory"

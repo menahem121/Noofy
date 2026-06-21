@@ -56,6 +56,7 @@ export interface JobProgress {
   message: string | null;
   error_code?: "insufficient_memory" | "memory_oom" | null;
   memory_requirement?: MemoryRequirement | null;
+  memory_status?: MemoryStatus | null;
   developer_details?: Record<string, unknown>;
   live_preview_sequence?: number | null;
   live_preview?: JobLivePreview | null;

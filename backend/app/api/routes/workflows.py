@@ -491,7 +491,7 @@ async def run_workflow(
     orchestrator: RunOrchestratorDep,
 ):
     try:
-        return await orchestrator.run_workflow(
+        return await orchestrator.enqueue_workflow_run(
             workflow_id,
             request.inputs,
             request.options,

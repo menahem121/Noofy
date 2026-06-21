@@ -113,12 +113,32 @@ alive, but its idle ComfyUI model and allocator cache can be released through
 the adapter-owned `/free` operation. Active work is queued rather than
 interrupted.
 
+After package, dashboard-input, and credential checks pass, the public run API
+creates a workflow-run queue record before runner preparation begins. The UUID
+queue ID is immediately usable for progress and cancellation while the backend
+prepares the runner, unloads an eligible previous workflow, and waits for
+observed memory release. These phases remain `queued_pending_memory` rather
+than claiming that engine execution has started; `memory_status.state` exposes
+`preparing_run`, `unloading_previous_workflow`,
+`freeing_previous_models`, or `waiting_for_memory_release`.
+
 Submission reserves the selected runner atomically before memory admission and
 before awaiting adapter submission. Cleanup uses separate eviction
-reservations. A queued workflow keeps one UUID queue ID across requeue and
-handoff attempts; after adapter submission that public queue ID resolves to the
-canonical submitted job ID for progress, result, cancellation, logs, SSE, and
-output reads.
+reservations. If bounded cleanup observes enough memory, the same queue record
+continues automatically into adapter submission. Cancellation at any point
+before submission prevents the graph from being submitted, although an
+already-started best-effort cleanup operation may finish. If trusted evidence
+shows the workflow peak alone exceeds total machine capacity, the queue moves
+directly to terminal `blocked_exceeds_capacity` without evicting runners or
+waiting for cleanup. After adapter submission the public queue ID resolves to
+the canonical submitted job ID for progress, result, cancellation, logs, SSE,
+and output reads.
+
+When the first planned cleanup completes but still leaves a shortfall, Noofy
+makes one bounded fallback pass over remaining idle, reclaimable Noofy-owned
+runners before blocking. This can include an eligible idle core runner through
+adapter-owned `/free`; active runners and the selected execution runner are not
+fallback eviction targets.
 
 Input/options are hashed into an input-profile fingerprint, so local learning is
 scoped to similar run settings instead of being blindly reused across materially

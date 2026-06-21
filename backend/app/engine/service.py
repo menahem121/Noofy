@@ -812,7 +812,7 @@ class EngineService:
         return await self.workflow_runner_lifecycle_service.start_workflow_runner(workflow_id)
 
     async def _ensure_workflow_runner_for_run(
-        self, package: WorkflowPackage
+        self, package: WorkflowPackage, queue_id: str | None = None
     ) -> str | dict[str, object] | WorkflowValidationResult | None:
         """Prepare and bind a workflow runner before running custom-node capsules."""
         workflow_id = package.metadata.id
@@ -827,11 +827,14 @@ class EngineService:
         lock = self._workflow_runner_ensure_locks.setdefault(workflow_id, asyncio.Lock())
         async with lock:
             return await self._ensure_workflow_runner_for_run_locked(
-                workflow_id, capsule_lock
+                workflow_id, capsule_lock, queue_id
             )
 
     async def _ensure_workflow_runner_for_run_locked(
-        self, workflow_id: str, capsule_lock: CapsuleLock
+        self,
+        workflow_id: str,
+        capsule_lock: CapsuleLock,
+        queue_id: str | None = None,
     ) -> str | dict[str, object] | WorkflowValidationResult | None:
         runner = self.runner_supervisor.runner_for_workflow(workflow_id)
         expected_compatibility_key = (
@@ -885,8 +888,24 @@ class EngineService:
         if install.get("status") != InstallStatus.READY.value:
             return _workflow_runner_unavailable_result(workflow_id, install)
 
-        start = await self.workflow_runner_lifecycle_service.start_workflow_runner(
-            workflow_id
+        def report_memory_status(memory_status: dict[str, object]) -> None:
+            if queue_id is None:
+                return
+            status = {**memory_status, "queue_id": queue_id, "can_cancel": True}
+            self.workflow_run_queue_service.update_progress(
+                queue_id,
+                reason=str(status.get("state") or "preparing_run"),
+                message=str(status.get("message") or "Preparing this workflow to run."),
+                memory_status=status,
+            )
+
+        start = (
+            await self.workflow_runner_lifecycle_service.start_workflow_runner(workflow_id)
+            if queue_id is None
+            else await self.workflow_runner_lifecycle_service.start_workflow_runner(
+                workflow_id,
+                memory_status_callback=report_memory_status,
+            )
         )
         if _workflow_runner_start_needs_reprepare(start):
             self.log_store.add(
@@ -904,8 +923,13 @@ class EngineService:
             )
             if install.get("status") != InstallStatus.READY.value:
                 return _workflow_runner_unavailable_result(workflow_id, install)
-            start = await self.workflow_runner_lifecycle_service.start_workflow_runner(
-                workflow_id
+            start = (
+                await self.workflow_runner_lifecycle_service.start_workflow_runner(workflow_id)
+                if queue_id is None
+                else await self.workflow_runner_lifecycle_service.start_workflow_runner(
+                    workflow_id,
+                    memory_status_callback=report_memory_status,
+                )
             )
         if start.get("status") not in {
             RunnerStatus.READY.value,

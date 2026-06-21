@@ -78,6 +78,10 @@ class RunResultService:
         return len(job_ids)
 
     async def get_result(self, job_id: str) -> JobResult | EngineJob:
+        if self.workflow_run_queue_service is not None:
+            queued_terminal = self.workflow_run_queue_service.terminal_job(job_id)
+            if queued_terminal is not None:
+                return queued_terminal
         canonical_job_id = self._canonical_job_id(job_id)
         cached = self._terminal_outcomes.get(canonical_job_id)
         if cached is not None:

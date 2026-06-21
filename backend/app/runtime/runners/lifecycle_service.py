@@ -11,7 +11,7 @@ import asyncio
 import contextlib
 import hashlib
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from pydantic import ValidationError
 
@@ -944,7 +944,12 @@ class WorkflowRunnerLifecycleService:
             return self._install_payload(workflow_id, exc.state, capsule_lock=capsule_lock)
         return self._install_payload(workflow_id, state, capsule_lock=capsule_lock)
 
-    async def start_workflow_runner(self, workflow_id: str) -> dict[str, object]:
+    async def start_workflow_runner(
+        self,
+        workflow_id: str,
+        *,
+        memory_status_callback: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, object]:
         """Start and bind an isolated runner for a prepared verified workflow."""
         if self.runner_supervisor.runtime_activation_in_progress():
             return {
@@ -1099,6 +1104,10 @@ class WorkflowRunnerLifecycleService:
                 )
                 if memory_decision is not None:
                     self.memory_service.record_metric(f"runner_start_decision_{memory_decision.action.value}")
+                    if memory_status_callback is not None:
+                        memory_status_callback(
+                            self.memory_service.memory_status_payload(memory_decision)
+                        )
                     if memory_decision.action is MemoryDecisionAction.QUEUE_PENDING_MEMORY:
                         queued_behind = (
                             self.runner_supervisor.get_runner(memory_decision.queued_behind_runner_id)
@@ -1157,7 +1166,21 @@ class WorkflowRunnerLifecycleService:
                                     "message": "Noofy could not release the idle runner memory needed for this workflow.",
                                 },
                             }
+                        if memory_status_callback is not None:
+                            memory_status_callback(
+                                {
+                                    **self.memory_service.memory_status_payload(memory_decision),
+                                    "state": "waiting_for_memory_release",
+                                    "message": "Noofy is waiting for the previous workflow's memory to be released.",
+                                }
+                            )
                         release_check = await self.memory_service.wait_for_memory_release_after_cleanup(memory_decision)
+                        if release_check.status is not MemoryReleaseStatus.RELEASED:
+                            additional_release = await self.memory_service.cleanup_remaining_idle_runners_for_memory_decision(
+                                memory_decision
+                            )
+                            if additional_release is not None:
+                                release_check = additional_release
                         if release_check.status is not MemoryReleaseStatus.RELEASED:
                             cleanup_succeeded = (
                                 release_check.status

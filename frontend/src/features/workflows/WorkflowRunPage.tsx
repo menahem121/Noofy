@@ -358,7 +358,9 @@ export function WorkflowRunPage({
   const hasTerminalProgress = Boolean(displayedProgress?.status && terminalStatuses.has(displayedProgress.status));
   const activeJobStatus = hasTerminalProgress ? null : state.job?.status;
   const activeRuntimeJobId = currentTrackedRun ? trackedRunHandle(currentTrackedRun) : workflowRuntime?.activeJobId ?? workflowRuntime?.queueId ?? null;
-  const activeMemoryStatus = remainingTrackedRunCount === 0 && hasTerminalProgress ? null : state.job?.memory_status ?? null;
+  const activeMemoryStatus = remainingTrackedRunCount === 0 && hasTerminalProgress
+    ? null
+    : displayedProgress?.memory_status ?? state.job?.memory_status ?? null;
   const warmReusableMemoryReady = Boolean(activeMemoryStatus && isWarmReusableMemoryState(activeMemoryStatus.state));
   const isRunning = !warmReusableMemoryReady && (isSubmittingRun || remainingTrackedRunCount > 0 || isActiveWorkflowProgress(displayedProgress));
   const isWaitingForMemory = activeJobStatus === "queued_pending_memory" || displayedProgress?.status === "queued_pending_memory";
@@ -4104,6 +4106,12 @@ function memoryStatusFallback(state: string): MemoryStatusDisplay {
       message: "Noofy will start this run when the GPU is available.",
     };
   }
+  if (state === "preparing_run") {
+    return {
+      title: "Preparing run",
+      message: "Noofy is preparing this workflow to run.",
+    };
+  }
   if (state === "queued_behind_active_run") {
     // Defensive display metadata only; user-facing callers suppress this state.
     return {
@@ -4125,8 +4133,8 @@ function memoryStatusFallback(state: string): MemoryStatusDisplay {
   }
   if (state === "unloading_previous_workflow") {
     return {
-      title: "Finishing the previous workflow",
-      message: "Noofy is clearing the previous workflow before starting this one.",
+      title: "Preparing run",
+      message: "Noofy is unloading the previous workflow before starting this one.",
     };
   }
   if (state === "freeing_memory" || state === "waiting_for_memory_release") {

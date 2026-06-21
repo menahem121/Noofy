@@ -55,7 +55,7 @@ ValidatePackage = Callable[[WorkflowPackage, EngineAdapter], Awaitable[WorkflowV
 UnavailablePackageReason = Callable[[WorkflowPackage], str | None]
 ApplyInputBindings = Callable[[WorkflowPackage, dict[str, Any]], dict[str, Any]]
 EnsureWorkflowRunner = Callable[
-    [WorkflowPackage],
+    [WorkflowPackage, str | None],
     Awaitable[str | dict[str, Any] | WorkflowValidationResult | None],
 ]
 WorkflowRunMemoryDecision = Callable[..., MemoryGovernorDecision | None]
@@ -190,6 +190,22 @@ class RunOrchestrator:
             )
         return validation
 
+    async def enqueue_workflow_run(
+        self,
+        workflow_id: str,
+        inputs: dict[str, Any],
+        options: dict[str, Any],
+        *,
+        output_preferences_snapshot: dict[str, dict[str, Any]] | None = None,
+    ):
+        return await self.run_workflow(
+            workflow_id,
+            inputs,
+            options,
+            output_preferences_snapshot=output_preferences_snapshot,
+            enqueue_before_preparation=True,
+        )
+
     async def run_workflow(
         self,
         workflow_id: str,
@@ -201,6 +217,7 @@ class RunOrchestrator:
         output_preferences_snapshot: dict[str, dict[str, Any]] | None = None,
         run_submission_snapshot: RunSubmissionSnapshot | None = None,
         queue_id: str | None = None,
+        enqueue_before_preparation: bool = False,
     ):
         package = self.workflow_loader.get_package(workflow_id)
         unavailable = self.unavailable_package_reason(package)
@@ -273,9 +290,55 @@ class RunOrchestrator:
             output_preferences_snapshot=output_preferences_snapshot,
             run_submission_snapshot=run_submission_snapshot,
         )
+        if enqueue_before_preparation:
+            message = "Preparing this workflow to run."
+            memory_status = {
+                "state": "preparing_run",
+                "message": message,
+                "risk_level": "unknown",
+                "queue_id": None,
+                "can_cancel": True,
+                "can_retry_after_cleanup": False,
+            }
+            queued = self.workflow_run_queue_service.enqueue(
+                workflow_id=workflow_id,
+                inputs=runtime_inputs,
+                options=options,
+                run_submission_snapshot=run_submission_snapshot,
+                reason="preparing_run",
+                message=message,
+                validated_before_queue=False,
+                memory_status=memory_status,
+            )
+            memory_status["queue_id"] = queued.queue_id
+            self.workflow_run_queue_service.update_progress(
+                queued.queue_id,
+                reason="preparing_run",
+                message=message,
+                memory_status=memory_status,
+            )
+            self.log_store.add(
+                "info",
+                "Workflow run accepted for preparation",
+                "runs.orchestrator",
+                job_id=queued.queue_id,
+                workflow_id=workflow_id,
+                details={"queue_id": queued.queue_id},
+            )
+            if self.request_run_dispatch is not None:
+                self.request_run_dispatch("workflow_run_accepted")
+            return EngineJob(
+                job_id=queued.queue_id,
+                queue_id=queued.queue_id,
+                workflow_id=workflow_id,
+                engine="noofy",
+                status="queued_pending_memory",
+                message=message,
+                memory_status=memory_status,
+            )
         runtime_package = package_for_input_bindings(package, runtime_inputs)
         if self.ensure_workflow_runner is not None:
-            runner_unavailable = await self.ensure_workflow_runner(package)
+            runner_unavailable = await self.ensure_workflow_runner(package, queue_id)
             if isinstance(runner_unavailable, WorkflowValidationResult):
                 message = (
                     "; ".join(runner_unavailable.errors)
@@ -301,16 +364,33 @@ class RunOrchestrator:
                     package=package,
                     workflow_id=workflow_id,
                     payload=runner_unavailable,
+                    queue_id=queue_id,
                 )
             if isinstance(runner_unavailable, dict):
                 runner_start_queue_id = runner_unavailable.get("queue_id")
                 wait_reason = str(runner_unavailable.get("status") or "waiting_for_runner_start")
+                raw_memory_status = (
+                    dict(runner_unavailable["memory_status"])
+                    if isinstance(runner_unavailable.get("memory_status"), dict)
+                    else {}
+                )
+                if wait_reason == "starting":
+                    state = "queued_behind_active_run"
+                    message = "This run will start when the workflow's runner is ready."
+                else:
+                    state = str(raw_memory_status.get("state") or "waiting_for_active_workflow")
+                    message = str(
+                        raw_memory_status.get("message")
+                        or "This workflow is waiting for its isolated runner to become ready."
+                    )
                 queued = self.workflow_run_queue_service.enqueue(
                     workflow_id=workflow_id,
                     inputs=runtime_inputs,
                     options=options,
                     run_submission_snapshot=run_submission_snapshot,
                     reason=wait_reason,
+                    message=message,
+                    validated_before_queue=False,
                     prerequisite_runner_start_queue_id=(
                         str(runner_start_queue_id)
                         if runner_start_queue_id is not None
@@ -318,16 +398,21 @@ class RunOrchestrator:
                     ),
                     queue_id=queue_id,
                 )
-                # The workflow's own runner is already starting: queueing behind
-                # it is normal background behavior, so the frontend keeps the
-                # state silent. Runner starts queued behind memory or another
-                # workflow's GPU work remain user-facing waits.
-                if wait_reason == "starting":
-                    state = "queued_behind_active_run"
-                    message = "This run will start when the workflow's runner is ready."
-                else:
-                    state = "waiting_for_active_workflow"
-                    message = "This workflow is waiting for its isolated runner to become ready."
+                public_memory_status = {
+                    **raw_memory_status,
+                    "state": state,
+                    "message": message,
+                    "queue_id": queued.queue_id,
+                    "runner_start_queue_id": queued.prerequisite_runner_start_queue_id,
+                    "can_cancel": True,
+                    "can_retry_after_cleanup": False,
+                }
+                self.workflow_run_queue_service.update_progress(
+                    queued.queue_id,
+                    reason=state,
+                    message=message,
+                    memory_status=public_memory_status,
+                )
                 return EngineJob(
                     job_id=queued.queue_id,
                     queue_id=queued.queue_id,
@@ -335,11 +420,7 @@ class RunOrchestrator:
                     engine="noofy",
                     status="queued_pending_memory",
                     message=message,
-                    memory_status={
-                        "state": state,
-                        "message": message,
-                        "runner_start_queue_id": queued.prerequisite_runner_start_queue_id,
-                    },
+                    memory_status=public_memory_status,
                 )
             if runner_unavailable is not None:
                 self._record_run_blocked(package, runner_unavailable)
@@ -483,7 +564,7 @@ class RunOrchestrator:
             record.workflow_id,
             dict(record.inputs),
             dict(record.options),
-            validated_before_queue=True,
+            validated_before_queue=record.validated_before_queue,
             run_submission_snapshot=record.run_submission_snapshot.model_copy(deep=True),
             queue_id=record.queue_id,
         )
@@ -576,6 +657,12 @@ class RunOrchestrator:
                 options=options,
                 run_submission_snapshot=run_submission_snapshot,
                 reason=memory_decision.reason_code,
+                message=memory_decision.user_message,
+                validated_before_queue=True,
+                memory_status=self.memory_status_payload(
+                    memory_decision,
+                    queue_id=queue_id,
+                ),
                 queue_id=queue_id,
             )
             self.record_memory_metric("workflow_run_queued_pending_memory")
@@ -602,7 +689,7 @@ class RunOrchestrator:
                 memory_status=self.memory_status_payload(memory_decision, queue_id=queued.queue_id),
             )
         if memory_decision.action is MemoryDecisionAction.BLOCKED_BY_MEMORY:
-            blocked_job_id = f"blocked-memory-{workflow_id}"
+            blocked_job_id = queue_id or f"blocked-memory-{workflow_id}"
             self.runner_supervisor.rollback_runner_reservation(
                 reservation_token,
                 notify_state_change=False,
@@ -637,10 +724,24 @@ class RunOrchestrator:
                 reservation_token,
                 notify_state_change=False,
             )
+            memory_status = self.memory_status_payload(memory_decision, queue_id=queue_id)
+            if queue_id is not None:
+                self.workflow_run_queue_service.update_progress(
+                    queue_id,
+                    reason=str(memory_status.get("state") or "freeing_memory"),
+                    message=str(memory_status.get("message") or memory_decision.user_message),
+                    memory_status=memory_status,
+                    memory_requirement=memory_requirement_for_decision(memory_decision),
+                    memory_decision=memory_decision.model_dump(mode="json"),
+                )
             blocked_job = await self.evict_idle_runners(
                 memory_decision,
                 selected_runner_id=runner.runner_id,
             )
+            if blocked_job is not None and queue_id is not None:
+                blocked_job = blocked_job.model_copy(
+                    update={"job_id": queue_id, "queue_id": queue_id}
+                )
             if blocked_job is not None and blocked_job.status == "blocked_by_memory":
                 self.log_store.add(
                     "warning",
@@ -672,6 +773,7 @@ class RunOrchestrator:
         package: WorkflowPackage,
         workflow_id: str,
         payload: dict[str, Any],
+        queue_id: str | None = None,
     ) -> EngineJob:
         message = str(
             payload.get("error")
@@ -714,7 +816,7 @@ class RunOrchestrator:
             }
         self.record_memory_metric("workflow_run_blocked_by_memory")
         self._record_run_blocked(package, message)
-        blocked_job_id = f"blocked-memory-{workflow_id}"
+        blocked_job_id = queue_id or f"blocked-memory-{workflow_id}"
         self.log_store.add(
             "warning",
             "Workflow run blocked by workflow runner memory admission",
@@ -779,6 +881,7 @@ class RunOrchestrator:
             ),
             memory_decision=memory_decision_payload,
             memory_status=memory_status,
+            queue_id=queue_id,
         )
 
     def _record_run_blocked_by_workflow_id(self, workflow_id: str, reason: str | None) -> None:
@@ -1012,23 +1115,47 @@ class RunOrchestrator:
         run_submission_snapshot: RunSubmissionSnapshot,
         queue_id: str | None,
     ) -> EngineJob:
-        queued = self.workflow_run_queue_service.enqueue(
-            workflow_id=workflow_id,
-            inputs=inputs,
-            options=options,
-            run_submission_snapshot=run_submission_snapshot,
-            reason="runner_submission_reservation_unavailable",
-            queue_id=queue_id,
-        )
-        # Queueing another run of the workflow that is already occupying the
-        # runner is normal background behavior, not a warning state: the
-        # frontend keeps this state silent and relies on the queue indicator.
         if self.runner_supervisor.runner_busy_with_workflow(runner.runner_id, workflow_id):
             state = "queued_behind_active_run"
             message = "This run is queued and will start when the current run finishes."
         else:
             state = "waiting_for_active_workflow"
             message = "Noofy will start this workflow after the active run finishes."
+        queued = self.workflow_run_queue_service.enqueue(
+            workflow_id=workflow_id,
+            inputs=inputs,
+            options=options,
+            run_submission_snapshot=run_submission_snapshot,
+            reason="runner_submission_reservation_unavailable",
+            message=message,
+            validated_before_queue=True,
+            memory_status={
+                "state": state,
+                "message": message,
+                "risk_level": "unknown",
+                "queue_id": queue_id,
+                "can_cancel": True,
+                "can_retry_after_cleanup": False,
+            },
+            queue_id=queue_id,
+        )
+        memory_status = {
+            "state": state,
+            "message": message,
+            "risk_level": "unknown",
+            "queue_id": queued.queue_id,
+            "can_cancel": True,
+            "can_retry_after_cleanup": False,
+        }
+        self.workflow_run_queue_service.update_progress(
+            queued.queue_id,
+            reason=state,
+            message=message,
+            memory_status=memory_status,
+        )
+        # Queueing another run of the workflow that is already occupying the
+        # runner is normal background behavior, not a warning state: the
+        # frontend keeps this state silent and relies on the queue indicator.
         self.log_store.add(
             "info",
             "Workflow run queued because runner submission reservation is busy",
@@ -1049,10 +1176,7 @@ class RunOrchestrator:
             engine="noofy",
             status="queued_pending_memory",
             message=message,
-            memory_status={
-                "state": state,
-                "message": message,
-            },
+            memory_status=memory_status,
         )
 
     def _queue_cancel_requested(self, queue_id: str | None) -> bool:

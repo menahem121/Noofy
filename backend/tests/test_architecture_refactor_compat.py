@@ -87,7 +87,7 @@ def test_workflow_run_routes_use_orchestrator_before_engine_facade(monkeypatch):
         async def validate_workflow(self, workflow_id: str):
             return {"workflow_id": workflow_id, "valid": True, "errors": []}
 
-        async def run_workflow(
+        async def enqueue_workflow_run(
             self,
             workflow_id: str,
             inputs: dict,
@@ -263,7 +263,8 @@ def test_workflow_runner_lifecycle_routes_use_lifecycle_service_before_engine_fa
         async def prepare_workflow(self, workflow_id: str):
             return {"workflow_id": workflow_id, "status": "prepared"}
 
-        async def start_workflow_runner(self, workflow_id: str):
+        async def start_workflow_runner(self, workflow_id: str, *, memory_status_callback=None):
+            del memory_status_callback
             return {"workflow_id": workflow_id, "status": "running", "runner": None}
 
         async def stop_workflow_runner(self, workflow_id: str):

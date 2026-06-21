@@ -161,7 +161,8 @@ class FakeEngineService:
             "source_policy": self.get_install_state(workflow_id)["source_policy"],
         }
 
-    async def start_workflow_runner(self, workflow_id: str):
+    async def start_workflow_runner(self, workflow_id: str, *, memory_status_callback=None):
+        del memory_status_callback
         self.started_workflow_runners.append(workflow_id)
         return {
             "workflow_id": workflow_id,

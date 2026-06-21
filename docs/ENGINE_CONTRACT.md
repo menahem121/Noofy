@@ -4,7 +4,9 @@ The app owns the engine contract. UI code should depend on this contract, not on
 
 ## Core Operations
 
-- `runWorkflow(workflowId, inputs, options)`: validate and start a workflow job.
+- `runWorkflow(workflowId, inputs, options)`: validate user-owned inputs, accept
+  a cancellable workflow-run handle, prepare/admit the runner asynchronously,
+  and submit the workflow when ready.
 - `getProgress(jobId, sincePreviewSequence?)`: return current job progress and status, backend-owned timing estimates, plus transient live preview metadata when available.
 - `streamProgress(jobId)`: stream frontend-ready progress/result events.
 - `cancelJob(jobId)`: stop a running or queued job.
@@ -50,10 +52,13 @@ stay responsive when the active engine is cold, unreachable, or slow.
 
 ```text
 Load workflow package
-  -> validate package and dashboard bindings
+  -> validate package-owned availability, dashboard inputs, and credentials
+  -> create cancellable workflow-run queue handle
+  -> prepare or select the workflow runner
   -> ask RunnerSupervisor / Memory Governor for the runner decision
   -> check required models against the selected runner's EngineAdapter
   -> queue, reuse, start, evict, or wait for memory according to backend policy
+  -> fail immediately without cleanup when trusted peak evidence exceeds total capacity
   -> submit graph to selected EngineAdapter
   -> stream progress
   -> record diagnostics and errors

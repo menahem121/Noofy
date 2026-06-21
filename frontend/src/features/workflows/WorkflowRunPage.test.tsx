@@ -2869,8 +2869,8 @@ describe("WorkflowRunPage", () => {
     {
       state: "unloading_previous_workflow",
       status: "queued_pending_memory",
-      title: "Finishing the previous workflow",
-      message: "Noofy is clearing the previous workflow before starting this one.",
+      title: "Preparing run",
+      message: "Noofy is unloading the previous workflow before starting this one.",
     },
     {
       state: "retrying_after_memory_cleanup",
@@ -2999,6 +2999,140 @@ describe("WorkflowRunPage", () => {
       expect(screen.getByText(/test_memory_state/)).toBeInTheDocument();
     }
     expect(screen.getByText("Developer details")).toBeInTheDocument();
+  });
+
+  it.each(["canvas", "classic"])(
+    "updates %s preparation progress while memory is being unloaded",
+    async (viewMode) => {
+      window.localStorage.setItem("noofy.prefs", JSON.stringify({ viewMode }));
+      mockConfiguredDashboardFetch(
+        fetchMock,
+        readyRuntime,
+        configuredPackageData,
+        {
+          job_id: "workflow-run-queue-preparing",
+          queue_id: "workflow-run-queue-preparing",
+          workflow_id: "text_to_image_v0",
+          engine: "noofy",
+          status: "queued_pending_memory",
+          message: "Preparing this workflow to run.",
+          memory_status: {
+            state: "preparing_run",
+            message: "Preparing this workflow to run.",
+            risk_level: "unknown",
+            queue_id: "workflow-run-queue-preparing",
+            can_cancel: true,
+            can_retry_after_cleanup: false,
+          },
+        },
+        (url) => {
+          if (!url.endsWith("/api/jobs/workflow-run-queue-preparing/progress")) return undefined;
+          return jsonResponse({
+            job_id: "workflow-run-queue-preparing",
+            queue_id: "workflow-run-queue-preparing",
+            status: "queued_pending_memory",
+            value: null,
+            max: null,
+            current_node: null,
+            message: "Noofy is unloading the previous workflow before starting this one.",
+            memory_status: {
+              state: "unloading_previous_workflow",
+              message: "Noofy is unloading the previous workflow before starting this one.",
+              risk_level: "high",
+              queue_id: "workflow-run-queue-preparing",
+              can_cancel: true,
+              can_retry_after_cleanup: true,
+            },
+          });
+        },
+      );
+
+      renderRunPage();
+      await waitForReadyStatus();
+      const runButton = await screen.findByRole("button", { name: /run workflow/i });
+      await waitFor(() => expect(runButton).toBeEnabled());
+      fireEvent.click(runButton);
+
+      expect((await screen.findAllByText("Preparing run")).length).toBeGreaterThan(0);
+      expect(screen.getAllByText(
+        "Noofy is unloading the previous workflow before starting this one.",
+      ).length).toBeGreaterThan(0);
+      expect(screen.getByRole("button", { name: "Cancel run" })).toBeEnabled();
+    },
+  );
+
+  it("shows a queued capacity failure with its memory evidence", async () => {
+    mockConfiguredDashboardFetch(
+      fetchMock,
+      readyRuntime,
+      configuredPackageData,
+      {
+        job_id: "workflow-run-queue-capacity",
+        queue_id: "workflow-run-queue-capacity",
+        workflow_id: "text_to_image_v0",
+        engine: "noofy",
+        status: "queued_pending_memory",
+        message: "Preparing this workflow to run.",
+        memory_status: {
+          state: "preparing_run",
+          message: "Preparing this workflow to run.",
+          risk_level: "unknown",
+          queue_id: "workflow-run-queue-capacity",
+          can_cancel: true,
+          can_retry_after_cleanup: false,
+        },
+      },
+      (url) => {
+        if (!url.endsWith("/api/jobs/workflow-run-queue-capacity/progress")) return undefined;
+        return jsonResponse({
+          job_id: "workflow-run-queue-capacity",
+          queue_id: "workflow-run-queue-capacity",
+          status: "failed",
+          value: null,
+          max: null,
+          current_node: null,
+          message: "This workflow needs more memory than this machine can provide.",
+          error_code: "insufficient_memory",
+          memory_requirement: {
+            required_vram_mb: 20_000,
+            total_vram_mb: 12_000,
+            available_vram_mb: 10_000,
+            required_ram_mb: 20_000,
+            total_ram_mb: 16_000,
+            available_ram_mb: 12_000,
+            capacity_exceeded: true,
+            freeing_memory_may_help: false,
+            source: "memory_governor_decision",
+            confidence: "high",
+          },
+          memory_status: {
+            state: "blocked_exceeds_capacity",
+            message: "This workflow needs more memory than this machine can provide.",
+            risk_level: "high",
+            queue_id: "workflow-run-queue-capacity",
+            can_cancel: false,
+            can_retry_after_cleanup: false,
+          },
+          developer_details: {
+            memory_decision: { reason_code: "estimated_peak_exceeds_capacity" },
+          },
+        });
+      },
+    );
+
+    renderRunPage();
+    await waitForReadyStatus();
+    const runButton = await screen.findByRole("button", { name: /run workflow/i });
+    await waitFor(() => expect(runButton).toBeEnabled());
+    fireEvent.click(runButton);
+
+    const dialog = await screen.findByRole("dialog", {
+      name: "Not enough memory to run this workflow",
+    });
+    expect(within(dialog).getByText(
+      "GPU memory: about 19.5 GB required; about 9.77 GB free when checked (11.7 GB total).",
+    )).toBeInTheDocument();
+    expect(within(dialog).getByText(/more memory than this machine has/)).toBeInTheDocument();
   });
 
   it.each(["ready_warm_co_resident", "ready_reusing_runner"])(

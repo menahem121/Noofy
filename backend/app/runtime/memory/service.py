@@ -752,12 +752,62 @@ class MemoryGovernorService:
             # claiming a confirmed release.
             self.record_metric("workflow_run_cleanup_acknowledged_unconfirmed")
             return None
+        additional_release = await self.cleanup_remaining_idle_runners_for_memory_decision(
+            decision,
+            excluded_runner_ids={selected_runner_id} if selected_runner_id is not None else set(),
+        )
+        if additional_release is not None:
+            release_check = additional_release
+            if release_check.status is MemoryReleaseStatus.RELEASED:
+                self.record_metric("workflow_run_additional_cleanup_succeeded")
+                return None
         self.record_metric("workflow_run_memory_cleanup_failed")
         return _memory_cleanup_failed_job(
             decision,
             reason_code=release_check.reason_code,
             release_check=release_check,
         )
+
+    async def cleanup_remaining_idle_runners_for_memory_decision(
+        self,
+        decision: MemoryGovernorDecision,
+        *,
+        excluded_runner_ids: set[str] | None = None,
+    ) -> MemoryReleaseCheckResult | None:
+        excluded = set(decision.evict_runner_ids)
+        excluded.update(excluded_runner_ids or set())
+        remaining_runner_ids = [
+            runner.runner_id
+            for runner in self.runner_supervisor.list_runners()
+            if runner.runner_id not in excluded
+            and not _runner_is_active(runner)
+            and _runner_may_hold_reclaimable_memory(runner)
+        ]
+        if not remaining_runner_ids:
+            return None
+        self.log_store.add(
+            "info",
+            "Trying remaining idle Noofy memory before blocking workflow run",
+            "memory_governor",
+            workflow_id=decision.workflow_id,
+            details={
+                "memory_decision_id": decision.decision_id,
+                "runner_ids": remaining_runner_ids,
+            },
+        )
+        cleaned_up = await self.cleanup_idle_runners_for_memory_decision(
+            decision,
+            metric_name="additional_idle_runner_evicted_for_memory",
+            log_source="memory_governor",
+            log_message="Released additional idle Noofy memory before workflow run",
+            runner_ids=remaining_runner_ids,
+        )
+        if not cleaned_up:
+            return MemoryReleaseCheckResult(
+                status=MemoryReleaseStatus.UNAVAILABLE,
+                reason_code="additional_memory_cleanup_unavailable",
+            )
+        return await self.wait_for_memory_release_after_cleanup(decision)
 
     async def cleanup_idle_runners_for_memory_decision(
         self,

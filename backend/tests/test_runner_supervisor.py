@@ -271,7 +271,13 @@ class AutoPrepareLifecycle:
         self.install_status = "ready"
         return {"workflow_id": workflow_id, "status": "ready"}
 
-    async def start_workflow_runner(self, workflow_id: str) -> dict[str, object]:
+    async def start_workflow_runner(
+        self,
+        workflow_id: str,
+        *,
+        memory_status_callback=None,
+    ) -> dict[str, object]:
+        del memory_status_callback
         self.start_calls.append(workflow_id)
         descriptor = _isolated_descriptor(status=RunnerStatus.READY)
         self.supervisor.upsert_runner(descriptor, self.adapter)
@@ -292,7 +298,13 @@ class QueuedAutoPrepareLifecycle(AutoPrepareLifecycle):
         self.install_status = "ready"
         self.runner_ready = False
 
-    async def start_workflow_runner(self, workflow_id: str) -> dict[str, object]:
+    async def start_workflow_runner(
+        self,
+        workflow_id: str,
+        *,
+        memory_status_callback=None,
+    ) -> dict[str, object]:
+        del memory_status_callback
         self.start_calls.append(workflow_id)
         if not self.runner_ready:
             return {
@@ -1131,6 +1143,8 @@ def test_existing_workflow_queue_wait_does_not_request_immediate_redispatch() ->
         queue_id=None,
     )
     assert reasons == ["submission_reservation_busy"]
+    assert queued.memory_status is not None
+    assert queued.memory_status["queue_id"] == queued.queue_id
 
     reasons.clear()
     service.run_orchestrator._runner_reservation_wait_job(
@@ -1945,7 +1959,13 @@ class GatedStartAutoPrepareLifecycle(AutoPrepareLifecycle):
         self.install_status = "ready"
         self.start_gate = asyncio.Event()
 
-    async def start_workflow_runner(self, workflow_id: str) -> dict[str, object]:
+    async def start_workflow_runner(
+        self,
+        workflow_id: str,
+        *,
+        memory_status_callback=None,
+    ) -> dict[str, object]:
+        del memory_status_callback
         self.start_calls.append(workflow_id)
         await self.start_gate.wait()
         descriptor = _isolated_descriptor(status=RunnerStatus.READY)
@@ -2017,7 +2037,13 @@ async def test_rapid_run_presses_share_one_runner_start_and_queue_extra_runs() -
 class StartingAutoPrepareLifecycle(QueuedAutoPrepareLifecycle):
     """Reports the runner as actively starting until `runner_ready` flips."""
 
-    async def start_workflow_runner(self, workflow_id: str) -> dict[str, object]:
+    async def start_workflow_runner(
+        self,
+        workflow_id: str,
+        *,
+        memory_status_callback=None,
+    ) -> dict[str, object]:
+        del memory_status_callback
         if not self.runner_ready:
             self.start_calls.append(workflow_id)
             return {
@@ -3327,6 +3353,71 @@ async def test_workflow_run_blocks_only_after_idle_runner_release_times_out() ->
 
 
 @pytest.mark.anyio
+async def test_workflow_cleanup_tries_remaining_idle_core_memory_before_blocking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    core_adapter = RecordingAdapter()
+    observer = ReleaseAwareMemoryObserver(core_adapter)
+    coordinator = None
+
+    def coordinator_factory(supervisor: RunnerSupervisor) -> RecordingStopCoordinator:
+        nonlocal coordinator
+        coordinator = RecordingStopCoordinator(supervisor)
+        return coordinator
+
+    service, supervisor = _build_service(
+        core_adapter,
+        memory_observer=observer,
+        runner_process_coordinator_factory=coordinator_factory,
+    )
+    core_reservation = supervisor.reserve_runner_for_submission(
+        CORE_RUNNER_ID,
+        workflow_id="previous-core-workflow",
+    )
+    assert core_reservation is not None
+    supervisor.commit_runner_submission(
+        core_reservation.token,
+        job_id="previous-core-job",
+        workflow_id="previous-core-workflow",
+    )
+    supervisor.mark_runner_job_finished(CORE_RUNNER_ID, "previous-core-job")
+    supervisor.upsert_runner(
+        _isolated_descriptor(
+            runner_id="idle-isolated",
+            status=RunnerStatus.IDLE_WARM,
+            memory_class=RunnerMemoryClass.GPU_LIGHT,
+        ).model_copy(update={"observed_idle_vram_mb": 1000}),
+        RecordingAdapter(),
+    )
+    decision = MemoryGovernorDecision(
+        action=MemoryDecisionAction.EVICT_THEN_START,
+        reason_code="memory_pressure_high",
+        workflow_id="next-workflow",
+        workflow_estimate=WorkflowMemoryEstimate(
+            workflow_id="next-workflow",
+            estimated_peak_vram_mb=9_000,
+        ),
+        machine_snapshot=observer.snapshot(),
+        evict_runner_ids=["idle-isolated"],
+    )
+    monkeypatch.setattr(
+        memory_service_module,
+        "settings",
+        replace(memory_service_module.settings, memory_release_timeout_seconds=0),
+    )
+
+    blocked = await service.memory_service.evict_idle_runners_for_workflow_run(decision)
+
+    assert blocked is None
+    assert coordinator is not None
+    assert coordinator.stopped_runner_ids == ["idle-isolated"]
+    assert core_adapter.release_memory_calls == 1
+    assert service.memory_service.memory_governor_metrics()[
+        "workflow_run_additional_cleanup_succeeded"
+    ] == 1
+
+
+@pytest.mark.anyio
 async def test_get_result_fills_missing_runner_peak_from_best_effort_sampling() -> None:
     adapter = RecordingAdapter(
         models=[
@@ -4156,6 +4247,144 @@ async def test_handoff_queued_workflow_run_preserves_original_run_snapshot(monke
     assert snapshot.values["prompt"] == "submitted prompt"
     assert snapshot.output_preferences["result"].auto_save is True
     assert snapshot.output_widgets[0].node_id == "9"
+
+
+@pytest.mark.anyio
+async def test_public_run_accepts_queue_handle_then_submits_automatically() -> None:
+    adapter = RecordingAdapter(
+        models=[
+            ModelInfo(
+                folder="checkpoints",
+                filename="v1-5-pruned-emaonly-fp16.safetensors",
+            )
+        ],
+        next_job_id="job-from-preparation-queue",
+    )
+    service, _ = _build_service(adapter)
+
+    accepted = await service.run_orchestrator.enqueue_workflow_run(
+        "text_to_image_v0",
+        inputs={"prompt": "hello"},
+        options={},
+    )
+
+    assert isinstance(accepted, EngineJob)
+    assert accepted.status == "queued_pending_memory"
+    assert accepted.queue_id == accepted.job_id
+    assert accepted.memory_status is not None
+    assert accepted.memory_status["state"] == "preparing_run"
+    for _ in range(100):
+        if adapter.run_calls:
+            break
+        await asyncio.sleep(0.01)
+
+    assert adapter.run_calls == [("job-from-preparation-queue", {"prompt": "hello"})]
+    assert service.workflow_run_queue_service.resolve(accepted.job_id).job_id == (
+        "job-from-preparation-queue"
+    )
+
+
+@pytest.mark.anyio
+async def test_public_run_can_be_canceled_during_preparation() -> None:
+    adapter = RecordingAdapter(
+        models=[
+            ModelInfo(
+                folder="checkpoints",
+                filename="v1-5-pruned-emaonly-fp16.safetensors",
+            )
+        ]
+    )
+    service, _ = _build_service(adapter)
+    preparation_started = asyncio.Event()
+    allow_preparation_to_finish = asyncio.Event()
+
+    async def blocking_ensure(_package, _queue_id):
+        preparation_started.set()
+        await allow_preparation_to_finish.wait()
+        return None
+
+    service.run_orchestrator.ensure_workflow_runner = blocking_ensure
+    accepted = await service.run_orchestrator.enqueue_workflow_run(
+        "text_to_image_v0",
+        inputs={"prompt": "hello"},
+        options={},
+    )
+    await preparation_started.wait()
+
+    canceled = await service.cancel_job(accepted.job_id)
+    allow_preparation_to_finish.set()
+    await asyncio.sleep(0.05)
+
+    assert canceled.status == "canceled"
+    assert adapter.run_calls == []
+    progress = await service.get_progress(accepted.job_id)
+    result = await service.get_result(accepted.job_id)
+    assert progress.status == "canceled"
+    assert isinstance(result, EngineJob)
+    assert result.status == "canceled"
+    assert result.job_id == accepted.job_id
+    assert adapter.result_calls == []
+
+
+@pytest.mark.anyio
+async def test_public_run_capacity_failure_skips_cleanup_and_keeps_evidence() -> None:
+    adapter = RecordingAdapter(
+        models=[
+            ModelInfo(
+                folder="checkpoints",
+                filename="v1-5-pruned-emaonly-fp16.safetensors",
+            )
+        ]
+    )
+    service, _ = _build_service(adapter)
+    decision = MemoryGovernorDecision(
+        action=MemoryDecisionAction.BLOCKED_BY_MEMORY,
+        reason_code="estimated_peak_exceeds_capacity",
+        workflow_id="text_to_image_v0",
+        confidence=RunnerMemoryEstimateConfidence.HIGH,
+        workflow_estimate=WorkflowMemoryEstimate(
+            workflow_id="text_to_image_v0",
+            confidence=RunnerMemoryEstimateConfidence.HIGH,
+            estimated_peak_vram_mb=20_000,
+            estimated_peak_ram_mb=20_000,
+        ),
+        machine_snapshot=MachineMemorySnapshot(
+            backend=MemoryBackend.CUDA,
+            total_vram_mb=12_000,
+            free_vram_mb=10_000,
+            total_ram_mb=16_000,
+            free_ram_mb=12_000,
+            memory_pressure=MemoryPressureLevel.LOW,
+        ),
+    )
+    cleanup_calls = 0
+
+    async def unexpected_cleanup(*_args, **_kwargs):
+        nonlocal cleanup_calls
+        cleanup_calls += 1
+        return None
+
+    service.run_orchestrator.workflow_run_memory_decision = lambda **_kwargs: decision
+    service.run_orchestrator.evict_idle_runners = unexpected_cleanup
+    accepted = await service.run_orchestrator.enqueue_workflow_run(
+        "text_to_image_v0",
+        inputs={"prompt": "hello"},
+        options={},
+    )
+    for _ in range(100):
+        progress = await service.get_progress(accepted.job_id)
+        if progress.status == "failed":
+            break
+        await asyncio.sleep(0.01)
+
+    assert progress.status == "failed"
+    assert progress.error_code == "insufficient_memory"
+    assert progress.memory_status is not None
+    assert progress.memory_status["state"] == "blocked_exceeds_capacity"
+    assert progress.memory_requirement is not None
+    assert progress.memory_requirement["capacity_exceeded"] is True
+    assert cleanup_calls == 0
+    assert adapter.run_calls == []
 
 
 @pytest.mark.anyio
