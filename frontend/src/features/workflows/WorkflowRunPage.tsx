@@ -869,7 +869,38 @@ export function WorkflowRunPage({
       .then((result) => {
         if (stopped || activeWorkflowIdRef.current !== workflowId) return;
         if (isEngineJob(result)) {
-          if (isTrackableJob(result)) addTrackedRun(trackedRunFromJob(result));
+          if (isTrackableJob(result)) {
+            setSubmittedJob(result);
+            addTrackedRun(trackedRunFromJob(result));
+            return;
+          }
+          setState((current) => ({
+            ...current,
+            job: null,
+            progress: terminalRuntimeProgress,
+            error: null,
+          }));
+          if (
+            result.status === "blocked_by_memory"
+            || isBlockingMemoryState(result.memory_status?.state ?? "")
+          ) {
+            openMemoryFailureDialog(result);
+            return;
+          }
+          if (result.status === "failed") {
+            recordTrackedFailure(
+              result.queue_id ?? result.job_id,
+              result.job_id,
+              result.message ?? "Workflow run failed.",
+              result.error_code,
+              result.message,
+              {
+                memory_status: result.memory_status ?? null,
+                memory_decision: result.memory_decision ?? null,
+              },
+              result.memory_requirement,
+            );
+          }
           return;
         }
         handleRecoveredRuntimeResult(result);
@@ -1671,21 +1702,25 @@ export function WorkflowRunPage({
       progress: keepDisplayedProgress ? current.progress : progress,
     }));
     if (job.status === "blocked_by_memory" || isBlockingMemoryState(job.memory_status?.state ?? "")) {
-      void openFailureDialog(
-        "Not enough memory to run this workflow",
-        job.job_id,
-        "insufficient_memory",
-        MEMORY_FAILURE_MESSAGE,
-        {
-          job_id: job.job_id,
-          workflow_id: workflowId,
-          memory_status: job.memory_status ?? null,
-          memory_decision: job.memory_decision ?? null,
-          memory_requirement: job.memory_requirement ?? null,
-        },
-        job.memory_requirement ?? null,
-      );
+      openMemoryFailureDialog(job);
     }
+  }
+
+  function openMemoryFailureDialog(job: EngineJob) {
+    void openFailureDialog(
+      "Not enough memory to run this workflow",
+      job.job_id,
+      "insufficient_memory",
+      MEMORY_FAILURE_MESSAGE,
+      {
+        job_id: job.job_id,
+        workflow_id: workflowId,
+        memory_status: job.memory_status ?? null,
+        memory_decision: job.memory_decision ?? null,
+        memory_requirement: job.memory_requirement ?? null,
+      },
+      job.memory_requirement ?? null,
+    );
   }
 
   function recordWorkflowJob(job: EngineJob, progress: JobProgress) {
@@ -1850,7 +1885,9 @@ export function WorkflowRunPage({
     : null;
   const memoryStatus = activeMemoryStatus;
   const memoryNotice = memoryStatus ? memoryStatusDisplay(memoryStatus) : null;
-  const memoryDiagnostics = memoryStatus ? memoryStatusDeveloperDetails(state.job) : null;
+  const memoryDiagnostics = memoryStatus
+    ? memoryStatusDeveloperDetails(state.job, displayedProgress)
+    : null;
   const showMemoryLoadedPill = Boolean(memoryStatus && isWarmReusableMemoryState(memoryStatus.state));
   const showUserFacingMemoryNotice = Boolean(
     memoryNotice
@@ -2072,6 +2109,11 @@ export function WorkflowRunPage({
     memoryLoaded: showMemoryLoadedPill,
     cancelTitle: cancelTooltip,
     showStatusNotice: showUserFacingMemoryNotice,
+    statusIsProgress: Boolean(
+      showUserFacingMemoryNotice
+        && memoryStatus
+        && isMemoryPreparationState(memoryStatus.state),
+    ),
     statusTitle: showUserFacingMemoryNotice ? memoryNotice?.title ?? null : null,
     statusMessage: showUserFacingMemoryNotice ? memoryNotice?.message ?? null : null,
     disabledReason: memoryRefusesRun ? null : runDisabledReason,
@@ -2086,6 +2128,7 @@ export function WorkflowRunPage({
         ...workflowActionBarRunState,
         memoryLoaded: false,
         showStatusNotice: false,
+        statusIsProgress: false,
         disabledActionLabel: null,
         developerDetails: null,
       }}
@@ -2193,7 +2236,11 @@ export function WorkflowRunPage({
       ) : null}
       {memoryStatus && showUserFacingMemoryNotice ? (
         <div className={`notice ${memoryNoticeClass(memoryStatus)} notice--compact`} role="status">
-          <AlertCircle size={16} aria-hidden="true" />
+          {isMemoryPreparationState(memoryStatus.state) ? (
+            <Loader2 className="spin" size={16} aria-hidden="true" />
+          ) : (
+            <AlertCircle size={16} aria-hidden="true" />
+          )}
           <div>
             <strong>{memoryNotice?.title ?? memoryStatusTitle(memoryStatus.state)}</strong>
             <span>{memoryNotice?.message ?? memoryStatus.message}</span>
@@ -3523,7 +3570,10 @@ function progressFromWorkflowRuntime(runtime: WorkflowTabRuntimeState | null): J
 function terminalProgressFromWorkflowRuntime(runtime: WorkflowTabRuntimeState | null): JobProgress | null {
   const progress = runtime?.activeJobProgress;
   const status = runtime?.activeJobStatus ?? progress?.status;
-  if (!progress?.job_id || (status !== "completed" && status !== "failed")) return null;
+  if (
+    !progress?.job_id
+    || (status !== "completed" && status !== "failed" && status !== "canceled")
+  ) return null;
   return progress.status === status ? progress : { ...progress, status };
 }
 
@@ -3549,6 +3599,7 @@ function progressFromSubmittedJob(job: EngineJob): JobProgress {
     message: job.memory_status?.message ?? job.message ?? "Starting this workflow...",
     error_code: job.error_code,
     memory_requirement: job.memory_requirement,
+    memory_status: job.memory_status,
     developer_details: job.memory_decision ? { memory_decision: job.memory_decision } : {},
   };
 }
@@ -3979,6 +4030,16 @@ function isBlockingMemoryState(state: string) {
   return state === "blocked_by_memory" || state === "memory_cleanup_failed" || state.startsWith("blocked_");
 }
 
+function isMemoryPreparationState(state: string) {
+  return state === "preparing_run"
+    || state === "waiting_for_gpu"
+    || state === "waiting_for_active_workflow"
+    || state === "unloading_previous_workflow"
+    || state === "freeing_memory"
+    || state === "waiting_for_memory_release"
+    || state === "retrying_after_memory_cleanup";
+}
+
 function clampBatchCount(value: number) {
   if (!Number.isFinite(value)) return 1;
   return Math.min(99, Math.max(1, Math.round(value)));
@@ -4202,20 +4263,23 @@ function shouldUseMemoryStatusFallbackMessage(state: string, backendMessage: str
   );
 }
 
-function memoryStatusDeveloperDetails(job: EngineJob | null) {
-  if (!job?.memory_status && !job?.memory_decision) return null;
+function memoryStatusDeveloperDetails(job: EngineJob | null, progress: JobProgress | null) {
+  const memoryStatus = progress?.memory_status ?? job?.memory_status ?? null;
+  const memoryDecision = progress?.developer_details?.memory_decision ?? job?.memory_decision ?? null;
+  if (!memoryStatus && !memoryDecision) return null;
   const details = {
-    job_id: job?.job_id ?? null,
-    queue_id: job?.queue_id ?? job?.memory_status?.queue_id ?? null,
-    status: job?.status ?? null,
-    memory_status: job?.memory_status ?? null,
-    memory_decision: job?.memory_decision ?? null,
+    job_id: progress?.job_id ?? job?.job_id ?? null,
+    queue_id: progress?.queue_id ?? job?.queue_id ?? memoryStatus?.queue_id ?? null,
+    status: progress?.status ?? job?.status ?? null,
+    memory_status: memoryStatus,
+    memory_decision: memoryDecision,
   };
   return JSON.stringify(details, null, 2);
 }
 
 function memoryNoticeClass(status: MemoryStatus) {
   if (status.state === "blocked_by_memory" || status.state === "memory_cleanup_failed" || status.state.startsWith("blocked_")) return "notice--error";
+  if (isMemoryPreparationState(status.state)) return "notice--progress";
   return "notice--warning";
 }
 

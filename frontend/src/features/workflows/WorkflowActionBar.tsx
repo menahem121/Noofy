@@ -21,6 +21,7 @@ export interface WorkflowActionBarRunState {
   memoryLoaded?: boolean;
   cancelTitle?: string | null;
   showStatusNotice?: boolean;
+  statusIsProgress?: boolean;
   statusTitle?: string | null;
   statusMessage?: string | null;
   disabledReason?: string | null;
@@ -211,8 +212,16 @@ export function WorkflowActionBar({
           </div>
           {runState.memoryLoaded ? <WorkflowMemoryLoadedPill /> : null}
           {runState.showStatusNotice || (!runState.canRun && runState.disabledReason) ? (
-            <div className="canvas-action-cluster__reason" id="workflow-run-disabled-reason" role="status">
-              <AlertCircle size={14} aria-hidden="true" />
+            <div
+              className={`canvas-action-cluster__reason${runState.statusIsProgress ? " canvas-action-cluster__reason--progress" : ""}`}
+              id="workflow-run-disabled-reason"
+              role="status"
+            >
+              {runState.statusIsProgress ? (
+                <Loader2 className="spin" size={14} aria-hidden="true" />
+              ) : (
+                <AlertCircle size={14} aria-hidden="true" />
+              )}
               <div className="canvas-action-cluster__reason-content">
                 {runState.statusTitle ? <strong>{runState.statusTitle}</strong> : null}
                 <span>{runState.statusMessage ?? runState.disabledReason}</span>

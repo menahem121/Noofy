@@ -1,4 +1,4 @@
-"""Durable in-process workflow-run queue and public-handle aliases."""
+"""Bounded in-process workflow-run queue and public-handle aliases."""
 from __future__ import annotations
 
 import threading

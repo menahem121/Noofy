@@ -3058,6 +3058,13 @@ describe("WorkflowRunPage", () => {
         "Noofy is unloading the previous workflow before starting this one.",
       ).length).toBeGreaterThan(0);
       expect(screen.getByRole("button", { name: "Cancel run" })).toBeEnabled();
+      if (viewMode === "canvas") {
+        expect(document.querySelector(".canvas-action-cluster__reason--progress .spin")).toBeInTheDocument();
+      } else {
+        expect(document.querySelector(".notice--progress .spin")).toBeInTheDocument();
+      }
+      fireEvent.click(screen.getByText("Developer details"));
+      expect(screen.getByText(/unloading_previous_workflow/)).toBeInTheDocument();
     },
   );
 
@@ -3133,6 +3140,123 @@ describe("WorkflowRunPage", () => {
       "GPU memory: about 19.5 GB required; about 9.77 GB free when checked (11.7 GB total).",
     )).toBeInTheDocument();
     expect(within(dialog).getByText(/more memory than this machine has/)).toBeInTheDocument();
+  });
+
+  it("recovers a queued capacity failure that finished while the workflow page was away", async () => {
+    mockConfiguredDashboardFetch(fetchMock, readyRuntime, configuredPackageData);
+    const configuredFetch = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/jobs/workflow-run-queue-away/result")) {
+        return Promise.resolve(jsonResponse({
+          job_id: "workflow-run-queue-away",
+          queue_id: "workflow-run-queue-away",
+          workflow_id: "text_to_image_v0",
+          engine: "noofy",
+          status: "blocked_by_memory",
+          message: "This workflow needs more memory than this machine can provide.",
+          error_code: "insufficient_memory",
+          memory_requirement: {
+            required_vram_mb: 20_000,
+            total_vram_mb: 12_000,
+            available_vram_mb: 10_000,
+            required_ram_mb: 20_000,
+            total_ram_mb: 16_000,
+            available_ram_mb: 12_000,
+            capacity_exceeded: true,
+            freeing_memory_may_help: false,
+            source: "memory_governor_decision",
+            confidence: "high",
+          },
+          memory_status: {
+            state: "blocked_exceeds_capacity",
+            message: "This workflow needs more memory than this machine can provide.",
+            risk_level: "high",
+            queue_id: "workflow-run-queue-away",
+            can_cancel: false,
+            can_retry_after_cleanup: false,
+          },
+        }));
+      }
+      return configuredFetch(input, init);
+    });
+
+    renderRunPageWithWorkflowRuntime({
+      activeJobId: null,
+      activeJobStatus: "failed",
+      activeJobProgress: {
+        job_id: "workflow-run-queue-away",
+        queue_id: "workflow-run-queue-away",
+        status: "failed",
+        value: null,
+        max: null,
+        current_node: null,
+        message: "This workflow needs more memory than this machine can provide.",
+        error_code: "insufficient_memory",
+      },
+      activeJobUpdatedAt: Date.now(),
+      handleSource: null,
+      queueId: null,
+    });
+
+    const dialog = await screen.findByRole("dialog", {
+      name: "Not enough memory to run this workflow",
+    });
+    expect(within(dialog).getAllByText(/19.5 GB required/)).toHaveLength(2);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/jobs/workflow-run-queue-away/result",
+      expect.anything(),
+    );
+    fireEvent.click(within(dialog).getByText("Close"));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /run workflow/i })).toBeEnabled();
+    });
+  });
+
+  it("recovers a preparation cancellation that finished while the workflow page was away", async () => {
+    window.localStorage.setItem("noofy.prefs", JSON.stringify({ viewMode: "classic" }));
+    mockConfiguredDashboardFetch(fetchMock, readyRuntime, configuredPackageData);
+    const configuredFetch = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/jobs/workflow-run-queue-canceled-away/result")) {
+        return Promise.resolve(jsonResponse({
+          job_id: "workflow-run-queue-canceled-away",
+          queue_id: "workflow-run-queue-canceled-away",
+          workflow_id: "text_to_image_v0",
+          engine: "noofy",
+          status: "canceled",
+          message: "Workflow run canceled.",
+        }));
+      }
+      return configuredFetch(input, init);
+    });
+
+    renderRunPageWithWorkflowRuntime({
+      activeJobId: null,
+      activeJobStatus: "canceled",
+      activeJobProgress: {
+        job_id: "workflow-run-queue-canceled-away",
+        queue_id: "workflow-run-queue-canceled-away",
+        status: "canceled",
+        value: null,
+        max: null,
+        current_node: null,
+        message: "Workflow run canceled.",
+      },
+      activeJobUpdatedAt: Date.now(),
+      handleSource: null,
+      queueId: null,
+    });
+
+    expect(await screen.findByText("Run canceled.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel run" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /run workflow/i })).toBeEnabled();
+    expect(screen.queryByRole("progressbar", { name: /workflow progress/i })).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/jobs/workflow-run-queue-canceled-away/result",
+      expect.anything(),
+    );
   });
 
   it.each(["ready_warm_co_resident", "ready_reusing_runner"])(

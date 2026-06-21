@@ -393,6 +393,15 @@
   color: var(--warning);
 }
 
+.notice--progress {
+  background: rgba(139, 92, 246, 0.08);
+  border-color: rgba(139, 92, 246, 0.24);
+}
+
+.notice--progress svg {
+  color: var(--primary-hover);
+}
+
 .notice--compact {
   margin: 14px 0 0;
   padding: 12px;
