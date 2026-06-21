@@ -45,44 +45,6 @@ function emptyState(workflowId: string, dashboardVersion: string): WorkflowUserS
   };
 }
 
-function pruneState(
-  state: WorkflowUserState,
-  packageDefaults: Record<string, unknown>,
-  inputIndex: Map<string, WorkflowInputDef>,
-  validLayoutIds: string[],
-  validOutputControlIds: string[],
-  currentDashboardVersion: string,
-): WorkflowUserState {
-  if (state.dashboard_version === currentDashboardVersion) return state;
-
-  const validInputIds = new Set(inputIndex.keys());
-  const validLayoutIdSet = new Set(validLayoutIds);
-  const validOutputControlIdSet = new Set(validOutputControlIds);
-  const prunedValues: Record<string, unknown> = {};
-  for (const id of validInputIds) {
-    prunedValues[id] = packageDefaults[id];
-  }
-
-  const prunedOverrides: Record<string, { x: number; y: number; w: number; h: number }> = {};
-  for (const [id, override] of Object.entries(state.layout_overrides)) {
-    if (validLayoutIdSet.has(id)) prunedOverrides[id] = override;
-  }
-  const prunedOutputPreferences: OutputPreferences = {};
-  for (const [id, preference] of Object.entries(state.output_preferences ?? {})) {
-    if (validOutputControlIdSet.has(id)) prunedOutputPreferences[id] = preference;
-  }
-  const presentationOverrides = state.presentation_overrides ?? {};
-
-  return {
-    ...state,
-    dashboard_version: currentDashboardVersion,
-    values: prunedValues,
-    layout_overrides: prunedOverrides,
-    presentation_overrides: presentationOverrides,
-    output_preferences: prunedOutputPreferences,
-  };
-}
-
 function mergeCurrentContext(
   state: WorkflowUserState,
   packageDefaults: Record<string, unknown>,
@@ -291,7 +253,7 @@ export function useWorkflowUserState(
       .then((remote) => {
         if (!active) return;
         if (!canApplyFetchedState(capturedWorkflowId, fetchBaselineRevision)) return;
-        const pruned = pruneState(
+        const merged = mergeCurrentContext(
           remote,
           packageDefaults,
           inputIndex,
@@ -299,17 +261,10 @@ export function useWorkflowUserState(
           validOutputControlIds,
           dashboardVersion,
         );
-        const merged: WorkflowUserState = {
-          ...pruned,
-          values: {
-            ...packageDefaults,
-            ...pruned.values,
-          },
-        };
         setUserState(merged);
         latestStateRef.current = merged;
         writeCachedState(capturedWorkflowId, merged, { dirty: false, clearDirty: true });
-        if (pruned.dashboard_version !== remote.dashboard_version) {
+        if (merged.dashboard_version !== remote.dashboard_version) {
           scheduleSave(merged);
         }
       })

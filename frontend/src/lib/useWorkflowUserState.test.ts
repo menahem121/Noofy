@@ -216,14 +216,14 @@ describe("useWorkflowUserState", () => {
     expect(result.current.actionBarPositionOverride).toBeNull();
   });
 
-  it("resets values to creator defaults and prunes stale keys when dashboard_version changes", async () => {
+  it("preserves non-empty user values and prunes stale keys when dashboard_version changes", async () => {
     const remote: WorkflowUserState = {
       ...emptyRemoteState("wf-1"),
       dashboard_version: "0.9",
       values: { "old-input": "stale", prompt: "kept" },
       layout_overrides: { "old-ctrl": { x: 0, y: 0, w: 4, h: 2 }, "ctrl-1": { x: 1, y: 0, w: 4, h: 2 } },
     };
-    // PUT after prune-save
+    // PUT after migration save
     fetchMock.mockResolvedValueOnce(jsonResponse(remote));
     fetchMock.mockResolvedValue(jsonResponse({ ...remote, dashboard_version: "1.0" }));
 
@@ -236,10 +236,55 @@ describe("useWorkflowUserState", () => {
 
     // old-input should be pruned (not in inputIndex)
     expect("old-input" in result.current.values).toBe(false);
-    // Existing values belong to the previous dashboard configuration, so the new creator default is used.
-    expect(result.current.values.prompt).toBe("default");
+    // Non-empty user values survive dashboard migrations.
+    expect(result.current.values.prompt).toBe("kept");
     // old-ctrl override should be pruned (not in inputIndex)
     expect(result.current.hasLayoutOverrides).toBe(false);
+  });
+
+  it("preserves non-empty remote edits while applying new defaults for empty stale values", async () => {
+    const remote: WorkflowUserState = {
+      ...emptyRemoteState("wf-1"),
+      dashboard_version: "0.9",
+      values: {
+        "old-input": "stale",
+        image: null,
+        prompt: "my custom prompt",
+      },
+    };
+    fetchMock.mockImplementation((_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") return Promise.resolve(jsonResponse(remote));
+      return Promise.resolve(jsonResponse(remote));
+    });
+
+    const packagedDefault = {
+      source: "package_asset",
+      asset_id: "input-defaults/starter.png",
+      kind: "image",
+      filename: "starter.png",
+    };
+    const { result } = renderHook(() =>
+      useWorkflowUserState(
+        "wf-1",
+        { image: packagedDefault, prompt: "new creator prompt" },
+        "1.0",
+        makeInputIndex("image", "prompt"),
+      ),
+    );
+
+    await waitFor(() => expect(result.current.values.image).toEqual(packagedDefault));
+    expect(result.current.values.prompt).toBe("my custom prompt");
+    expect("old-input" in result.current.values).toBe(false);
+
+    await act(async () => vi.advanceTimersByTime(700));
+    const putCall = fetchMock.mock.calls.find(([, init]) => (init as RequestInit)?.method === "PUT");
+    expect(putCall).toBeDefined();
+    const body = JSON.parse((putCall![1] as RequestInit).body as string) as WorkflowUserState;
+    expect(body.dashboard_version).toBe("1.0");
+    expect(body.values).toEqual({
+      image: packagedDefault,
+      prompt: "my custom prompt",
+    });
   });
 
   it("keeps valid control layout overrides when dashboard_version changes", async () => {
