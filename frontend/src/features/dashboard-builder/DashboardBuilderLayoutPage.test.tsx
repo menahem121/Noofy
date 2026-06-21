@@ -142,6 +142,33 @@ const sliderGroupSchema: DashboardSchema = {
   ],
 };
 
+const imageDefaultSchema: DashboardSchema = {
+  version: 1,
+  workflowId: "wf-1",
+  workflowName: "Workflow",
+  layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+  groups: [],
+  widgets: [
+    {
+      id: "ctrl-image",
+      valueId: "image",
+      backendInputId: "image",
+      binding: { nodeId: "10", inputName: "image" },
+      widgetType: "load_image",
+      title: "Input image",
+      description: "Load image",
+      defaultValue: {
+        source: "package_asset",
+        asset_id: "input-defaults/greenDog.png",
+        kind: "image",
+        filename: "greenDog.png",
+      },
+      defaultPinned: true,
+      layout: { x: 0, y: 0, w: 16, h: 8 },
+    },
+  ],
+};
+
 describe("DashboardBuilderLayoutPage", () => {
   const fetchMock = vi.fn();
 
@@ -844,6 +871,33 @@ describe("DashboardBuilderLayoutPage", () => {
     });
   });
 
+  it("renders packaged default images in layout preview without the builder filename strip", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(
+      <DashboardBuilderLayoutPage
+        workflowId="wf-1"
+        workflowName="Workflow"
+        initialSchema={imageDefaultSchema}
+        onBackToWidgets={vi.fn()}
+        onSaveComplete={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    const image = await screen.findByAltText("Default image: greenDog.png");
+    expect(image).toHaveAttribute(
+      "src",
+      "/api/workflows/wf-1/inputs/image/default-asset?asset_id=input-defaults%2FgreenDog.png",
+    );
+    expect(image.closest(".layout-preview-image-input")).toHaveClass("layout-preview-image-input--has-default");
+    expect(screen.queryByText("greenDog.png")).not.toBeInTheDocument();
+  });
+
   it("keeps canvas widget separation visual without changing tile geometry", () => {
     expect(builderLayoutCss).toMatch(/--layout-widget-visual-gap:\s*var\(--layout-grid-gap, 0px\);/);
     expect(builderLayoutCss).toMatch(/--layout-widget-visual-inset:\s*calc\(var\(--layout-widget-visual-gap\) \/ 2\);/);
@@ -869,6 +923,12 @@ describe("DashboardBuilderLayoutPage", () => {
     );
     expect(builderLayoutCss).toMatch(
       /\.layout-canvas-widget__preview-surface > :is\(\.layout-preview-image-input, \.layout-preview-output\)\s*{[^}]*min-height:\s*0;/,
+    );
+    expect(builderLayoutCss).toMatch(
+      /\.layout-preview-image-input--has-default img\s*{[^}]*object-fit:\s*contain;/,
+    );
+    expect(builderLayoutCss).not.toMatch(
+      /\.layout-preview-image-input--has-default img\s*{[^}]*object-fit:\s*cover;/,
     );
   });
 

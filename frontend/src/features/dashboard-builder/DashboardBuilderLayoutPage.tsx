@@ -1079,7 +1079,6 @@ function WidgetSurfacePreview({
       return (
         <div className="layout-preview-image-input layout-preview-image-input--has-default">
           <img src={preview.url} alt={`Default image: ${preview.label}`} />
-          <span title={preview.label}>{preview.label}</span>
         </div>
       );
     }
