@@ -17,7 +17,6 @@ from typing import Any
 from app.diagnostics import DiagnosticsSink
 from app.workflows.import_normalization import (
     detect_unresolved_runtime_inputs,
-    filter_resolved_runtime_inputs,
 )
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.media_values import (
@@ -96,8 +95,8 @@ class DashboardAuthoringService:
             object_info=object_info,
             widget_metadata=package.comfyui_widget_metadata,
         )
-        nodes = _overlay_dashboard_input_defaults(nodes, package.inputs)
         nodes = _annotate_required_runtime_inputs(nodes, _required_runtime_inputs(package))
+        nodes = _overlay_dashboard_input_defaults(nodes, package.inputs)
         nodes, filter_events = filter_bindable_input_nodes_for_architecture(package, nodes)
         self._log_architecture_filter_events(workflow_id, filter_events)
         return {
@@ -555,7 +554,7 @@ def _required_runtime_inputs(
             continue
         seen.add(key)
         merged.append(runtime_input)
-    return filter_resolved_runtime_inputs(merged, candidate.inputs)
+    return merged
 
 
 def _overlay_dashboard_input_defaults(
@@ -588,14 +587,22 @@ def _overlay_dashboard_input_defaults(
             if workflow_input is None:
                 inputs.append(input_record)
                 continue
-            inputs.append(
-                {
-                    **input_record,
-                    "backend_input_id": workflow_input.id,
-                    "current_value": workflow_input.default,
-                    "default_pinned": workflow_input.default_pinned,
-                }
-            )
+            overlaid = {
+                **input_record,
+                "backend_input_id": workflow_input.id,
+                "current_value": workflow_input.default,
+                "default_pinned": workflow_input.default_pinned,
+            }
+            if _hidden_runtime_input_has_usable_default(workflow_input):
+                for key in (
+                    "required_runtime_input",
+                    "required_runtime_kind",
+                    "required_runtime_reason",
+                    "extension_hint",
+                    "mime_type_hint",
+                ):
+                    overlaid.pop(key, None)
+            inputs.append(overlaid)
             changed = True
         overlaid_nodes.append({**node, "inputs": inputs} if changed else node)
     return overlaid_nodes
