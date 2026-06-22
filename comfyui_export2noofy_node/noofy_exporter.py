@@ -21,7 +21,7 @@ from urllib.parse import parse_qsl, urlsplit, urlunsplit
 
 
 EXPORTER_NAME = "Noofy ComfyUI Export Extension"
-EXPORTER_VERSION = "0.1.2"
+EXPORTER_VERSION = "0.1.3"
 SCHEMA_VERSION = "0.1.0"
 TRUST_LEVEL = "public_unverified"
 TEST_INPUT_MODE = "workflow_current_load_image_inputs"
@@ -2035,11 +2035,21 @@ def normalize_comfyui_widget_metadata(
     for raw_node_id, raw_node in raw_nodes.items():
         if not isinstance(raw_node, dict):
             continue
+        node_record: dict[str, Any] = {}
+        raw_outputs = raw_node.get("outputs")
+        if isinstance(raw_outputs, (list, tuple)):
+            outputs = [
+                value.strip()
+                for value in raw_outputs
+                if isinstance(value, str) and value.strip()
+            ]
+            if outputs:
+                node_record["outputs"] = outputs
         raw_inputs = raw_node.get("inputs")
-        if not isinstance(raw_inputs, dict):
-            continue
         inputs: dict[str, Any] = {}
-        for raw_input_name, raw_input in raw_inputs.items():
+        for raw_input_name, raw_input in (
+            raw_inputs.items() if isinstance(raw_inputs, dict) else ()
+        ):
             if (
                 not isinstance(raw_input_name, str)
                 or not raw_input_name
@@ -2054,32 +2064,51 @@ def normalize_comfyui_widget_metadata(
                 if isinstance(graph_inputs, dict)
                 else None
             )
-            if (
+            private_file_picker = _has_upload_metadata(raw_input) or (
                 isinstance(node_type, str)
-                and expected_input_kind(node_type, raw_input_name, current_value) is not None
-            ):
-                continue
-            raw_options = raw_input.get("options")
-            if not isinstance(raw_options, list):
-                continue
-            options = dedupe_strings(
-                str(option)
-                for option in raw_options
-                if isinstance(option, (str, int, float, bool))
+                and expected_input_kind(node_type, raw_input_name, current_value)
+                is not None
             )
-            if not options:
-                continue
-            record: dict[str, Any] = {"options": options}
-            for key in ("display_name", "tooltip"):
+            raw_options = raw_input.get("options")
+            options = (
+                dedupe_strings(
+                    str(option)
+                    for option in raw_options
+                    if isinstance(option, (str, int, float, bool))
+                )
+                if isinstance(raw_options, list) and not private_file_picker
+                else []
+            )
+            record: dict[str, Any] = {}
+            if options:
+                record["options"] = options
+            for key in ("display_name", "tooltip", "input_type"):
                 value = raw_input.get(key)
                 if isinstance(value, str) and value.strip():
                     record[key] = value.strip()
+            input_group = raw_input.get("input_group")
+            if input_group in {"required", "optional", "hidden"}:
+                record["input_group"] = input_group
+            for key in ("image_upload", "audio_upload", "video_upload", "file_upload"):
+                if raw_input.get(key) is True:
+                    record[key] = True
+            if not record:
+                continue
             inputs[raw_input_name] = record
         if inputs:
-            nodes[str(raw_node_id)] = {"inputs": inputs}
+            node_record["inputs"] = inputs
+        if node_record:
+            nodes[str(raw_node_id)] = node_record
     if not nodes:
         return {}
     return {"schema_version": SCHEMA_VERSION, "nodes": nodes}
+
+
+def _has_upload_metadata(input_metadata: dict[str, Any]) -> bool:
+    return any(
+        input_metadata.get(flag) is True
+        for flag in ("image_upload", "audio_upload", "video_upload", "file_upload")
+    )
 
 
 def build_package_documents(

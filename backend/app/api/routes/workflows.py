@@ -522,9 +522,9 @@ async def workflow_active_and_queued_run_summary(
 # ─── Dashboard authoring ─────────────────────────────────────────────────────
 
 @router.get("/workflows/{workflow_id}/bindable-inputs")
-async def get_bindable_inputs(workflow_id: str, authoring: DashboardAuthoringServiceDep):
+async def get_bindable_inputs(workflow_id: str, engine_service: EngineServiceDep):
     try:
-        return authoring.get_bindable_inputs(workflow_id)
+        return engine_service.bindable_inputs_for_authoring(workflow_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except DashboardAuthoringError as exc:

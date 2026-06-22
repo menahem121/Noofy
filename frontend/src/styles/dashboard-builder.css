@@ -608,6 +608,10 @@
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.42);
 }
 
+.builder-remove-dialog__panel--compact {
+  grid-template-rows: auto auto auto;
+}
+
 .builder-remove-dialog__header {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -626,6 +630,12 @@
   background: rgba(251, 191, 36, 0.12);
 }
 
+.builder-remove-dialog--info .builder-remove-dialog__icon {
+  border-color: rgba(139, 92, 246, 0.3);
+  color: var(--primary-hover);
+  background: rgba(139, 92, 246, 0.13);
+}
+
 .builder-remove-dialog__eyebrow {
   margin: 0 0 5px;
   color: var(--warning);
@@ -633,6 +643,10 @@
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+}
+
+.builder-remove-dialog--info .builder-remove-dialog__eyebrow {
+  color: var(--primary-hover);
 }
 
 .builder-remove-dialog__panel h2 {
@@ -649,6 +663,14 @@
   color: var(--text-secondary);
   font-size: 14px;
   line-height: 1.55;
+}
+
+.builder-remove-dialog__body {
+  padding: 0 24px 24px;
+}
+
+.builder-remove-dialog__body p {
+  margin: 0;
 }
 
 .builder-remove-dialog__choices {
@@ -2908,6 +2930,10 @@
     padding-inline: 18px;
   }
 
+  .builder-remove-dialog__body {
+    padding: 0 18px 20px;
+  }
+
   .builder-remove-dialog__choice {
     grid-template-columns: 1fr;
   }
@@ -2919,11 +2945,16 @@
   }
 
   .builder-remove-dialog__choice button,
-  .builder-remove-dialog__actions .secondary-button {
+  .builder-remove-dialog__actions .secondary-button,
+  .builder-remove-dialog--info .builder-remove-dialog__actions .primary-button {
     width: 100%;
   }
 
   .builder-remove-dialog__actions {
     padding: 14px 18px 18px;
+  }
+
+  .builder-remove-dialog--info .builder-remove-dialog__actions {
+    flex-direction: column-reverse;
   }
 }

@@ -383,8 +383,80 @@ def _custom_node_import_stage(
     return SmokeStageResult(
         status=SmokeStageStatus.PASSED,
         message="Custom node types are registered by the staged runner.",
-        details={"node_types": sorted(set(required))},
+        details={
+            "node_types": sorted(set(required)),
+            "object_info": _portable_object_info(object_info or {}, required),
+        },
     )
+
+
+def _portable_object_info(
+    object_info: Mapping[str, object],
+    node_types: Sequence[str],
+) -> dict[str, object]:
+    portable: dict[str, object] = {}
+    for node_type in sorted(set(node_types)):
+        node_info = object_info.get(node_type)
+        if not isinstance(node_info, Mapping):
+            continue
+        record: dict[str, object] = {}
+        input_groups = node_info.get("input")
+        if isinstance(input_groups, Mapping):
+            groups: dict[str, object] = {}
+            for group_name in ("required", "optional", "hidden"):
+                group = input_groups.get(group_name)
+                if not isinstance(group, Mapping):
+                    continue
+                inputs = {
+                    str(input_name): portable_spec
+                    for input_name, input_spec in group.items()
+                    if (portable_spec := _portable_input_spec(input_spec)) is not None
+                }
+                if inputs:
+                    groups[group_name] = inputs
+            if groups:
+                record["input"] = groups
+        outputs = node_info.get("output")
+        if isinstance(outputs, (list, tuple)):
+            record["output"] = [value for value in outputs if isinstance(value, str)]
+        if record:
+            portable[node_type] = record
+    return portable
+
+
+def _portable_input_spec(input_spec: object) -> list[object] | None:
+    if not isinstance(input_spec, (list, tuple)) or not input_spec:
+        return None
+    raw_type = input_spec[0]
+    metadata = input_spec[1] if len(input_spec) > 1 and isinstance(input_spec[1], Mapping) else {}
+    upload_flags = {
+        flag: True
+        for flag in ("image_upload", "audio_upload", "video_upload", "file_upload")
+        if metadata.get(flag) is True
+    }
+    if isinstance(raw_type, str):
+        portable_type: object = raw_type
+    elif isinstance(raw_type, (list, tuple)):
+        portable_type = [] if upload_flags else _portable_scalar_options(raw_type)
+    else:
+        return None
+    portable_metadata: dict[str, object] = dict(upload_flags)
+    for key in ("display_name", "tooltip"):
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            portable_metadata[key] = value.strip()
+    raw_options = metadata.get("options")
+    if isinstance(raw_options, (list, tuple)) and not upload_flags:
+        portable_metadata["options"] = _portable_scalar_options(raw_options)
+    return [portable_type, portable_metadata]
+
+
+def _portable_scalar_options(values: Sequence[object]) -> list[object]:
+    return [
+        value
+        for value in values[:1000]
+        if isinstance(value, (str, int, float, bool))
+    ]
 
 
 def _object_info_failure_stage(

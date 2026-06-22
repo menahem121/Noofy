@@ -877,6 +877,51 @@ class ImportedWorkflowPackageStore:
             },
         )
 
+    def persist_comfyui_widget_metadata(
+        self,
+        package: WorkflowPackage,
+        metadata: dict[str, Any],
+    ) -> bool:
+        package_dir = self.package_dir(package)
+        package_file = package_dir / "package.json"
+        assert_path_within(
+            self.root_dir,
+            package_file,
+            purpose="persist workflow input metadata",
+        )
+        package_payload = json.loads(package_file.read_text(encoding="utf-8"))
+        normalized = normalize_comfyui_widget_metadata(
+            metadata,
+            graph=package.comfyui_graph,
+        )
+        if package_payload.get("comfyui_widget_metadata") == normalized:
+            return False
+        if normalized:
+            package_payload["comfyui_widget_metadata"] = normalized
+        else:
+            package_payload.pop("comfyui_widget_metadata", None)
+
+        package_tmp = package_file.with_suffix(f".json.{uuid4().hex}.tmp")
+        try:
+            package_tmp.write_text(
+                json.dumps(package_payload, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+            package_tmp.replace(package_file)
+        finally:
+            package_tmp.unlink(missing_ok=True)
+        self.log_store.add(
+            "info",
+            "Persisted workflow input metadata snapshot",
+            "workflow.authoring",
+            workflow_id=package.metadata.id,
+            details={
+                "node_count": len(normalized.get("nodes", {})),
+                "source": "comfyui_object_info",
+            },
+        )
+        return True
+
     def refresh_capsule_lock(self, package: WorkflowPackage) -> CapsuleLock | None:
         """Refresh the app-owned lock when the selected runtime profile changes."""
         capsule_file = self.package_dir(package) / "capsule.lock.json"

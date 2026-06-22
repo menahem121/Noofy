@@ -1478,6 +1478,118 @@ def test_classify_graph_inputs_marks_load_image_as_image_input_only_when_unlinke
     ]
 
 
+def test_classify_graph_inputs_uses_bundled_media_contract_without_object_info() -> None:
+    nodes = _classify_graph_inputs(
+        {
+            "image": {"class_type": "LoadImageOutput", "inputs": {"image": ""}},
+            "video": {"class_type": "LoadVideo", "inputs": {"file": ""}},
+            "audio": {"class_type": "LoadAudio", "inputs": {"audio": ""}},
+            "model": {"class_type": "Load3D", "inputs": {"model_file": "none"}},
+        },
+        widget_metadata={
+            "nodes": {
+                "model": {
+                    "inputs": {
+                        "model_file": {
+                            "input_type": "COMBO",
+                            "file_upload": True,
+                        }
+                    }
+                }
+            }
+        },
+    )
+
+    kinds = {node["node_id"]: node["inputs"][0]["kind"] for node in nodes}
+    assert kinds == {
+        "image": "image_input",
+        "video": "video_input",
+        "audio": "audio_input",
+        "model": "three_d_input",
+    }
+
+
+def _custom_node_archive() -> bytes:
+    node_type = "ArbitraryCustomNode"
+    return _make_minimal_archive(
+        graph={"1": {"class_type": node_type, "inputs": {"payload": ""}}},
+        package_update={
+            "custom_nodes": [
+                {
+                    "id": "arbitrary-custom-node",
+                    "folder_name": "arbitrary-custom-node",
+                    "source": "https://example.invalid/arbitrary-custom-node.git",
+                    "included": False,
+                    "node_types": [node_type],
+                }
+            ]
+        },
+    )
+
+
+def test_get_bindable_inputs_waits_for_custom_string_input_metadata(
+    tmp_path: Path,
+) -> None:
+    service, workflow_id = _import_and_setup(tmp_path, _custom_node_archive())
+
+    assert service.get_bindable_inputs(workflow_id) == {
+        "workflow_id": workflow_id,
+        "status": "controls_preparing",
+        "enrichment": "pending",
+        "nodes": [],
+    }
+
+
+def test_get_bindable_inputs_does_not_accept_partial_core_object_info_for_custom_nodes(
+    tmp_path: Path,
+) -> None:
+    service, workflow_id = _import_and_setup(tmp_path, _custom_node_archive())
+
+    result = service.get_bindable_inputs(
+        workflow_id,
+        object_info={"KSampler": {"input": {"required": {}}}},
+    )
+
+    assert result["status"] == "controls_preparing"
+    assert result["nodes"] == []
+
+
+def test_get_bindable_inputs_waits_for_unresolved_raw_custom_node_metadata(
+    tmp_path: Path,
+) -> None:
+    graph = {
+        "1": {
+            "class_type": "UnknownRawNode",
+            "inputs": {"payload": ""},
+        }
+    }
+    log_store = LogStore()
+    store = ImportedWorkflowPackageStore(
+        tmp_path / "packages",
+        log_store=log_store,
+    )
+    package = store.import_archive(
+        json.dumps(graph).encode("utf-8"),
+        original_filename="unknown-raw-node.json",
+    )
+    assert package.import_metadata is not None
+    assert package.import_metadata.status == "missing_custom_nodes"
+    service = DashboardAuthoringService(
+        workflow_store_dir=tmp_path / "packages",
+        workflow_loader=WorkflowPackageLoader(
+            Path("missing-bundled"),
+            imported_packages_dir=tmp_path / "packages",
+        ),
+        validator=WorkflowPackageValidator(),
+        log_store=log_store,
+    )
+
+    assert (
+        service.get_bindable_inputs(package.metadata.id)["status"]
+        == "controls_preparing"
+    )
+
+
 def test_classify_graph_inputs_includes_audio_widgets() -> None:
     nodes = _classify_graph_inputs(
         {
@@ -1510,32 +1622,17 @@ def test_classify_graph_inputs_includes_audio_widgets() -> None:
     }
 
 
-def test_classify_graph_inputs_supports_noofy_optional_media_and_preview_any() -> None:
+def test_classify_graph_inputs_supports_preview_any_text_output() -> None:
     nodes = _classify_graph_inputs(
         {
             "1": {
                 "class_type": "TextGenerate",
                 "inputs": {"model": ["8", 0]},
             },
-            "2": {
-                "_meta": {"title": "Noofy Optional Load Image"},
-                "class_type": "NoofyOptionalLoadImage",
-                "inputs": {"enabled": False, "image": "", "mode": "auto"},
-            },
             "4": {
                 "_meta": {"title": "Preview as Text"},
                 "class_type": "PreviewAny",
                 "inputs": {"source": ["1", 0]},
-            },
-            "7": {
-                "_meta": {"title": "Noofy Optional Load Audio"},
-                "class_type": "NoofyOptionalLoadAudio",
-                "inputs": {
-                    "enabled": False,
-                    "audio": "",
-                    "mode": "auto",
-                    "audioUI": "/api/view?filename=&type=input",
-                },
             },
         },
         object_info={
@@ -1545,24 +1642,6 @@ def test_classify_graph_inputs_supports_noofy_optional_media_and_preview_any() -
     )
 
     input_nodes = {node["node_id"]: node for node in nodes}
-    assert input_nodes["2"]["inputs"] == [
-        {
-            "input_name": "image",
-            "current_value": "",
-            "kind": "image_input",
-            "suggested_widget_type": "load_image",
-            "widget_types": ["load_image", "load_image_mask"],
-        }
-    ]
-    assert input_nodes["7"]["inputs"] == [
-        {
-            "input_name": "audio",
-            "current_value": "",
-            "kind": "audio_input",
-            "suggested_widget_type": "load_audio",
-            "widget_types": ["load_audio"],
-        }
-    ]
     assert input_nodes["4"]["node_title"] == "Preview as Text"
     assert input_nodes["4"]["inputs"] == [
         {
@@ -1574,6 +1653,243 @@ def test_classify_graph_inputs_supports_noofy_optional_media_and_preview_any() -
             "auto_select": True,
         }
     ]
+
+
+def test_classify_graph_inputs_infers_custom_media_uploads_from_object_info() -> None:
+    nodes = _classify_graph_inputs(
+        {
+            "image": {
+                "class_type": "ArbitraryNodeAlpha",
+                "inputs": {
+                    "payload_a": "",
+                    "helper_a": "image",
+                    "caption": "Keep this control",
+                },
+            },
+            "audio": {
+                "class_type": "ArbitraryNodeBeta",
+                "inputs": {
+                    "payload_b": "",
+                    "audioUI": "/api/view?filename=&type=input",
+                },
+            },
+            "video": {"class_type": "ArbitraryNodeGamma", "inputs": {"payload_c": ""}},
+            "file": {"class_type": "ArbitraryNodeDelta", "inputs": {"payload_d": ""}},
+        },
+        object_info={
+            "ArbitraryNodeAlpha": {
+                "input": {
+                    "required": {
+                        "payload_a": [
+                            ["", "creator-private.png"],
+                            {"image_upload": True, "tooltip": "Choose an image."},
+                        ],
+                        "helper_a": ["IMAGEUPLOAD", {}],
+                        "caption": ["STRING", {}],
+                    }
+                },
+                "output": ["IMAGE"],
+            },
+            "ArbitraryNodeBeta": {
+                "input": {
+                    "required": {
+                        "payload_b": [
+                            ["", "creator-private.wav"],
+                            {"audio_upload": True, "tooltip": "Choose an audio file."},
+                        ],
+                    }
+                },
+                "output": ["AUDIO"],
+            },
+            "ArbitraryNodeGamma": {
+                "input": {
+                    "required": {
+                        "payload_c": [
+                            ["", "creator-private.mp4"],
+                            {"video_upload": True},
+                        ],
+                    }
+                },
+                "output": ["VIDEO"],
+            },
+            "ArbitraryNodeDelta": {
+                "input": {
+                    "required": {
+                        "payload_d": [
+                            ["", "creator-private.bin"],
+                            {"file_upload": True},
+                        ],
+                    }
+                },
+                "output": ["CUSTOM_DATA"],
+            },
+        },
+    )
+
+    input_nodes = {node["node_id"]: node for node in nodes}
+    assert input_nodes["image"]["is_image_node"] is True
+    assert input_nodes["image"]["inputs"] == [
+        {
+            "input_name": "payload_a",
+            "current_value": "",
+            "kind": "image_input",
+            "suggested_widget_type": "load_image",
+            "widget_types": ["load_image", "load_image_mask"],
+            "hint": "Choose an image.",
+        },
+        {
+            "input_name": "caption",
+            "current_value": "Keep this control",
+            "kind": "string",
+            "suggested_widget_type": "textarea",
+            "widget_types": ["textarea", "string_field"],
+        },
+    ]
+    assert input_nodes["audio"]["is_audio_node"] is True
+    assert input_nodes["audio"]["inputs"] == [
+        {
+            "input_name": "payload_b",
+            "current_value": "",
+            "kind": "audio_input",
+            "suggested_widget_type": "load_audio",
+            "widget_types": ["load_audio"],
+            "hint": "Choose an audio file.",
+        }
+    ]
+    assert input_nodes["video"]["inputs"][0]["kind"] == "video_input"
+    assert input_nodes["video"]["inputs"][0]["suggested_widget_type"] == "load_video"
+    assert input_nodes["file"]["inputs"][0]["kind"] == "file_input"
+    assert input_nodes["file"]["inputs"][0]["suggested_widget_type"] == "load_file"
+
+
+@pytest.mark.parametrize(
+    ("node_type", "input_name"),
+    [
+        ("OptionalImageInput", "image"),
+        ("OptionalAudioInput", "audio"),
+        ("NoofyOptionalLoadImage", "image"),
+        ("NoofyOptionalLoadAudio", "audio"),
+    ],
+)
+def test_classify_graph_inputs_does_not_infer_media_from_optional_node_names(
+    node_type: str,
+    input_name: str,
+) -> None:
+    nodes = _classify_graph_inputs(
+        {"1": {"class_type": node_type, "inputs": {input_name: ""}}}
+    )
+
+    assert nodes[0]["inputs"][0]["kind"] == "string"
+
+
+def test_classify_graph_inputs_uses_packaged_upload_metadata_without_object_info() -> None:
+    nodes = _classify_graph_inputs(
+        {
+            "42": {
+                "class_type": "UnknownFutureNode",
+                "inputs": {"payload": "", "preview_helper": ""},
+            }
+        },
+        widget_metadata={
+            "nodes": {
+                "42": {
+                    "inputs": {
+                        "payload": {
+                            "input_type": "COMBO",
+                            "audio_upload": True,
+                            "options": ["", "creator-private.wav"],
+                        },
+                        "preview_helper": {"input_type": "AUDIO_UI"},
+                    }
+                }
+            }
+        },
+    )
+
+    assert nodes[0]["node_type"] == "UnknownFutureNode"
+    assert nodes[0]["is_audio_node"] is True
+    assert nodes[0]["inputs"] == [
+        {
+            "input_name": "payload",
+            "current_value": "",
+            "kind": "audio_input",
+            "suggested_widget_type": "load_audio",
+            "widget_types": ["load_audio"],
+        }
+    ]
+
+
+def test_classify_graph_inputs_hides_schema_hidden_custom_inputs() -> None:
+    nodes = _classify_graph_inputs(
+        {
+            "12": {
+                "class_type": "FutureNode",
+                "inputs": {"source": "", "internal_token": "do-not-show"},
+            }
+        },
+        widget_metadata={
+            "nodes": {
+                "12": {
+                    "outputs": ["CUSTOM_DATA"],
+                    "inputs": {
+                        "source": {
+                            "input_type": "COMBO",
+                            "input_group": "required",
+                            "file_upload": True,
+                        },
+                        "internal_token": {
+                            "input_type": "STRING",
+                            "input_group": "hidden",
+                        },
+                    },
+                }
+            }
+        },
+    )
+
+    assert [item["input_name"] for item in nodes[0]["inputs"]] == ["source"]
+
+
+def test_classify_graph_inputs_uses_packaged_output_contracts_offline() -> None:
+    nodes = _classify_graph_inputs(
+        {
+            "source": {"class_type": "FutureGenerator", "inputs": {}},
+            "preview": {
+                "class_type": "PreviewAny",
+                "inputs": {"source": ["source", 0]},
+            },
+        },
+        widget_metadata={
+            "nodes": {
+                "source": {"outputs": ["AUDIO"]},
+                "preview": {"outputs": ["ANY"]},
+            }
+        },
+    )
+
+    assert nodes[0]["node_id"] == "preview"
+    assert nodes[0]["inputs"][0]["kind"] == "audio_output"
+
+
+def test_classify_graph_inputs_recognizes_generic_3d_upload_from_output_contract() -> None:
+    nodes = _classify_graph_inputs(
+        {"mesh": {"class_type": "FutureAssetNode", "inputs": {"source": ""}}},
+        widget_metadata={
+            "nodes": {
+                "mesh": {
+                    "outputs": ["FILE_3D_GLB"],
+                    "inputs": {
+                        "source": {
+                            "input_type": "COMBO",
+                            "file_upload": True,
+                        }
+                    },
+                }
+            }
+        },
+    )
+
+    assert nodes[0]["inputs"][0]["kind"] == "three_d_input"
 
 
 def test_classify_graph_inputs_uses_preview_any_declared_string_output() -> None:

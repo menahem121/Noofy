@@ -394,7 +394,70 @@ def test_build_package_documents_preserves_sanitized_comfyui_widget_metadata() -
     }
 
 
-def test_oversized_input_asset_candidate_is_not_selectable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_build_package_documents_preserves_upload_contract_without_private_options() -> None:
+    documents = exporter.build_package_documents(
+        graph={
+            "8": {
+                "class_type": "ArbitraryFutureNode",
+                "inputs": {"payload": "", "preview": ""},
+            }
+        },
+        workflow_name="Semantic upload",
+        runtime=exporter.RuntimeMetadata("test", "test", "linux", "cpu", None),
+        custom_nodes=[],
+        models=[],
+        outputs=[],
+        hardware=exporter.MemoryObservation(None, None),
+        started_at="2026-06-15T00:00:00Z",
+        finished_at="2026-06-15T00:00:01Z",
+        duration_seconds=1,
+        graph_adjustments={},
+        warnings=[],
+        comfyui_widget_metadata={
+            "nodes": {
+                "8": {
+                    "outputs": ["AUDIO"],
+                    "inputs": {
+                        "payload": {
+                            "input_type": "COMBO",
+                            "input_group": "required",
+                            "audio_upload": True,
+                            "options": ["private.wav"],
+                        },
+                        "preview": {
+                            "input_type": "AUDIO_UI",
+                            "input_group": "hidden",
+                        },
+                    }
+                }
+            }
+        },
+    )
+
+    assert documents["package_json"]["comfyui_widget_metadata"] == {
+        "schema_version": "0.1.0",
+        "nodes": {
+            "8": {
+                "outputs": ["AUDIO"],
+                "inputs": {
+                    "payload": {
+                        "input_type": "COMBO",
+                        "input_group": "required",
+                        "audio_upload": True,
+                    },
+                    "preview": {
+                        "input_type": "AUDIO_UI",
+                        "input_group": "hidden",
+                    },
+                }
+            }
+        },
+    }
+
+
+def test_oversized_input_asset_candidate_is_not_selectable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     image = tmp_path / "large.png"
     image.write_bytes(b"123456")
     monkeypatch.setattr(exporter, "MAX_BUNDLED_INPUT_ASSET_BYTES", 4)

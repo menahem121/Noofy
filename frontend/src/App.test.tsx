@@ -174,6 +174,7 @@ describe("App workflow tabs", () => {
       if (url.endsWith("/api/workflows/text_to_image_v0/bindable-inputs")) {
         return Promise.resolve(jsonResponse({
           workflow_id: "text_to_image_v0",
+          status: "ready",
           enrichment: "heuristic",
           nodes: [
             {

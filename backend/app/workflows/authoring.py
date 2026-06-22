@@ -10,11 +10,13 @@ import json
 import os
 import shutil
 import tempfile
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from app.diagnostics import DiagnosticsSink
+from app.workflows.core_input_metadata import bundled_comfyui_input_kind
 from app.workflows.import_normalization import (
     detect_unresolved_runtime_inputs,
 )
@@ -47,7 +49,10 @@ from app.workflows.model_architecture import (
 )
 from app.workflows.store_paths import assert_path_within, mutable_package_dir, safe_store_segment
 from app.workflows.validator import WorkflowPackageValidator
-from app.workflows.widget_metadata import comfyui_widget_input_metadata
+from app.workflows.widget_metadata import (
+    comfyui_widget_input_metadata,
+    comfyui_widget_output_type,
+)
 
 
 class DashboardAuthoringError(ValueError):
@@ -64,7 +69,6 @@ class DashboardAuthoringService:
         *,
         log_store: DiagnosticsSink,
         validator: WorkflowPackageValidator | None = None,
-        object_info_provider: Callable[[str], Mapping[str, Any] | None] | None = None,
         dashboard_overrides_dir: Path | None = None,
         dashboard_assets_dir: Path | None = None,
     ) -> None:
@@ -72,7 +76,6 @@ class DashboardAuthoringService:
         self.workflow_loader = workflow_loader
         self.validator = validator or WorkflowPackageValidator()
         self.log_store = log_store
-        self.object_info_provider = object_info_provider
         self.dashboard_overrides_dir = dashboard_overrides_dir
         self.dashboard_assets_dir = dashboard_assets_dir
 
@@ -88,8 +91,16 @@ class DashboardAuthoringService:
     ) -> dict[str, Any]:
         """Return a list of bindable graph inputs derived from the graph and node definitions."""
         package = self._get_package(workflow_id)
-        if object_info is None and self.object_info_provider is not None:
-            object_info = self.object_info_provider(workflow_id)
+        if not _package_has_authoritative_custom_input_metadata(
+            package,
+            object_info=object_info,
+        ):
+            return {
+                "workflow_id": workflow_id,
+                "status": "controls_preparing",
+                "enrichment": "pending",
+                "nodes": [],
+            }
         nodes = _classify_graph_inputs(
             package.comfyui_graph,
             object_info=object_info,
@@ -101,6 +112,7 @@ class DashboardAuthoringService:
         self._log_architecture_filter_events(workflow_id, filter_events)
         return {
             "workflow_id": workflow_id,
+            "status": "ready",
             "enrichment": _bindable_input_enrichment(
                 object_info=object_info,
                 widget_metadata=package.comfyui_widget_metadata,
@@ -697,9 +709,9 @@ _SCALAR_INPUT_KINDS: dict[type, str] = {
     bool: "boolean",
 }
 
-_IMAGE_NODE_TYPES = frozenset({"LoadImage", "LoadImageMask", "NoofyOptionalLoadImage"})
+_IMAGE_NODE_TYPES = frozenset({"LoadImage", "LoadImageMask", "LoadImageOutput"})
 _IMAGE_OUTPUT_NODE_TYPES = frozenset({"PreviewImage", "SaveImage"})
-_AUDIO_NODE_TYPES = frozenset({"LoadAudio", "NoofyOptionalLoadAudio"})
+_AUDIO_NODE_TYPES = frozenset({"LoadAudio"})
 _AUDIO_OUTPUT_NODE_TYPES = frozenset({"PreviewAudio", "SaveAudio", "SaveAudioMP3", "SaveAudioOpus"})
 _PREVIEW_ANY_NODE_TYPES = frozenset({"PreviewAny"})
 _VIDEO_NODE_TYPES = frozenset({"LoadVideo", "VHS_LoadVideo", "VHS_LoadVideoPath"})
@@ -713,6 +725,9 @@ _THREE_D_EXTENSIONS = frozenset({".glb", ".gltf", ".obj", ".stl", ".fbx", ".ply"
 _SEED_INPUT_NAMES = frozenset({"seed", "noise_seed"})
 _LORA_NODE_TYPES = frozenset({"LoraLoader", "LoraLoaderModelOnly"})
 _NOTE_NODE_TYPES = frozenset({"Note"})
+_MEDIA_INPUT_KINDS = frozenset(
+    {"image_input", "audio_input", "video_input", "three_d_input", "file_input"}
+)
 
 
 def _bindable_input_enrichment(
@@ -729,6 +744,75 @@ def _bindable_input_enrichment(
     if has_widget_metadata:
         return "exported_widgets"
     return "heuristic"
+
+
+def _package_has_authoritative_custom_input_metadata(
+    package: WorkflowPackage,
+    *,
+    object_info: Mapping[str, Any] | None = None,
+) -> bool:
+    custom_node_types = _custom_node_types_requiring_metadata(package)
+    if not custom_node_types:
+        return True
+    for raw_node_id, node in package.comfyui_graph.items():
+        if not isinstance(node, Mapping):
+            continue
+        node_type = str(node.get("class_type") or node.get("type") or "")
+        if node_type not in custom_node_types:
+            continue
+        raw_inputs = node.get("inputs")
+        if not isinstance(raw_inputs, Mapping):
+            continue
+        for input_name, value in raw_inputs.items():
+            if (
+                not isinstance(input_name, str)
+                or isinstance(value, list)
+                or _is_comfy_view_helper_value(input_name, value)
+            ):
+                continue
+            option_spec = _merge_input_option_specs(
+                _options_for_node_input(object_info, node_type, input_name),
+                _options_for_exported_widget_input(
+                    package.comfyui_widget_metadata,
+                    str(raw_node_id),
+                    input_name,
+                ),
+            )
+            if not (
+                option_spec.declared_type
+                or option_spec.options
+                or option_spec.upload_kind
+            ):
+                return False
+    return True
+
+
+def _custom_node_types_requiring_metadata(package: WorkflowPackage) -> set[str]:
+    custom_node_types = {
+        node_type for record in package.custom_nodes for node_type in record.node_types
+    }
+    import_details = (
+        package.import_metadata.developer_details
+        if package.import_metadata is not None
+        else {}
+    )
+    source_resolution = import_details.get("source_resolution")
+    if isinstance(source_resolution, Mapping):
+        for item in source_resolution.get("unresolved_node_types", []):
+            if isinstance(item, str) and item:
+                custom_node_types.add(item)
+        for item in source_resolution.get("ambiguous_node_types", []):
+            if isinstance(item, Mapping) and isinstance(item.get("node_type"), str):
+                custom_node_types.add(item["node_type"])
+    return custom_node_types
+
+
+def _is_comfy_view_helper_value(input_name: str, value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and input_name.casefold() in {"audioui", "imageui", "videoui", "fileui"}
+        and value.startswith("/api/view?")
+    )
 
 
 def _classify_graph_inputs(
@@ -755,6 +839,16 @@ def _classify_graph_inputs(
         if not isinstance(raw_inputs, dict):
             continue
 
+        input_option_specs = {
+            input_name: _merge_input_option_specs(
+                _options_for_node_input(object_info, node_type, input_name),
+                _options_for_exported_widget_input(
+                    widget_metadata, node_id_str, input_name
+                ),
+            )
+            for input_name, value in raw_inputs.items()
+            if not isinstance(value, list)
+        }
         scalar_inputs: list[dict[str, Any]] = []
         if node_type in _IMAGE_OUTPUT_NODE_TYPES:
             scalar_inputs.append(
@@ -815,28 +909,39 @@ def _classify_graph_inputs(
             scalar_inputs.append(
                 _preview_any_output_input(
                     graph,
+                    node_id_str,
                     node_type,
                     raw_inputs,
                     object_info=object_info,
+                    widget_metadata=widget_metadata,
                 )
             )
+
+        node_output_types = _declared_node_output_types(
+            object_info,
+            widget_metadata,
+            node_id_str,
+            node_type,
+        )
 
         for input_name, value in raw_inputs.items():
             # Skip link references (arrays like ["3", 0]).
             if isinstance(value, list):
                 continue
-            if _is_ignored_media_node_input(node_type, input_name):
+            option_spec = input_option_specs.get(input_name, _ComfyInputOptionSpec())
+            if _is_internal_comfy_input(
+                node_type, input_name, value, option_spec=option_spec
+            ):
                 continue
-            option_spec = _merge_input_option_specs(
-                _options_for_node_input(object_info, node_type, input_name),
-                _options_for_exported_widget_input(
-                    widget_metadata,
-                    node_id_str,
-                    input_name,
-                ),
+            kind = _value_kind(
+                input_name,
+                value,
+                node_type,
+                upload_kind=option_spec.upload_kind,
+                declared_type=option_spec.declared_type,
+                node_output_types=node_output_types,
             )
-            kind = _value_kind(input_name, value, node_type)
-            if option_spec.options and kind not in {"image_input", "audio_input", "video_input", "three_d_input", "file_input", "lora"}:
+            if option_spec.options and kind not in {*_MEDIA_INPUT_KINDS, "lora"}:
                 kind = "select"
             if kind is None:
                 continue
@@ -850,7 +955,7 @@ def _classify_graph_inputs(
                 ),
                 "widget_types": widget_types,
             }
-            if option_spec.options and kind != "image_input":
+            if option_spec.options and kind not in _MEDIA_INPUT_KINDS:
                 input_record["options"] = option_spec.options
             if option_spec.tooltip:
                 input_record["hint"] = option_spec.tooltip
@@ -864,15 +969,20 @@ def _classify_graph_inputs(
             scalar_inputs.append(input_record)
 
         if scalar_inputs:
+            classified_kinds = {input_record["kind"] for input_record in scalar_inputs}
             nodes.append(
                 {
                     "node_id": str(node_id),
                     "node_type": node_type,
                     "node_title": _node_title(node, fallback=str(node_type or "Unknown node")),
-                    "is_image_node": node_type in _IMAGE_NODE_TYPES,
-                    "is_audio_node": node_type in _AUDIO_NODE_TYPES,
-                    "is_video_node": _is_video_input_node_type(node_type),
-                    "is_three_d_node": _is_three_d_input_node_type(node_type),
+                    "is_image_node": node_type in _IMAGE_NODE_TYPES
+                    or "image_input" in classified_kinds,
+                    "is_audio_node": node_type in _AUDIO_NODE_TYPES
+                    or "audio_input" in classified_kinds,
+                    "is_video_node": _is_video_input_node_type(node_type)
+                    or "video_input" in classified_kinds,
+                    "is_three_d_node": _is_three_d_input_node_type(node_type)
+                    or "three_d_input" in classified_kinds,
                     "is_lora_node": node_type in _LORA_NODE_TYPES,
                     "inputs": scalar_inputs,
                 }
@@ -1200,26 +1310,52 @@ def _default_video_output_node_id(graph: dict[str, Any]) -> str | None:
     return max(candidate_ids, key=lambda node_id: (depth(node_id), node_order.get(node_id, -1)))
 
 
-def _is_ignored_media_node_input(node_type: str, input_name: str) -> bool:
-    if node_type in _IMAGE_NODE_TYPES:
-        return input_name in {"upload", "enabled", "mode"}
-    if node_type in _AUDIO_NODE_TYPES:
-        return input_name in {"upload", "audioUI", "enabled", "mode"}
-    return False
+def _is_internal_comfy_input(
+    node_type: str,
+    input_name: str,
+    value: Any,
+    *,
+    option_spec: _ComfyInputOptionSpec,
+) -> bool:
+    if option_spec.input_group == "hidden":
+        return True
+    if _is_frontend_helper_input_type(option_spec.declared_type):
+        return True
+    if node_type in _IMAGE_NODE_TYPES and input_name == "upload":
+        return True
+    if node_type in _AUDIO_NODE_TYPES and input_name in {"upload", "audioUI"}:
+        return True
+    return _is_comfy_view_helper_value(input_name, value)
+
+
+def _is_frontend_helper_input_type(declared_type: str | None) -> bool:
+    if declared_type is None:
+        return False
+    normalized = "".join(character for character in declared_type.upper() if character.isalnum() or character == "_")
+    return normalized.endswith("UPLOAD") or normalized in {
+        "AUDIO_UI",
+        "IMAGE_UI",
+        "VIDEO_UI",
+        "FILE_UI",
+    }
 
 
 def _preview_any_output_input(
     graph: dict[str, Any],
+    node_id: str,
     node_type: str,
     raw_inputs: Mapping[str, Any],
     *,
     object_info: Mapping[str, Any] | None,
+    widget_metadata: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
     kind = _preview_any_output_kind(
         graph,
+        node_id,
         node_type,
         raw_inputs,
         object_info=object_info,
+        widget_metadata=widget_metadata,
     )
     return _synthetic_output_input(kind, auto_select=True)
 
@@ -1246,17 +1382,23 @@ def _synthetic_output_input(kind: str, *, auto_select: bool) -> dict[str, Any]:
 
 def _preview_any_output_kind(
     graph: dict[str, Any],
+    node_id: str,
     node_type: str,
     raw_inputs: Mapping[str, Any],
     *,
     object_info: Mapping[str, Any] | None,
+    widget_metadata: Mapping[str, Any] | None,
 ) -> str:
-    declared_output_type = _object_info_output_type(object_info, node_type, 0)
+    declared_output_type = _declared_node_output_type(
+        object_info,
+        widget_metadata,
+        node_id,
+        node_type,
+        0,
+    )
     declared_kind = _output_kind_for_comfy_type(declared_output_type)
     if declared_kind is not None:
         return declared_kind
-    if declared_output_type is None:
-        return "text_output"
 
     linked = _first_linked_input(raw_inputs)
     if linked is None:
@@ -1266,8 +1408,14 @@ def _preview_any_output_kind(
     if not isinstance(source, Mapping):
         return "text_output"
     source_type = str(source.get("class_type") or source.get("type") or "")
-    object_output_type = _object_info_output_type(object_info, source_type, output_index)
-    inferred = _output_kind_for_comfy_type(object_output_type)
+    source_output_type = _declared_node_output_type(
+        object_info,
+        widget_metadata,
+        source_node_id,
+        source_type,
+        output_index,
+    )
+    inferred = _output_kind_for_comfy_type(source_output_type)
     if inferred is not None:
         return inferred
     return _fallback_preview_output_kind_for_node_type(source_type)
@@ -1304,6 +1452,41 @@ def _object_info_output_type(
             if isinstance(item, str):
                 return item
     return None
+
+
+def _declared_node_output_type(
+    object_info: Mapping[str, Any] | None,
+    widget_metadata: Mapping[str, Any] | None,
+    node_id: str,
+    node_type: str,
+    output_index: int,
+) -> str | None:
+    return _object_info_output_type(
+        object_info,
+        node_type,
+        output_index,
+    ) or comfyui_widget_output_type(widget_metadata, node_id, output_index)
+
+
+def _declared_node_output_types(
+    object_info: Mapping[str, Any] | None,
+    widget_metadata: Mapping[str, Any] | None,
+    node_id: str,
+    node_type: str,
+) -> list[str]:
+    output_types: list[str] = []
+    for output_index in range(64):
+        output_type = _declared_node_output_type(
+            object_info,
+            widget_metadata,
+            node_id,
+            node_type,
+            output_index,
+        )
+        if output_type is None:
+            break
+        output_types.append(output_type)
+    return output_types
 
 
 def _output_kind_for_comfy_type(output_type: str | None) -> str | None:
@@ -1346,7 +1529,25 @@ def _fallback_preview_output_kind_for_node_type(node_type: str) -> str:
     return "text_output"
 
 
-def _value_kind(input_name: str, value: Any, node_type: str) -> str | None:
+def _value_kind(
+    input_name: str,
+    value: Any,
+    node_type: str,
+    *,
+    upload_kind: str | None = None,
+    declared_type: str | None = None,
+    node_output_types: list[str] | None = None,
+) -> str | None:
+    bundled_kind = bundled_comfyui_input_kind(node_type, input_name)
+    if bundled_kind is not None:
+        return bundled_kind
+    if upload_kind == "file_input" and any(
+        _output_kind_for_comfy_type(output_type) == "three_d_output"
+        for output_type in node_output_types or []
+    ):
+        return "three_d_input"
+    if upload_kind is not None:
+        return upload_kind
     if node_type in _IMAGE_NODE_TYPES and input_name == "image":
         return "image_input"
     if node_type in _AUDIO_NODE_TYPES and input_name in {"audio", "file", "filename", "path", "audio_path"}:
@@ -1361,6 +1562,9 @@ def _value_kind(input_name: str, value: Any, node_type: str) -> str | None:
         return "lora"
     if input_name in _SEED_INPUT_NAMES and isinstance(value, (int, float)):
         return "seed"
+    declared_kind = _kind_from_declared_input_type(declared_type)
+    if declared_kind is not None:
+        return declared_kind
     if isinstance(value, bool):
         return "boolean"
     if isinstance(value, str):
@@ -1368,6 +1572,19 @@ def _value_kind(input_name: str, value: Any, node_type: str) -> str | None:
     if isinstance(value, (int, float)):
         return "number"
     return None
+
+
+def _kind_from_declared_input_type(declared_type: str | None) -> str | None:
+    if declared_type is None:
+        return None
+    normalized = declared_type.upper()
+    return {
+        "STRING": "string",
+        "BOOLEAN": "boolean",
+        "INT": "number",
+        "FLOAT": "number",
+        "COMBO": "select",
+    }.get(normalized)
 
 
 def _widget_types_for_kind(kind: str) -> list[str]:
@@ -1460,16 +1677,14 @@ def _is_file_output_node_type(node_type: str) -> bool:
     )
 
 
+@dataclass
 class _ComfyInputOptionSpec:
-    def __init__(
-        self,
-        options: list[str] | None = None,
-        tooltip: str | None = None,
-        display_name: str | None = None,
-    ) -> None:
-        self.options = options or []
-        self.tooltip = tooltip
-        self.display_name = display_name
+    options: list[str] = field(default_factory=list)
+    tooltip: str | None = None
+    display_name: str | None = None
+    upload_kind: str | None = None
+    declared_type: str | None = None
+    input_group: str | None = None
 
 
 def _options_for_node_input(
@@ -1488,21 +1703,30 @@ def _options_for_node_input(
     if not isinstance(input_groups, Mapping):
         return _ComfyInputOptionSpec()
 
-    for group_name in ("required", "optional"):
+    for group_name in ("required", "optional", "hidden"):
         group = input_groups.get(group_name)
         if not isinstance(group, Mapping) or input_name not in group:
             continue
-        return _options_from_input_spec(group[input_name])
+        return _options_from_input_spec(
+            group[input_name],
+            input_group=group_name,
+        )
 
     return _ComfyInputOptionSpec()
 
 
-def _options_from_input_spec(input_spec: Any) -> _ComfyInputOptionSpec:
+def _options_from_input_spec(
+    input_spec: Any,
+    *,
+    input_group: str | None = None,
+) -> _ComfyInputOptionSpec:
     if not isinstance(input_spec, (list, tuple)) or not input_spec:
         return _ComfyInputOptionSpec()
 
     raw_options = input_spec[0]
     metadata = _metadata_from_input_spec(input_spec)
+    upload_kind = _upload_kind_from_metadata(metadata)
+    declared_type = _declared_input_type(raw_options, metadata)
     if not isinstance(raw_options, (list, tuple)):
         raw_options = metadata.get("options")
 
@@ -1519,12 +1743,18 @@ def _options_from_input_spec(input_spec: Any) -> _ComfyInputOptionSpec:
         return _ComfyInputOptionSpec(
             tooltip=_metadata_string(metadata, "tooltip"),
             display_name=_metadata_string(metadata, "display_name"),
+            upload_kind=upload_kind,
+            declared_type=declared_type,
+            input_group=input_group,
         )
 
     return _ComfyInputOptionSpec(
         options=_dedupe_preserving_order(options),
         tooltip=_metadata_string(metadata, "tooltip"),
         display_name=_metadata_string(metadata, "display_name"),
+        upload_kind=upload_kind,
+        declared_type=declared_type,
+        input_group=input_group,
     )
 
 
@@ -1550,6 +1780,9 @@ def _options_for_exported_widget_input(
         options=_dedupe_preserving_order(options),
         tooltip=_metadata_string(metadata, "tooltip"),
         display_name=_metadata_string(metadata, "display_name"),
+        upload_kind=_upload_kind_from_metadata(metadata),
+        declared_type=_metadata_string(metadata, "input_type"),
+        input_group=_metadata_string(metadata, "input_group"),
     )
 
 
@@ -1561,6 +1794,9 @@ def _merge_input_option_specs(
         options=primary.options or fallback.options,
         tooltip=primary.tooltip or fallback.tooltip,
         display_name=primary.display_name or fallback.display_name,
+        upload_kind=primary.upload_kind or fallback.upload_kind,
+        declared_type=primary.declared_type or fallback.declared_type,
+        input_group=primary.input_group or fallback.input_group,
     )
 
 
@@ -1574,6 +1810,28 @@ def _metadata_from_input_spec(input_spec: Any) -> Mapping[str, Any]:
 def _metadata_string(metadata: Mapping[str, Any], key: str) -> str | None:
     value = metadata.get(key)
     return value if isinstance(value, str) and value.strip() else None
+
+
+def _upload_kind_from_metadata(metadata: Mapping[str, Any]) -> str | None:
+    upload_kinds = [
+        kind
+        for flag, kind in (
+            ("image_upload", "image_input"),
+            ("audio_upload", "audio_input"),
+            ("video_upload", "video_input"),
+            ("file_upload", "file_input"),
+        )
+        if metadata.get(flag) is True
+    ]
+    return upload_kinds[0] if len(upload_kinds) == 1 else None
+
+
+def _declared_input_type(raw_type: Any, metadata: Mapping[str, Any]) -> str | None:
+    if isinstance(raw_type, str) and raw_type.strip():
+        return raw_type.strip().upper()
+    if isinstance(raw_type, (list, tuple)):
+        return "COMBO"
+    return _metadata_string(metadata, "input_type")
 
 
 def _dedupe_preserving_order(values: list[str]) -> list[str]:

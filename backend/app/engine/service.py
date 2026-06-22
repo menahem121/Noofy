@@ -95,8 +95,10 @@ from app.workflows.model_availability import ModelAvailabilityService
 from app.workflows.package import WorkflowPackage
 from app.workflows.removal_cleanup import WorkflowRemovalCleanupService
 from app.workflows.validator import WorkflowPackageValidator
-
-
+from app.workflows.widget_metadata import (
+    comfyui_widget_metadata_from_object_info,
+    merge_comfyui_widget_metadata,
+)
 class EngineService:
     def __init__(
         self,
@@ -163,9 +165,10 @@ class EngineService:
         self.workflow_library_store = workflow_library_store
         self.history_service = history_service
         self.workflow_removal_cleanup_service = workflow_removal_cleanup_service
+        self._authoring_preparation_tasks: dict[
+            str, asyncio.Task[dict[str, object]]
+        ] = {}
         self.model_ownership_store = None
-        if self.dashboard_authoring is not None:
-            self.dashboard_authoring.object_info_provider = self._fetch_object_info_for_authoring
         self.workflow_library_service: WorkflowLibraryService = workflow_library_service or WorkflowLibraryService(
             workflow_loader=self.workflow_loader,
             model_availability_service=self.model_availability_service,
@@ -333,9 +336,7 @@ class EngineService:
         if callable(drain_runner_starts):
             self.run_lifecycle_service.drain_runner_starts = drain_runner_starts
         if self.workflow_import_orchestrator is not None:
-            self.workflow_import_orchestrator.post_import_preparer = (
-                self.workflow_runner_lifecycle_service.prepare_workflow
-            )
+            self.workflow_import_orchestrator.post_import_preparer = self._prepare_workflow_for_authoring
         configure_terminal_notifier = getattr(
             self.runner_supervisor,
             "configure_terminal_notifier",
@@ -450,6 +451,12 @@ class EngineService:
 
     def _clear_workflow_runtime_references(self, workflow_id: str) -> None:
         try:
+            authoring_preparation = self._authoring_preparation_tasks.pop(
+                workflow_id,
+                None,
+            )
+            if authoring_preparation is not None and not authoring_preparation.done():
+                authoring_preparation.cancel()
             suppressed_history_jobs = self.run_result_service.suppress_workflow_library_history(
                 workflow_id
             )
@@ -488,6 +495,7 @@ class EngineService:
                     "suppressed_library_history_job_count": suppressed_history_jobs,
                     "canceled_queued_run_count": canceled_queued_runs,
                     "canceled_runner_start_count": len(queued_runner_starts),
+                    "canceled_authoring_preparation": authoring_preparation is not None,
                 },
             )
         except Exception as exc:
@@ -1002,12 +1010,86 @@ class EngineService:
         if self.dashboard_authoring is None:
             raise KeyError(f"Dashboard authoring not configured: {workflow_id}")
         try:
+            result = self.dashboard_authoring.get_bindable_inputs(workflow_id)
+            if result.get("status") != "controls_preparing":
+                return result
+            object_info = self._fetch_object_info_for_authoring(workflow_id)
+            if object_info is None:
+                return result
+            self._persist_authoring_object_info(workflow_id, object_info)
             return self.dashboard_authoring.get_bindable_inputs(
                 workflow_id,
-                object_info=self._fetch_object_info_for_authoring(workflow_id),
+                object_info=object_info,
             )
         except DashboardAuthoringError as exc:
             raise KeyError(str(exc)) from exc
+
+    def bindable_inputs_for_authoring(self, workflow_id: str) -> dict[str, Any]:
+        result = self.get_bindable_inputs(workflow_id)
+        if result.get("status") != "controls_preparing":
+            return result
+        package = self.workflow_loader.get_package(workflow_id)
+        workflow_status = self.workflow_runner_lifecycle_service.workflow_status(
+            workflow_id
+        )
+        install = workflow_status.get("install")
+        install_status = install.get("status") if isinstance(install, dict) else None
+        import_status = (
+            package.import_metadata.status if package.import_metadata else None
+        )
+        if install_status in {
+            InstallStatus.UNSUPPORTED.value,
+            InstallStatus.UNSUPPORTED_RUNTIME_PROFILE.value,
+            InstallStatus.CANNOT_PREPARE_AUTOMATICALLY.value,
+            InstallStatus.BLOCKED_BY_POLICY.value,
+            InstallStatus.FAILED.value,
+        } or import_status in {
+            "unsupported",
+            "cannot_prepare_automatically",
+            "blocked_by_policy",
+            "missing_custom_nodes",
+            "needs_comfyui_update",
+        }:
+            return {
+                **result,
+                "status": "runtime_unavailable",
+                "user_facing_message": (
+                    "Noofy could not find a usable local workflow engine and the add-ons "
+                    "needed to read this workflow's controls. Finish installing or repairing "
+                    "them, then try again."
+                ),
+            }
+        self.schedule_authoring_preparation(workflow_id)
+        return result
+
+    def schedule_authoring_preparation(self, workflow_id: str) -> None:
+        existing = self._authoring_preparation_tasks.get(workflow_id)
+        if existing is not None and not existing.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        task = loop.create_task(self._prepare_workflow_for_authoring(workflow_id))
+        self._authoring_preparation_tasks[workflow_id] = task
+
+        def finished(completed: asyncio.Task[dict[str, object]]) -> None:
+            if self._authoring_preparation_tasks.get(workflow_id) is completed:
+                self._authoring_preparation_tasks.pop(workflow_id, None)
+            try:
+                completed.result()
+            except asyncio.CancelledError:
+                return
+            except Exception as exc:
+                self.log_store.add(
+                    "warning",
+                    "Workflow controls preparation failed",
+                    "workflow.authoring",
+                    workflow_id=workflow_id,
+                    details={"error": str(exc)},
+                )
+
+        task.add_done_callback(finished)
 
     def get_unresolved_inputs(self, workflow_id: str) -> dict[str, Any]:
         if self.dashboard_authoring is None:
@@ -1391,7 +1473,45 @@ class EngineService:
             return payload
         return None
 
-    def _apply_input_bindings(self, package: WorkflowPackage, inputs: dict[str, Any]) -> dict[str, Any]:
+    async def _prepare_workflow_for_authoring(
+        self,
+        workflow_id: str,
+    ) -> dict[str, object]:
+        result = await self.workflow_runner_lifecycle_service.prepare_workflow(workflow_id)
+        smoke_report = result.get("smoke_test_report")
+        custom_node_import = smoke_report.get("custom_node_import") if isinstance(smoke_report, dict) else None
+        details = custom_node_import.get("details") if isinstance(custom_node_import, dict) else None
+        object_info = details.get("object_info") if isinstance(details, dict) else None
+        if isinstance(object_info, dict) and object_info:
+            self._persist_authoring_object_info(workflow_id, object_info)
+        return result
+
+    def _persist_authoring_object_info(
+        self,
+        workflow_id: str,
+        object_info: dict[str, Any],
+    ) -> None:
+        if self.imported_package_store is None:
+            return
+        package = self.workflow_loader.get_package(workflow_id)
+        if not self.imported_package_store.has_package_identity(package):
+            return
+        discovered = comfyui_widget_metadata_from_object_info(
+            package.comfyui_graph,
+            object_info,
+        )
+        if not discovered:
+            return
+        merged = merge_comfyui_widget_metadata(
+            package.comfyui_widget_metadata,
+            discovered,
+            graph=package.comfyui_graph,
+        )
+        self.imported_package_store.persist_comfyui_widget_metadata(package, merged)
+
+    def _apply_input_bindings(
+        self, package: WorkflowPackage, inputs: dict[str, Any]
+    ) -> dict[str, Any]:
         return apply_input_bindings(package, inputs)
 
     async def _api_nodes_unavailable_reason(

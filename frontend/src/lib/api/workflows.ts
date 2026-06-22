@@ -643,7 +643,9 @@ export interface BindableNode {
 
 export interface BindableInputsResponse {
   workflow_id: string;
-  enrichment: "heuristic" | "object_info";
+  status: "ready" | "controls_preparing" | "runtime_unavailable";
+  enrichment: "heuristic" | "object_info" | "object_info+exported_widgets" | "exported_widgets" | "pending";
+  user_facing_message?: string;
   nodes: BindableNode[];
 }
 

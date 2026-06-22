@@ -10,7 +10,13 @@ import pytest
 
 from app.diagnostics import LogStore
 from app.engine.memory_observation import memory_input_profile_fingerprint
-from app.engine.models import EngineJob, JobProgress, JobResult, ModelInfo, WorkflowValidationResult
+from app.engine.models import (
+    EngineJob,
+    JobProgress,
+    JobResult,
+    ModelInfo,
+    WorkflowValidationResult,
+)
 from app.engine.service import EngineService
 from app.runs.queue_service import WorkflowRunQueueStatus
 from app.runtime.memory import service as memory_service_module
@@ -1674,7 +1680,10 @@ def test_engine_service_uses_constructor_dashboard_dependencies(monkeypatch) -> 
 
     class DashboardAuthoring:
         def get_bindable_inputs(self, workflow_id: str, **kwargs) -> dict[str, object]:
-            seen_object_info.append(kwargs.get("object_info"))
+            object_info = kwargs.get("object_info")
+            if object_info is None:
+                return {"workflow_id": workflow_id, "status": "controls_preparing"}
+            seen_object_info.append(object_info)
             return {"workflow_id": workflow_id, "inputs": []}
 
     class Exporter:
@@ -1734,6 +1743,71 @@ def test_engine_service_uses_constructor_dashboard_dependencies(monkeypatch) -> 
     )
 
 
+def test_engine_service_skips_runtime_lookup_for_portable_input_contracts(
+    monkeypatch,
+) -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    class DashboardAuthoring:
+        def get_bindable_inputs(self, workflow_id: str, **kwargs) -> dict[str, object]:
+            calls.append((workflow_id, kwargs))
+            return {"workflow_id": workflow_id, "status": "ready", "nodes": []}
+
+    def unexpected_client(**kwargs):
+        del kwargs
+        raise AssertionError("portable input contracts must not contact ComfyUI")
+
+    monkeypatch.setattr("app.engine.service.httpx.Client", unexpected_client)
+    service, _supervisor = _build_service(RecordingAdapter())
+    service.dashboard_authoring = DashboardAuthoring()
+
+    result = service.get_bindable_inputs("text_to_image_v0")
+
+    assert result["status"] == "ready"
+    assert calls == [("text_to_image_v0", {})]
+
+
+def test_bindable_inputs_quietly_schedule_missing_metadata_preparation() -> None:
+    service, _supervisor = _build_service(RecordingAdapter())
+    scheduled: list[str] = []
+    service.get_bindable_inputs = lambda workflow_id: {
+        "workflow_id": workflow_id,
+        "status": "controls_preparing",
+        "enrichment": "pending",
+        "nodes": [],
+    }
+    service.workflow_runner_lifecycle_service.workflow_status = lambda _workflow_id: {
+        "install": {"status": "preparing"}
+    }
+    service.schedule_authoring_preparation = scheduled.append
+
+    result = service.bindable_inputs_for_authoring("text_to_image_v0")
+
+    assert result["status"] == "controls_preparing"
+    assert scheduled == ["text_to_image_v0"]
+
+
+def test_bindable_inputs_explain_terminal_missing_runtime_without_scheduling() -> None:
+    service, _supervisor = _build_service(RecordingAdapter())
+    scheduled: list[str] = []
+    service.get_bindable_inputs = lambda workflow_id: {
+        "workflow_id": workflow_id,
+        "status": "controls_preparing",
+        "enrichment": "pending",
+        "nodes": [],
+    }
+    service.workflow_runner_lifecycle_service.workflow_status = lambda _workflow_id: {
+        "install": {"status": "unsupported"}
+    }
+    service.schedule_authoring_preparation = scheduled.append
+
+    result = service.bindable_inputs_for_authoring("text_to_image_v0")
+
+    assert result["status"] == "runtime_unavailable"
+    assert "local workflow engine" in result["user_facing_message"]
+    assert scheduled == []
+
+
 def test_engine_service_falls_back_to_core_object_info_when_bound_runner_is_unavailable(
     monkeypatch,
 ) -> None:
@@ -1741,7 +1815,10 @@ def test_engine_service_falls_back_to_core_object_info_when_bound_runner_is_unav
 
     class DashboardAuthoring:
         def get_bindable_inputs(self, workflow_id: str, **kwargs) -> dict[str, object]:
-            seen_object_info.append(kwargs.get("object_info"))
+            object_info = kwargs.get("object_info")
+            if object_info is None:
+                return {"workflow_id": workflow_id, "status": "controls_preparing"}
+            seen_object_info.append(object_info)
             return {"workflow_id": workflow_id, "inputs": []}
 
     requested_urls: list[str] = []

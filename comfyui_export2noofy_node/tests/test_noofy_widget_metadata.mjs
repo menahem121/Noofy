@@ -106,3 +106,63 @@ test("ignores frontend-only widgets that are not execution graph inputs", async 
 
   assert.deepEqual(Object.keys(metadata.nodes["4"].inputs), ["style"]);
 });
+
+test("captures declared upload and helper semantics without relying on node names", async () => {
+  const metadata = await collectComfyUIWidgetMetadata(
+    [
+      {
+        id: 8,
+        constructor: {
+          nodeData: {
+            output: ["AUDIO"],
+            input: {
+              required: {
+                portrait_source: [
+                  ["", "private.png"],
+                  { image_upload: true },
+                ],
+                sound_source: [
+                  ["", "private.wav"],
+                  { audio_upload: true },
+                ],
+                audio_preview: ["AUDIO_UI", {}],
+              },
+            },
+          },
+        },
+        widgets: [
+          { name: "portrait_source", type: "combo", options: { values: ["", "private.png"] } },
+          { name: "sound_source", type: "combo", options: { values: ["", "private.wav"] } },
+          { name: "audio_preview", type: "AUDIO_UI" },
+        ],
+      },
+    ],
+    {
+      "8": {
+        class_type: "ArbitraryFutureNode",
+        inputs: {
+          portrait_source: "",
+          sound_source: "",
+          audio_preview: "",
+        },
+      },
+    },
+  );
+
+  assert.deepEqual(metadata.nodes["8"].inputs, {
+    portrait_source: {
+      input_type: "COMBO",
+      input_group: "required",
+      image_upload: true,
+      options: ["", "private.png"],
+    },
+    sound_source: {
+      input_type: "COMBO",
+      input_group: "required",
+      audio_upload: true,
+      options: ["", "private.wav"],
+    },
+    audio_preview: { input_type: "AUDIO_UI", input_group: "required" },
+  });
+  assert.deepEqual(metadata.nodes["8"].outputs, ["AUDIO"]);
+});

@@ -99,7 +99,7 @@ Example shape:
   "created_at": "2026-04-30T00:00:00Z",
   "exporter": {
     "name": "Noofy ComfyUI Export Extension",
-    "version": "0.1.2"
+    "version": "0.1.3"
   },
   "engine": {
     "type": "comfyui",
@@ -125,7 +125,7 @@ Noofy treats this graph as engine-specific execution data. Noofy uses package me
 
 Creator-local media loader values are redacted from the editable workflow as well as `comfyui_graph.json`. If a redacted media widget cannot be mapped safely, the editable workflow files are omitted instead of bundling creator-local paths.
 
-Export2Noofy also snapshots dropdown choices from the live ComfyUI frontend into `package.json` under `comfyui_widget_metadata`. This captures custom frontend widgets and instance-specific dynamic choices that are not represented by ComfyUI's standard `/object_info` response. Creator-local media and file picker choices are excluded. Noofy uses this metadata only as a Dashboard Builder fallback when live runner metadata is unavailable or incomplete.
+Export2Noofy also snapshots portable node metadata from the live ComfyUI frontend into `package.json` under `comfyui_widget_metadata`. This includes safe dropdown choices, declared input groups and types, output types, and standard upload flags such as `image_upload`, `audio_upload`, `video_upload`, and `file_upload`. Creator-local media and file picker choices are excluded while their semantic upload contract is retained. Noofy uses this metadata only as a Dashboard Builder fallback when live runner metadata is unavailable or incomplete.
 
 ## dashboard.json
 

@@ -56,7 +56,7 @@ Runner-visible model materialization (symlinks into workspace) belongs in `runti
 
 - ✅ `library_service.py` — `WorkflowLibraryService` extracted from `EngineService`. Routes use `WorkflowLibraryServiceDep` directly. `EngineService` delegates.
 - ✅ `import_orchestrator.py` — `WorkflowImportOrchestrator` extracted. Import routes use `WorkflowImportOrchestratorDep` directly. Temporary proxy properties on `EngineService` exist only for tests still moving to the domain service.
-- ✅ `authoring` routes wired: `get_unresolved_inputs`, `validate_dashboard`, `save_dashboard` use `DashboardAuthoringServiceDep` directly. `get_bindable_inputs` stays on `EngineService` (needs live ComfyUI object_info).
+- ✅ `authoring` routes wired: `get_unresolved_inputs`, `validate_dashboard`, `save_dashboard` use `DashboardAuthoringServiceDep` directly. `get_bindable_inputs` stays on `EngineService` so live ComfyUI `object_info` can enrich and persist a portable metadata snapshot; later reads can use that snapshot with no runner active.
 
 ## Tests
 

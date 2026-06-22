@@ -656,7 +656,20 @@ async def test_runner_smoke_tester_verifies_custom_node_registration(
         return True, None
 
     async def object_info(base_url: str):
-        return {"CustomSamplerNode": {}, "PreviewImage": {}}
+        return {
+            "CustomSamplerNode": {
+                "input": {
+                    "required": {
+                        "payload": [
+                            ["private.wav"],
+                            {"audio_upload": True, "tooltip": "Choose audio."},
+                        ]
+                    }
+                },
+                "output": ["AUDIO"],
+            },
+            "PreviewImage": {},
+        }
 
     process_supervisor = RunnerProcessSupervisor(
         process_factory=process_factory,
@@ -695,6 +708,19 @@ async def test_runner_smoke_tester_verifies_custom_node_registration(
     )
 
     assert report.custom_node_import.status is SmokeStageStatus.PASSED
+    assert report.custom_node_import.details["object_info"] == {
+        "CustomSamplerNode": {
+            "input": {
+                "required": {
+                    "payload": [
+                        [],
+                        {"audio_upload": True, "tooltip": "Choose audio."},
+                    ]
+                }
+            },
+            "output": ["AUDIO"],
+        }
+    }
     assert report.workflow_execution.status is SmokeStageStatus.BLOCKED
 
 

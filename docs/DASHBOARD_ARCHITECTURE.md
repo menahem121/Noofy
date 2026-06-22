@@ -79,6 +79,8 @@ workflow, Noofy stages the import and offers three choices:
 
 ## Dashboard Builder
 
+Bindable-input discovery uses app-owned contracts for bundled ComfyUI media loaders and portable metadata stored with imported workflows. The portable snapshot includes declared input groups and types, upload flags, safe combo choices, labels, hints, and output types; hidden inputs and frontend helpers are not offered as dashboard controls. When a raw custom-node workflow has not produced a complete snapshot yet, the API reports `controls_preparing`; Dashboard Builder keeps its normal loading skeleton and retries while isolated preparation captures the schema. Routine preparation is not surfaced as a notice or warning. A calm blocking dialog is reserved for terminal cases where the managed workflow engine or required add-ons are unavailable.
+
 The builder has two responsibilities:
 
 - Choose widgets: inspect bindable workflow values and output-capable nodes, select the values to expose, choose widget types, set user-facing labels/defaults/validation, and create bindings.

@@ -85,6 +85,7 @@ function deferred<T>() {
 
 function bindableInputsResponse(nodeType: string, currentValue: string) {
   return {
+    status: "ready",
     nodes: [
       {
         node_id: "6",
@@ -107,6 +108,7 @@ function bindableInputsResponse(nodeType: string, currentValue: string) {
 
 function savedDashboardBindableInputsResponse() {
   return {
+    status: "ready",
     nodes: [
       {
         node_id: "6",
@@ -144,6 +146,7 @@ function savedDashboardBindableInputsResponse() {
 
 function imageWorkflowBindableInputsResponse() {
   return {
+    status: "ready",
     nodes: [
       {
         node_id: "10",
@@ -182,6 +185,7 @@ function imageWorkflowBindableInputsResponse() {
 
 function requiredTextPathBindableInputsResponse() {
   return {
+    status: "ready",
     nodes: [
       {
         node_id: "22:4",
@@ -242,6 +246,7 @@ function requiredTextPathBindableInputsResponse() {
 
 function optionalMediaAndTextOutputBindableInputsResponse() {
   return {
+    status: "ready",
     nodes: [
       {
         node_id: "2",
@@ -301,6 +306,7 @@ function optionalMediaAndTextOutputBindableInputsResponse() {
 
 function valuePreviewBindableInputsResponse() {
   return {
+    status: "ready",
     nodes: [
       {
         node_id: "20",
@@ -341,6 +347,7 @@ function valuePreviewBindableInputsResponse() {
 
 function duplicateNodeNamesBindableInputsResponse() {
   return {
+    status: "ready",
     nodes: [
       {
         node_id: "1",
@@ -412,6 +419,7 @@ function duplicateNodeNamesBindableInputsResponse() {
 
 function dragWorkflowBindableInputsResponse() {
   return {
+    status: "ready",
     nodes: [
       {
         node_id: "6",
@@ -1856,6 +1864,7 @@ describe("DashboardBuilderPage", () => {
       if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
       if (url.endsWith(`/api/workflows/${workflowId}/bindable-inputs`)) {
         return Promise.resolve(jsonResponse({
+          status: "ready",
           nodes: [
             {
               node_id: "22:4",
@@ -2052,6 +2061,7 @@ describe("DashboardBuilderPage", () => {
       if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
       if (url.endsWith("/api/workflows/wf-exported-image/bindable-inputs")) {
         return Promise.resolve(jsonResponse({
+          status: "ready",
           nodes: [
             {
               node_id: "13",
@@ -2303,6 +2313,108 @@ describe("DashboardBuilderPage", () => {
     workflowB.resolve(jsonResponse(bindableInputsResponse("BetaNode", "beta")));
     await waitFor(() => expect(screen.getAllByText("BetaNode").length).toBeGreaterThan(0));
     expect(screen.queryAllByText("AlphaNode")).toHaveLength(0);
+  });
+
+  it("keeps routine controls preparation in the normal loading state and retries", async () => {
+    let calls = 0;
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/workflows/wf-preparing/bindable-inputs")) {
+        calls += 1;
+        return Promise.resolve(jsonResponse(
+          calls === 1
+            ? { workflow_id: "wf-preparing", status: "controls_preparing", enrichment: "pending", nodes: [] }
+            : { ...bindableInputsResponse("PreparedNode", "ready"), status: "ready" },
+        ));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(
+      <DashboardBuilderPage
+        workflowId="wf-preparing"
+        workflowName="Preparing workflow"
+        onBack={vi.fn()}
+        onContinue={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Loading dashboard builder")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await waitFor(() => expect(calls).toBeGreaterThanOrEqual(2), { timeout: 2000 });
+    expect(await screen.findAllByText("PreparedNode")).not.toHaveLength(0);
+  });
+
+  it("retries from the engine popup and resumes the normal Builder flow", async () => {
+    let calls = 0;
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/workflows/wf-retry-engine/bindable-inputs")) {
+        calls += 1;
+        return Promise.resolve(jsonResponse(
+          calls === 1
+            ? {
+                workflow_id: "wf-retry-engine",
+                status: "runtime_unavailable",
+                enrichment: "pending",
+                nodes: [],
+                user_facing_message: "Noofy could not find a usable local workflow engine. Finish installing it, then try again.",
+              }
+            : bindableInputsResponse("RecoveredNode", "ready"),
+        ));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(
+      <DashboardBuilderPage
+        workflowId="wf-retry-engine"
+        workflowName="Retry engine workflow"
+        onBack={vi.fn()}
+        onContinue={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    const dialog = await screen.findByRole("dialog", { name: "Workflow engine needed" });
+    expect(within(dialog).getByText(/finish installing it/i)).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Back to workflows" })).toBeInTheDocument();
+    const retry = within(dialog).getByRole("button", { name: "Try again" });
+    expect(retry).toHaveFocus();
+    fireEvent.click(retry);
+
+    expect(await screen.findAllByText("RecoveredNode")).not.toHaveLength(0);
+    expect(screen.queryByRole("dialog", { name: "Workflow engine needed" })).not.toBeInTheDocument();
+    expect(calls).toBe(2);
+  });
+
+  it("explains a temporarily unavailable local workflow service calmly", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/workflows/wf-service-starting/bindable-inputs")) {
+        return Promise.reject(new TypeError("Failed to fetch"));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(
+      <DashboardBuilderPage
+        workflowId="wf-service-starting"
+        workflowName="Starting service workflow"
+        onBack={vi.fn()}
+        onContinue={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    const dialog = await screen.findByRole("dialog", { name: "Workflow engine needed" });
+    expect(within(dialog).getByText(/wait a moment for Noofy to finish starting/i)).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("ignores a bindable-input response after navigating to another workflow", async () => {

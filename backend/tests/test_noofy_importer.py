@@ -378,6 +378,39 @@ def test_raw_comfyui_json_import_persists_source_files_and_logs(tmp_path: Path) 
     assert latest.details["raw_comfyui_json"]["source_format"] == "api_graph"
 
 
+def test_imported_store_persists_discovered_widget_metadata_snapshot(tmp_path: Path) -> None:
+    store = ImportedWorkflowPackageStore(tmp_path / "packages", log_store=LogStore())
+    package = store.import_archive(
+        json.dumps(
+            {
+                "7": {
+                    "class_type": "LoadAudio",
+                    "inputs": {"audio": ""},
+                }
+            }
+        ).encode("utf-8"),
+        original_filename="raw-audio.json",
+    )
+    metadata = {
+        "schema_version": "0.1.0",
+        "nodes": {
+            "7": {
+                "inputs": {
+                    "audio": {"input_type": "COMBO", "audio_upload": True}
+                }
+            }
+        },
+    }
+
+    assert store.persist_comfyui_widget_metadata(package, metadata) is True
+    assert store.persist_comfyui_widget_metadata(package, metadata) is False
+
+    package_payload = json.loads(
+        (store.package_dir(package) / "package.json").read_text(encoding="utf-8")
+    )
+    assert package_payload["comfyui_widget_metadata"] == metadata
+
+
 def test_raw_comfyui_ui_json_import_ignores_unreferenced_definition_node_types(
     tmp_path: Path,
 ) -> None:

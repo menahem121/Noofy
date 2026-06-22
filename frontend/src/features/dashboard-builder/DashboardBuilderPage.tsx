@@ -101,6 +101,7 @@ type CreatedDropPreview =
 const CREATED_DRAG_SCROLL_EDGE_PX = 56;
 const CREATED_DRAG_SCROLL_MAX_STEP_PX = 5;
 const CREATED_DRAG_SCROLL_MIN_PROXIMITY = 0.15;
+const CONTROLS_PREPARATION_POLL_MS = 900;
 
 type PendingWidgetRemoval = { widget: DashboardWidget } | null;
 type WidgetScopedStatus = { widgetId: string; message: string };
@@ -196,6 +197,8 @@ export function DashboardBuilderPage({
   const [widgetSaveStatus, setWidgetSaveStatus] = useState<WidgetScopedStatus | null>(null);
   const [pendingWidgetRemoval, setPendingWidgetRemoval] = useState<PendingWidgetRemoval>(null);
   const [hoveredValuePreview, setHoveredValuePreview] = useState<HoveredValuePreview>(null);
+  const [controlsError, setControlsError] = useState<string | null>(null);
+  const [controlsRetry, setControlsRetry] = useState(0);
 
   useEffect(() => {
     if (!workflowId) {
@@ -204,28 +207,46 @@ export function DashboardBuilderPage({
       return;
     }
     const loadSequence = ++loadSequenceRef.current;
+    let retryTimer: number | null = null;
     setWorkflowState({ loading: true, workflow: null, error: null });
-    fetchBindableInputs(workflowId)
-      .then((res) => {
+    setControlsError(null);
+
+    const loadControls = async (): Promise<void> => {
+      try {
+        const res = await fetchBindableInputs(workflowId);
         if (loadSequence !== loadSequenceRef.current) return;
+        if (res.status === "controls_preparing") {
+          retryTimer = window.setTimeout(loadControls, CONTROLS_PREPARATION_POLL_MS);
+          return;
+        }
+        if (res.status === "runtime_unavailable") {
+          setControlsError(
+            res.user_facing_message
+              ?? "Noofy needs its local workflow engine before it can read these controls.",
+          );
+          return;
+        }
+        if (res.status !== "ready") {
+          throw new Error(`Unexpected controls status: ${String(res.status)}`);
+        }
         setWorkflowState({
           loading: false,
           workflow: workflowFromBindableInputs(workflowId, activeWorkflowName, res.nodes),
           error: null,
         });
-      })
-      .catch(() => {
+      } catch {
         if (loadSequence !== loadSequenceRef.current) return;
-        setWorkflowState({
-          loading: false,
-          workflow: emptyWorkflow(workflowId, activeWorkflowName),
-          error: "This workflow's controls could not be loaded.",
-        });
-      });
+        setControlsError(
+          "Noofy could not reach its local workflow service. Wait a moment for Noofy to finish starting, then try again. If this continues, repair the Noofy installation.",
+        );
+      }
+    };
+    void loadControls();
     return () => {
       loadSequenceRef.current += 1;
+      if (retryTimer !== null) window.clearTimeout(retryTimer);
     };
-  }, [workflowId, activeWorkflowId, activeWorkflowName]);
+  }, [workflowId, activeWorkflowId, activeWorkflowName, controlsRetry]);
 
   useLayoutEffect(() => {
     const source = resolveBuilderSchemaSource(activeWorkflowId, scopedInitialSchema);
@@ -894,8 +915,53 @@ export function DashboardBuilderPage({
         onKeep={(widgetId) => commitRemoveWidget(widgetId, true)}
         onDelete={(widgetId) => commitRemoveWidget(widgetId, false)}
       />
+      <ControlsUnavailableDialog
+        message={controlsError}
+        onBack={onBack}
+        onRetry={() => setControlsRetry((value) => value + 1)}
+      />
       <WorkflowValuePreview preview={hoveredValuePreview} />
     </AppLayout>
+  );
+}
+
+function ControlsUnavailableDialog({
+  message,
+  onBack,
+  onRetry,
+}: {
+  message: string | null;
+  onBack: () => void;
+  onRetry: () => void;
+}) {
+  if (!message) return null;
+  return (
+    <div
+      className="builder-remove-dialog builder-remove-dialog--info"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="controls-unavailable-title"
+      aria-describedby="controls-unavailable-message"
+    >
+      <section className="builder-remove-dialog__panel builder-remove-dialog__panel--compact">
+        <header className="builder-remove-dialog__header">
+          <div className="builder-remove-dialog__icon" aria-hidden="true">
+            <Box size={20} />
+          </div>
+          <div>
+            <p className="builder-remove-dialog__eyebrow">Local setup</p>
+            <h2 id="controls-unavailable-title">Workflow engine needed</h2>
+          </div>
+        </header>
+        <div className="builder-remove-dialog__body">
+          <p id="controls-unavailable-message">{message}</p>
+        </div>
+        <footer className="builder-remove-dialog__actions">
+          <button className="secondary-button" type="button" onClick={onBack}>Back to workflows</button>
+          <button className="primary-button primary-button--compact" type="button" autoFocus onClick={onRetry}>Try again</button>
+        </footer>
+      </section>
+    </div>
   );
 }
 
