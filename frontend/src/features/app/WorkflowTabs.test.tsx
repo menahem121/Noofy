@@ -50,7 +50,44 @@ function Harness({ activeWorkflowId = "wf-1" }: { activeWorkflowId?: string | nu
       >
         Set lease
       </button>
+      <button
+        type="button"
+        onClick={() => tabs.setWorkflowRuntime("wf-1", {
+          activeJobId: "job-1",
+          activeJobStatus: "running",
+          activeJobProgress: {
+            job_id: "job-1",
+            status: "running",
+            value: 6,
+            max: 10,
+            current_node: "3",
+            message: "Generating...",
+          },
+        })}
+      >
+        Set numeric progress
+      </button>
+      <button
+        type="button"
+        onClick={() => tabs.setWorkflowRuntime("wf-1", {
+          activeJobId: "job-1",
+          activeJobStatus: "running",
+          activeJobProgress: {
+            job_id: "job-1",
+            status: "running",
+            value: null,
+            max: null,
+            current_node: null,
+            message: "Loading the next model...",
+          },
+        })}
+      >
+        Set progress without estimate
+      </button>
       <span data-testid="lease-id">{tabs.runtimeByWorkflowId["wf-1"]?.runnerLeaseId ?? "none"}</span>
+      <span data-testid="progress-value">{tabs.runtimeByWorkflowId["wf-1"]?.activeJobProgress?.value ?? "none"}</span>
+      <span data-testid="progress-max">{tabs.runtimeByWorkflowId["wf-1"]?.activeJobProgress?.max ?? "none"}</span>
+      <span data-testid="progress-message">{tabs.runtimeByWorkflowId["wf-1"]?.activeJobProgress?.message ?? "none"}</span>
       <span data-testid="recovery-notice">{tabs.recoveryNoticeByWorkflowId["wf-1"] ?? "none"}</span>
       <WorkflowTabsTopBar />
     </WorkflowTabsRouteProvider>
@@ -106,6 +143,21 @@ describe("WorkflowTabs", () => {
     expect(activeRuns).toContain("wf-1");
     expect(activeRuns).not.toContain("job-1");
     expect(activeRuns).not.toContain("lease-1");
+  });
+
+  it("retains the last numeric percentage when an active update has no estimate", () => {
+    render(
+      <WorkflowTabsProvider>
+        <Harness />
+      </WorkflowTabsProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Set numeric progress" }));
+    fireEvent.click(screen.getByRole("button", { name: "Set progress without estimate" }));
+
+    expect(screen.getByTestId("progress-value")).toHaveTextContent("6");
+    expect(screen.getByTestId("progress-max")).toHaveTextContent("10");
+    expect(screen.getByTestId("progress-message")).toHaveTextContent("Loading the next model...");
   });
 
   it("restores only a calm recovery notice for active workflows after a backend restart", () => {

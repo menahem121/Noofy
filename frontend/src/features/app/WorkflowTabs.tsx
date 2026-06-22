@@ -139,13 +139,16 @@ export function WorkflowTabsProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const setWorkflowRuntime = useCallback((workflowId: string, update: Partial<WorkflowTabRuntimeState>) => {
-    setRuntimeByWorkflowId((current) => ({
-      ...current,
-      [workflowId]: {
-        ...(current[workflowId] ?? emptyRuntimeState),
-        ...update,
-      },
-    }));
+    setRuntimeByWorkflowId((current) => {
+      const existing = current[workflowId] ?? emptyRuntimeState;
+      return {
+        ...current,
+        [workflowId]: {
+          ...existing,
+          ...runtimeUpdateWithRetainedNumericProgress(existing, update),
+        },
+      };
+    });
   }, []);
 
   const clearWorkflowRuntime = useCallback((workflowId: string) => {
@@ -372,6 +375,45 @@ function workflowRuntimeUpdateFromProgress(progress: JobProgress): Partial<Workf
     handleSource: null,
     queueId: null,
   };
+}
+
+function runtimeUpdateWithRetainedNumericProgress(
+  current: WorkflowTabRuntimeState,
+  update: Partial<WorkflowTabRuntimeState>,
+): Partial<WorkflowTabRuntimeState> {
+  const incoming = update.activeJobProgress;
+  const previous = current.activeJobProgress;
+  if (
+    !incoming
+    || !previous
+    || !activeJobStatuses.has(incoming.status)
+    || hasNumericProgress(incoming)
+    || !hasNumericProgress(previous)
+    || !jobProgressHandlesMatch(previous, incoming)
+  ) {
+    return update;
+  }
+  return {
+    ...update,
+    activeJobProgress: {
+      ...incoming,
+      value: previous.value,
+      max: previous.max,
+    },
+  };
+}
+
+function hasNumericProgress(progress: JobProgress) {
+  return progress.value !== null
+    && progress.value !== undefined
+    && progress.max !== null
+    && progress.max !== undefined
+    && progress.max > 0;
+}
+
+function jobProgressHandlesMatch(left: JobProgress, right: JobProgress) {
+  const leftHandles = new Set([left.job_id, left.queue_id].filter(Boolean));
+  return [right.job_id, right.queue_id].some((handle) => Boolean(handle && leftHandles.has(handle)));
 }
 
 export function WorkflowTabsRouteProvider({

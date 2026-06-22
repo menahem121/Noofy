@@ -117,6 +117,12 @@ const engineBusyRuntimeState: Partial<RuntimeHealthState> = {
   } as RuntimeHealthState["runtime"],
 };
 
+const backendOfflineRuntimeState: Partial<RuntimeHealthState> = {
+  ...engineOfflineRuntimeState,
+  backendStatus: "unreachable",
+  refreshError: "The local service did not answer in time.",
+};
+
 const validWorkflow = {
   workflow_id: "text_to_image_v0",
   valid: true,
@@ -5665,6 +5671,34 @@ describe("WorkflowRunPage", () => {
     expect(await screen.findByRole("button", { name: /run workflow/i })).toBeEnabled();
     expect(screen.queryByText("ComfyUI is not responding")).not.toBeInTheDocument();
     expect(screen.queryByText("Starting ComfyUI")).not.toBeInTheDocument();
+  });
+
+  it("does not show an offline notice over active workflow preparation", async () => {
+    mockConfiguredDashboardFetch(fetchMock, readyRuntime);
+
+    renderRunPageWithWorkflowRuntime(
+      {
+        activeJobId: "workflow-run-queue-preparing",
+        activeJobStatus: "queued_pending_memory",
+        activeJobProgress: {
+          job_id: "workflow-run-queue-preparing",
+          status: "queued_pending_memory",
+          value: null,
+          max: null,
+          current_node: null,
+          message: "Preparing this workflow to run.",
+        },
+        activeJobUpdatedAt: Date.now(),
+        handleSource: "workflow_run_queue",
+        queueId: "workflow-run-queue-preparing",
+      },
+      {},
+      backendOfflineRuntimeState,
+    );
+
+    expect(await screen.findByRole("progressbar", { name: "Workflow progress" })).toHaveAttribute("aria-valuenow", "0");
+    expect(screen.queryByText("Noofy is offline")).not.toBeInTheDocument();
+    expect(screen.getAllByText("Working").length).toBeGreaterThan(0);
   });
 
   it("marks the backend offline after a run action fails", async () => {

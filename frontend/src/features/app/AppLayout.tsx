@@ -234,7 +234,7 @@ function statusViewForWorkflowActivity(
   statusView: AppStatusView,
   progress: AppTopBarProgress | null,
 ): AppStatusView {
-  if (!progress || statusView.tone === "error") return statusView;
+  if (!progress) return statusView;
   return {
     label: "Working",
     description: "A workflow is running",

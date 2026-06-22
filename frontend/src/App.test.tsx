@@ -111,7 +111,7 @@ describe("App workflow tabs", () => {
   let failedCancelCount = 0;
   let leaseAvailable = false;
   let jobProgressStatus = "running";
-  let jobProgressValue = 2;
+  let jobProgressValue: number | null = 2;
   let workflowListSummary: typeof workflowSummary & Record<string, unknown> = workflowSummary;
   let importedWorkflowSummaries: Array<typeof workflowSummary & Record<string, unknown>> = [];
   let importPreviewResponses: Map<string, Record<string, unknown>> = new Map();
@@ -251,7 +251,7 @@ describe("App workflow tabs", () => {
           job_id: "job-1",
           status: jobProgressStatus,
           value: jobProgressStatus === "running" ? jobProgressValue : null,
-          max: jobProgressStatus === "running" ? 10 : null,
+          max: jobProgressStatus === "running" && jobProgressValue !== null ? 10 : null,
           current_node: null,
           message: jobProgressStatus === "running" ? "Generating..." : null,
         }));
@@ -899,6 +899,18 @@ describe("App workflow tabs", () => {
     await waitFor(() => {
       expect(screen.getByRole("progressbar", { name: "Workflow progress" })).toHaveAttribute("aria-valuenow", "60");
     }, { timeout: 2500 });
+
+    const progressRequestsBeforeMissingEstimate = fetchMock.mock.calls.filter(([url]) =>
+      String(url).endsWith("/api/jobs/job-1/progress"),
+    ).length;
+    jobProgressValue = null;
+    await waitFor(() => {
+      const progressRequests = fetchMock.mock.calls.filter(([url]) =>
+        String(url).endsWith("/api/jobs/job-1/progress"),
+      ).length;
+      expect(progressRequests).toBeGreaterThan(progressRequestsBeforeMissingEstimate);
+    }, { timeout: 2500 });
+    expect(screen.getByRole("progressbar", { name: "Workflow progress" })).toHaveAttribute("aria-valuenow", "60");
 
     fireEvent.click(screen.getByRole("button", { name: "Text to Image" }));
     // Run stays enabled during the active run; pressing it queues another run.

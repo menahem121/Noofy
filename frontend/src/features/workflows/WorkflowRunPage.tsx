@@ -2187,7 +2187,7 @@ export function WorkflowRunPage({
           </div>
         </div>
       ) : null}
-      {runtimeStatus.backendStatus === "unreachable" ? (
+      {runtimeStatus.backendStatus === "unreachable" && !isRunning ? (
         <div className="notice notice--warning" role="status">
           <AlertCircle size={18} aria-hidden="true" />
           <div>

@@ -41,6 +41,13 @@ const offlineRuntimeState: Partial<RuntimeHealthState> = {
   hasKnownState: true,
 };
 
+const backendOfflineRuntimeState: Partial<RuntimeHealthState> = {
+  ...offlineRuntimeState,
+  backendStatus: "unreachable",
+  engineStatus: "offline",
+  refreshError: "The local service did not answer in time.",
+};
+
 describe("AppLayout sidebar", () => {
   it("keeps the support card above the GitHub repository card", () => {
     render(
@@ -132,4 +139,20 @@ describe("AppLayout sidebar", () => {
     expect(screen.getByText("Working")).toBeInTheDocument();
     expect(screen.queryByText("ComfyUI offline")).not.toBeInTheDocument();
   });
+
+  it("keeps transient backend misses from replacing active workflow status", () => {
+    render(
+      <RuntimeStatusProvider initialRuntimeState={backendOfflineRuntimeState} skipInitialRefresh>
+        <SidebarProvider>
+          <AppLayout activeRoute="workflows" onNavigate={vi.fn()} progress={{ percent: 37 }}>
+            <div>Dashboard</div>
+          </AppLayout>
+        </SidebarProvider>
+      </RuntimeStatusProvider>,
+    );
+
+    expect(screen.getByText("Working")).toBeInTheDocument();
+    expect(screen.queryByText("Offline")).not.toBeInTheDocument();
+  });
+
 });
