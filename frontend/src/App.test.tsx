@@ -596,7 +596,8 @@ describe("App workflow tabs", () => {
     dropFiles([new File(["archive"], "txt2audio_MOSS-TTS.noofy", { type: "application/octet-stream" })]);
 
     await waitFor(() => expect(importPreviewWasRequested("txt2audio_MOSS-TTS.noofy")).toBe(true));
-    expect(await screen.findByRole("heading", { name: "comfyui-moss-tts" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Add the missing custom node" })).toBeInTheDocument();
+    expect(screen.getByText("comfyui-moss-tts")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Use GitHub URL" })).toBeInTheDocument();
     expect(screen.queryByText("txt2audio_MOSS-TTS was added to your local workflows.")).not.toBeInTheDocument();
   });

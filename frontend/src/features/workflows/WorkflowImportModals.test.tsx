@@ -462,9 +462,9 @@ describe("RequiredCustomNodesModal", () => {
     },
   } satisfies WorkflowImportResponse;
 
-  it("lists unresolved and ambiguous node types and submits GitHub URLs", () => {
+  it("groups node types under one repository and submits one GitHub URL for all of them", () => {
     const onResolveUrls = vi.fn();
-    render(
+    const { container } = render(
       <RequiredCustomNodesModal
         importResult={customNodeImport}
         busy={false}
@@ -475,20 +475,23 @@ describe("RequiredCustomNodesModal", () => {
       />,
     );
 
-    expect(screen.getByRole("heading", { name: "comfyui-missing" })).toBeInTheDocument();
-    expect(screen.getAllByText("comfyui-missing")).toHaveLength(2);
-    expect(screen.getByText("No reliable candidate found.")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Add the missing custom node" })).toBeInTheDocument();
+    expect(screen.getByText("comfyui-missing")).toBeInTheDocument();
+    expect(screen.getByText("Nodes used by this workflow")).toBeInTheDocument();
     expect(screen.getByText("MissingSampler")).toBeInTheDocument();
     expect(screen.getByText("SharedNode")).toBeInTheDocument();
-    expect(screen.getByText("Several registry packages match this node.")).toBeInTheDocument();
-    expect(screen.getByText("Only use extensions from sources you trust.")).toBeInTheDocument();
+    expect(screen.getByText(/Only continue with a repository you trust/)).toBeInTheDocument();
+    expect(container.querySelectorAll(".custom-node-row")).toHaveLength(1);
+    expect(container.querySelector(".notice--warning")).not.toBeInTheDocument();
 
     const inputs = screen.getAllByPlaceholderText("https://github.com/owner/repository");
+    expect(inputs).toHaveLength(1);
     fireEvent.change(inputs[0], { target: { value: "https://github.com/example/missing" } });
     fireEvent.click(screen.getByRole("button", { name: "Use GitHub URL" }));
 
     expect(onResolveUrls).toHaveBeenCalledWith({
       MissingSampler: "https://github.com/example/missing",
+      SharedNode: "https://github.com/example/missing",
     });
   });
 
@@ -514,7 +517,7 @@ describe("RequiredCustomNodesModal", () => {
       />,
     );
 
-    expect(screen.getByText("Managed ComfyUI may be too old")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Update ComfyUI to continue" })).toBeInTheDocument();
     expect(screen.getByText("Update managed ComfyUI from Settings to a newer version, then retry preparation.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Use GitHub URL" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Check after ComfyUI update" }));
@@ -552,10 +555,9 @@ describe("RequiredCustomNodesModal", () => {
       />,
     );
 
-    expect(screen.getByRole("heading", { name: "ComfyUI-Missing" })).toBeInTheDocument();
-    expect(screen.getAllByText("Noofy found a possible workflow extension.")).toHaveLength(2);
+    expect(screen.getByRole("heading", { name: "Add the missing custom node" })).toBeInTheDocument();
     expect(screen.getByText("example/ComfyUI-Missing")).toBeInTheDocument();
-    expect(screen.getByText("NODE_CLASS_MAPPINGS found in Python source")).toBeInTheDocument();
+    expect(screen.queryByText("NODE_CLASS_MAPPINGS found in Python source")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Open Repository" }));
     expect(openExternalUrl).toHaveBeenCalledWith("https://github.com/example/ComfyUI-Missing");

@@ -99,12 +99,21 @@ export function RequiredCustomNodesModal({
 }) {
   const resolution = importResult.custom_node_resolution;
   const fields = resolution?.github_url_fields ?? [];
-  const [urlsByNodeType, setUrlsByNodeType] = useState<Record<string, string>>({});
+  const [repositoryUrl, setRepositoryUrl] = useState("");
   const [showManualUrl, setShowManualUrl] = useState(false);
   const allNodeTypes = useMemo(() => {
     const ambiguous = resolution?.ambiguous_node_types.map((item) => item.node_type) ?? [];
-    return [...new Set([...(resolution?.unresolved_node_types ?? []), ...ambiguous])].sort();
-  }, [resolution?.ambiguous_node_types, resolution?.unresolved_node_types]);
+    const packaged = resolution?.missing_custom_node?.node_types ?? [];
+    const fieldNodeTypes = resolution?.github_url_fields.map((field) => field.node_type) ?? [];
+    return [
+      ...new Set([...(resolution?.unresolved_node_types ?? []), ...ambiguous, ...packaged, ...fieldNodeTypes]),
+    ].sort();
+  }, [
+    resolution?.ambiguous_node_types,
+    resolution?.github_url_fields,
+    resolution?.missing_custom_node?.node_types,
+    resolution?.unresolved_node_types,
+  ]);
   if (!resolution) return null;
   const needsComfyUpdate = resolution.status === "needs_comfyui_update";
   const candidate = resolution.mode === "candidate_approval" && !showManualUrl ? resolution.candidate : null;
@@ -114,21 +123,27 @@ export function RequiredCustomNodesModal({
     fields[0]?.label ??
     allNodeTypes[0] ??
     "Workflow extension";
-  const modalTitle = candidate?.repo ?? missingName;
-  const automaticResolutionFailure =
-    resolution.automatic_resolution_failures?.find((item) => item.trim().length > 0) ??
-    "No reliable automatic source was found for this extension.";
-  const showMissingSummary = !needsComfyUpdate;
-  const canDownload = fields.length > 0 && fields.some((field) => urlsByNodeType[field.node_type]?.trim());
+  const canDownload = fields.length > 0 && repositoryUrl.trim().length > 0;
+  const submitRepositoryUrl = () => {
+    const url = repositoryUrl.trim();
+    onResolveUrls(Object.fromEntries(fields.map((field) => [field.node_type, url])));
+  };
+  const headerCopy = candidate
+    ? "Confirm the repository Noofy found, or enter a different GitHub URL."
+    : needsComfyUpdate
+      ? resolution.update_guidance ?? "Update managed ComfyUI from Settings, then check this workflow again."
+      : "Paste the repository's GitHub URL so Noofy can prepare this workflow.";
 
   return (
     <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="required-custom-nodes-title">
       <section className="required-models-modal" aria-busy={busy}>
         <header className="required-models-modal__header">
           <div>
-            <p className="eyebrow">Required custom nodes</p>
-            <h2 id="required-custom-nodes-title">{modalTitle}</h2>
-            <p>{resolution.user_facing_message}</p>
+            <p className="eyebrow">Required custom node</p>
+            <h2 id="required-custom-nodes-title">
+              {needsComfyUpdate ? "Update ComfyUI to continue" : "Add the missing custom node"}
+            </h2>
+            <p>{headerCopy}</p>
           </div>
           <button className="icon-button" type="button" aria-label="Cancel import" disabled={busy} onClick={onCancel}>
             <X size={18} aria-hidden="true" />
@@ -137,52 +152,12 @@ export function RequiredCustomNodesModal({
 
         <div className="required-models-modal__body">
           {candidate ? (
-            <div className="notice notice--warning" role="status">
-              <AlertCircle size={18} aria-hidden="true" />
-              <div>
-                <strong>Noofy found a possible workflow extension.</strong>
-                <span>Review the repository details before using this extension.</span>
-              </div>
-            </div>
-          ) : needsComfyUpdate ? (
-            <div className="notice notice--warning" role="status">
-              <AlertCircle size={18} aria-hidden="true" />
-              <div>
-                <strong>Managed ComfyUI may be too old</strong>
-                <span>{resolution.update_guidance ?? "Update managed ComfyUI from Settings to a newer version, then retry preparation."}</span>
-              </div>
-            </div>
-          ) : (
-            <div className="notice notice--warning" role="status">
-              <AlertCircle size={18} aria-hidden="true" />
-              <div>
-                <strong>Noofy could not automatically find this workflow extension.</strong>
-                <span>Paste the GitHub repository URL so Noofy can prepare it in an isolated runner.</span>
-              </div>
-            </div>
-          )}
-
-          {candidate ? (
             <article className="custom-node-row custom-node-row--candidate">
               <div className="custom-node-row__title">
                 <strong>{candidate.owner}/{candidate.repo}</strong>
                 <span>{candidate.description || "GitHub repository"}</span>
               </div>
-              <dl className="custom-node-candidate-facts">
-                <div>
-                  <dt>Stars</dt>
-                  <dd>{candidate.stars ?? 0}</dd>
-                </div>
-                <div>
-                  <dt>Updated</dt>
-                  <dd>{candidate.updated_at ? new Date(candidate.updated_at).toLocaleDateString() : "Unknown"}</dd>
-                </div>
-              </dl>
-              <div className="custom-node-candidate-evidence">
-                {(candidate.evidence ?? []).map((item) => (
-                  <span key={item}>{item}</span>
-                ))}
-              </div>
+              <CustomNodeTypes nodeTypes={allNodeTypes} />
               <button
                 className="secondary-button"
                 type="button"
@@ -194,62 +169,29 @@ export function RequiredCustomNodesModal({
               </button>
             </article>
           ) : (
-            <>
-              <div className="custom-node-list">
-                {showMissingSummary ? (
-                  <article className="custom-node-row">
-                    <div className="custom-node-row__title">
-                      <strong>{missingName}</strong>
-                      <span>{automaticResolutionFailure}</span>
-                    </div>
-                  </article>
-                ) : null}
-                {allNodeTypes.length ? allNodeTypes.map((nodeType) => (
-                  <article className="custom-node-row" key={nodeType}>
-                    <div className="custom-node-row__title">
-                      <strong>{nodeType}</strong>
-                      {resolution.ambiguous_node_types.some((item) => item.node_type === nodeType) ? (
-                        <span>Several registry packages match this node.</span>
-                      ) : (
-                        <span>No reliable automatic source was found for this node.</span>
-                      )}
-                    </div>
-                    {fields.some((field) => field.node_type === nodeType) ? (
-                      <label className="custom-node-row__url">
-                        <span>GitHub URL</span>
-                        <input
-                          type="url"
-                          value={urlsByNodeType[nodeType] ?? ""}
-                          placeholder="https://github.com/owner/repository"
-                          disabled={busy || needsComfyUpdate}
-                          onChange={(event) =>
-                            setUrlsByNodeType((current) => ({
-                              ...current,
-                              [nodeType]: event.target.value,
-                            }))
-                          }
-                        />
-                      </label>
-                    ) : null}
-                  </article>
-                )) : showMissingSummary ? null : (
-                  <article className="custom-node-row">
-                    <div className="custom-node-row__title">
-                      <strong>{missingName}</strong>
-                      <span>No reliable automatic source was found for this extension.</span>
-                    </div>
-                  </article>
-                )}
+            <article className="custom-node-row custom-node-row--repository">
+              <div className="custom-node-row__title">
+                <strong>{missingName}</strong>
               </div>
-              <div className="notice notice--warning" role="status">
-                <AlertCircle size={18} aria-hidden="true" />
-                <div>
-                  <strong>Only use extensions from sources you trust.</strong>
-                  <span>Community ComfyUI custom nodes can run Python code inside the workflow runner.</span>
-                </div>
-              </div>
-            </>
+              <CustomNodeTypes nodeTypes={allNodeTypes} />
+              <label className="custom-node-row__url">
+                <span>GitHub repository URL</span>
+                <input
+                  type="url"
+                  value={repositoryUrl}
+                  placeholder="https://github.com/owner/repository"
+                  disabled={busy || needsComfyUpdate}
+                  onChange={(event) => setRepositoryUrl(event.target.value)}
+                />
+              </label>
+            </article>
           )}
+
+          {!needsComfyUpdate ? (
+            <p className="custom-node-trust-note">
+              Only continue with a repository you trust. Noofy installs it only for this workflow.
+            </p>
+          ) : null}
 
           {busy ? (
             <div className="required-models-modal__processing" role="status" aria-live="polite">
@@ -281,7 +223,7 @@ export function RequiredCustomNodesModal({
                 className="primary-button"
                 type="button"
                 disabled={busy || needsComfyUpdate || !canDownload}
-                onClick={() => onResolveUrls(urlsByNodeType)}
+                onClick={submitRepositoryUrl}
               >
                 {busy && !needsComfyUpdate ? <Loader2 className="spin" size={16} aria-hidden="true" /> : <Download size={16} aria-hidden="true" />}
                 Use GitHub URL
@@ -298,6 +240,20 @@ export function RequiredCustomNodesModal({
           </button>
         </footer>
       </section>
+    </div>
+  );
+}
+
+function CustomNodeTypes({ nodeTypes }: { nodeTypes: string[] }) {
+  if (nodeTypes.length === 0) return null;
+  return (
+    <div className="custom-node-types">
+      <span>Nodes used by this workflow</span>
+      <ul>
+        {nodeTypes.map((nodeType) => (
+          <li key={nodeType}>{nodeType}</li>
+        ))}
+      </ul>
     </div>
   );
 }
