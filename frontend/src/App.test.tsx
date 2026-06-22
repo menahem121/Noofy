@@ -111,6 +111,7 @@ describe("App workflow tabs", () => {
   let failedCancelCount = 0;
   let leaseAvailable = false;
   let jobProgressStatus = "running";
+  let jobProgressValue = 2;
   let workflowListSummary: typeof workflowSummary & Record<string, unknown> = workflowSummary;
   let importedWorkflowSummaries: Array<typeof workflowSummary & Record<string, unknown>> = [];
   let importPreviewResponses: Map<string, Record<string, unknown>> = new Map();
@@ -122,6 +123,7 @@ describe("App workflow tabs", () => {
     failedCancelCount = 0;
     leaseAvailable = false;
     jobProgressStatus = "running";
+    jobProgressValue = 2;
     workflowListSummary = workflowSummary;
     importedWorkflowSummaries = [];
     importPreviewResponses = new Map();
@@ -248,7 +250,7 @@ describe("App workflow tabs", () => {
         return Promise.resolve(jsonResponse({
           job_id: "job-1",
           status: jobProgressStatus,
-          value: jobProgressStatus === "running" ? 2 : null,
+          value: jobProgressStatus === "running" ? jobProgressValue : null,
           max: jobProgressStatus === "running" ? 10 : null,
           current_node: null,
           message: jobProgressStatus === "running" ? "Generating..." : null,
@@ -893,10 +895,16 @@ describe("App workflow tabs", () => {
     });
     expect(screen.getAllByRole("progressbar", { name: "Workflow progress" })).toHaveLength(1);
 
+    jobProgressValue = 6;
+    await waitFor(() => {
+      expect(screen.getByRole("progressbar", { name: "Workflow progress" })).toHaveAttribute("aria-valuenow", "60");
+    }, { timeout: 2500 });
+
     fireEvent.click(screen.getByRole("button", { name: "Text to Image" }));
     // Run stays enabled during the active run; pressing it queues another run.
     expect(await screen.findByRole("button", { name: "Run workflow" })).toBeEnabled();
     expect(screen.getAllByRole("progressbar", { name: "Workflow progress" })).toHaveLength(1);
+    expect(screen.getByRole("progressbar", { name: "Workflow progress" })).toHaveAttribute("aria-valuenow", "60");
 
     fireEvent.click(screen.getByRole("button", { name: "Go to home" }));
     fireEvent.click(screen.getByRole("button", { name: "Close Text to Image workspace tab" }));
@@ -905,6 +913,26 @@ describe("App workflow tabs", () => {
     await waitFor(() => {
       expect(screen.queryByRole("progressbar", { name: "Workflow progress" })).not.toBeInTheDocument();
     });
+  });
+
+  it("does not restore cached running progress after the job finishes away from its workflow page", async () => {
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Open Text to Image" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Run workflow" }));
+    await waitFor(() => {
+      expect(screen.getByRole("progressbar", { name: "Workflow progress" })).toHaveAttribute("aria-valuenow", "20");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Go to home" }));
+    jobProgressStatus = "completed";
+    await waitFor(() => {
+      expect(screen.queryByRole("progressbar", { name: "Workflow progress" })).not.toBeInTheDocument();
+    }, { timeout: 2500 });
+
+    fireEvent.click(screen.getByRole("button", { name: "Text to Image" }));
+    expect(await screen.findByRole("button", { name: "Run workflow" })).toBeEnabled();
+    expect(screen.queryByRole("progressbar", { name: "Workflow progress" })).not.toBeInTheDocument();
   });
 
   it("clears an unknown run handle with a calm inline recovery notice", async () => {

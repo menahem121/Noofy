@@ -354,7 +354,13 @@ export function WorkflowRunPage({
   const terminalRuntimeProgress = terminalProgressFromWorkflowRuntime(workflowRuntime);
   const remainingTrackedRunCount = trackedRuns.filter(isTrackedRunActive).length;
   const currentTrackedRun = selectCurrentTrackedRun(trackedRuns);
-  const displayedProgress = progressFromTrackedRun(currentTrackedRun, state.progress ?? runtimeProgress) ?? state.progress ?? runtimeProgress;
+  // Shared runtime polling continues while this page is unmounted. A terminal
+  // update must win outright; active runtime progress is authoritative over
+  // the older page cache when returning here.
+  const displayedProgress = terminalRuntimeProgress
+    ?? progressFromTrackedRun(currentTrackedRun, runtimeProgress ?? state.progress)
+    ?? runtimeProgress
+    ?? state.progress;
   const hasTerminalProgress = Boolean(displayedProgress?.status && terminalStatuses.has(displayedProgress.status));
   const activeJobStatus = hasTerminalProgress ? null : state.job?.status;
   const activeRuntimeJobId = currentTrackedRun ? trackedRunHandle(currentTrackedRun) : workflowRuntime?.activeJobId ?? workflowRuntime?.queueId ?? null;
