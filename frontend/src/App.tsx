@@ -6,6 +6,7 @@ import {
   type AppNavigateOptions,
   type AppRouteId,
 } from "./features/app/AppLayout";
+import { ResourceStatusProvider } from "./features/app/ResourceStatusProvider";
 import { RuntimeStatusProvider } from "./features/app/RuntimeStatusProvider";
 import { WorkflowTabsProvider, WorkflowTabsRouteProvider, useWorkflowTabs, type WorkflowTabRuntimeState } from "./features/app/WorkflowTabs";
 import type { DashboardSchema, MockWorkflow } from "./features/dashboard-builder/dashboardBuilderContent";
@@ -86,13 +87,15 @@ const APP_ROUTE_STORAGE_KEY = "noofy.appRoute.v1";
 export default function App() {
   return (
     <RuntimeStatusProvider>
-      <WorkflowTabsProvider>
-        <WorkflowLibraryProvider>
-          <SidebarProvider>
-            <AppContent />
-          </SidebarProvider>
-        </WorkflowLibraryProvider>
-      </WorkflowTabsProvider>
+      <ResourceStatusProvider>
+        <WorkflowTabsProvider>
+          <WorkflowLibraryProvider>
+            <SidebarProvider>
+              <AppContent />
+            </SidebarProvider>
+          </WorkflowLibraryProvider>
+        </WorkflowTabsProvider>
+      </ResourceStatusProvider>
     </RuntimeStatusProvider>
   );
 }

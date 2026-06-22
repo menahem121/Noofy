@@ -1,4 +1,4 @@
-import { createContext, useContext, ReactNode, useEffect, useRef, useState } from "react";
+import { createContext, useContext, ReactNode, useState } from "react";
 import {
   Coffee,
   FolderClock,
@@ -13,9 +13,10 @@ import {
   Square,
 } from "lucide-react";
 
-import { fetchResourceSnapshot, type MachineResourceSnapshot, type ResourceMetric } from "../../lib/api/noofyApi";
+import { type MachineResourceSnapshot, type ResourceMetric } from "../../lib/api/noofyApi";
 import { NOOFY_GITHUB_REPO_URL } from "../../lib/noofyLinks";
 import { openExternalUrl } from "../../lib/openExternalUrl";
+import { useOptionalResourceStatus } from "./ResourceStatusProvider";
 import { useOptionalRuntimeStatus } from "./RuntimeStatusProvider";
 import { WorkflowTabsTopBar, useOptionalWorkflowTabs, type WorkflowTabRuntimeState } from "./WorkflowTabs";
 
@@ -94,7 +95,7 @@ export function AppLayout({
   };
   const isHome = activeRoute === "home";
   const effectiveOpen = isHome ? true : sidebarOpen;
-  const resources = useTopBarResources();
+  const resources = useOptionalResourceStatus()?.snapshot ?? null;
   const globalProgress = useGlobalWorkflowProgress();
   const effectiveProgress = progress ?? globalProgress;
   const effectiveStatus = statusViewForWorkflowActivity(runtimeStatusView, effectiveProgress);
@@ -269,44 +270,6 @@ function jobProgressPercent(
     return Math.min(100, Math.round((progress.value / progress.max) * 100));
   }
   return status === "completed" ? 100 : 0;
-}
-
-function useTopBarResources() {
-  const [snapshot, setSnapshot] = useState<MachineResourceSnapshot | null>(null);
-  const failureCountRef = useRef(0);
-
-  useEffect(() => {
-    let active = true;
-    let interval: number | null = null;
-
-    async function refresh() {
-      try {
-        const next = await fetchResourceSnapshot();
-        if (active) {
-          failureCountRef.current = 0;
-          setSnapshot(next);
-        }
-      } catch {
-        if (active) {
-          failureCountRef.current += 1;
-          setSnapshot(null);
-          if (failureCountRef.current >= 3 && interval !== null) {
-            window.clearInterval(interval);
-            interval = null;
-          }
-        }
-      }
-    }
-
-    void refresh();
-    interval = window.setInterval(() => void refresh(), 5000);
-    return () => {
-      active = false;
-      if (interval !== null) window.clearInterval(interval);
-    };
-  }, []);
-
-  return snapshot;
 }
 
 function ResourceMonitor({

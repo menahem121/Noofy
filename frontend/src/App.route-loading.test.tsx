@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 function jsonResponse(data: unknown, status = 200) {
@@ -44,6 +44,16 @@ const workflowSummary = {
   status_label: "Installed",
 };
 
+const resourceSnapshot = {
+  observed_at: "2026-06-22T12:00:00Z",
+  cpu: { available: true, percent: 23, used_mb: null, total_mb: null, free_mb: null, source: "test", error: null },
+  ram: { available: true, percent: 50, used_mb: 8192, total_mb: 16384, free_mb: 8192, source: "test", error: null },
+  vram: { available: true, percent: 50, used_mb: 4096, total_mb: 8192, free_mb: 4096, source: "test", error: null },
+  backend: "test",
+  device_name: "Test GPU",
+  memory_pressure: "low",
+};
+
 describe("App route loading", () => {
   const fetchMock = vi.fn();
 
@@ -71,7 +81,7 @@ describe("App route loading", () => {
       const url = String(input);
       if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(runtime));
       if (url.endsWith("/api/resources")) {
-        return Promise.resolve(jsonResponse({ cpu: null, ram: null, vram: null }));
+        return Promise.resolve(jsonResponse(resourceSnapshot));
       }
       if (url.endsWith("/api/settings/apis")) {
         return Promise.resolve(jsonResponse({ providers: {}, credential_store: { available: true } }));
@@ -84,9 +94,17 @@ describe("App route loading", () => {
     render(<App />);
 
     expect(await screen.findByText("Built-in Workflows")).toBeInTheDocument();
+    expect(await screen.findByText("8.0 / 16 GB")).toBeInTheDocument();
+    expect(screen.getByText("4.0 / 8.0 GB")).toBeInTheDocument();
+
     fireEvent.click(screen.getByRole("button", { name: "Workflows" }));
 
-    expect(await screen.findByRole("status", { name: "Opening Workflows" })).toBeInTheDocument();
+    const loadingStatus = await screen.findByRole("status", { name: "Opening Workflows" });
+    expect(loadingStatus).toBeInTheDocument();
+    const loadingShell = loadingStatus.closest(".app-shell");
+    expect(loadingShell).not.toBeNull();
+    expect(within(loadingShell as HTMLElement).getByText("8.0 / 16 GB")).toBeInTheDocument();
+    expect(within(loadingShell as HTMLElement).getByText("4.0 / 8.0 GB")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Go to home" })).toBeInTheDocument();
     expect(screen.getByRole("navigation", { name: "Main navigation" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Workflows" })).toHaveClass("sidebar-nav__item--active");

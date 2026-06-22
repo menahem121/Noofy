@@ -990,7 +990,7 @@ describe("workflowFromBindableInputs", () => {
         binding: { nodeId: "10", inputName: "image" },
         widgetType: "load_image",
         title: "Input image",
-        description: "Choose an image from your computer.",
+        description: "Pick an image",
         defaultValue: null,
       }),
       expect.objectContaining({
