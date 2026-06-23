@@ -71,7 +71,7 @@ def test_progress_timing_key_uses_profile_signals_without_prompt_text() -> None:
     assert key.digest.startswith("sha256:")
 
 
-def test_cold_run_uses_loading_history_and_does_not_pollute_running_history(tmp_path: Path) -> None:
+def test_cold_run_records_loading_and_execution_history_separately(tmp_path: Path) -> None:
     clock = FakeClock()
     store = ProgressTimingStore(tmp_path)
     key = _key()
@@ -110,7 +110,45 @@ def test_cold_run_uses_loading_history_and_does_not_pollute_running_history(tmp_
 
     record = store.read(key)
     assert record.loading_durations_seconds[-1] == 8.0
-    assert record.running_durations_seconds == []
+    assert record.running_durations_seconds[-1] == 10.0
+
+
+def test_cold_run_execution_signal_uses_running_history(tmp_path: Path) -> None:
+    clock = FakeClock()
+    store = ProgressTimingStore(tmp_path)
+    key = _key()
+    store.record_loading_duration(key, 9)
+    store.record_running_duration(key, 20)
+    store.record_running_duration(key, 25)
+    estimator = WorkflowProgressEstimator(timing_store=store, now=clock)
+    estimator.register_job(
+        job_id="job-1",
+        workflow_id=key.workflow_id,
+        engine=key.engine,
+        runner=_runner(),
+        machine_profile_id=key.machine_profile_id,
+        model_residency_signature=key.model_residency_signature,
+        execution_profile_signature=key.execution_profile_signature,
+        warm_model_expected=False,
+    )
+
+    clock.advance(6)
+    loading = estimator.decorate(JobProgress(job_id="job-1", status="running"))
+
+    assert loading.estimate is not None
+    assert loading.estimate.phase == "loading_model"
+    assert loading.estimate.source == "loading_history"
+
+    clock.advance(3)
+    executing = estimator.decorate(
+        JobProgress(job_id="job-1", status="running", message="Execution started")
+    )
+
+    assert executing.estimate is not None
+    assert executing.estimate.phase == "executing"
+    assert executing.estimate.source == "running_history"
+    assert executing.estimate.history_count == 2
+    assert executing.value is not None and executing.value >= 350
 
 
 def test_warm_run_uses_and_records_running_history(tmp_path: Path) -> None:

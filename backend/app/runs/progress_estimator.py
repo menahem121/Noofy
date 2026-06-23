@@ -288,19 +288,38 @@ class WorkflowProgressEstimator:
                 return
             now = self._now()
             context.final_result_ready = True
-            if context.warm_model_expected:
-                duration = now - context.started_at
-                updated = self.timing_store.record_running_duration(context.key, duration)
+            samples: list[tuple[str, float, int]] = []
+            execution_started_at = context.execution_started_at
+            if not context.warm_model_expected:
+                if execution_started_at is None:
+                    self._log(
+                        "debug",
+                        "Workflow progress timing sample skipped",
+                        job_id=result.job_id,
+                        workflow_id=context.workflow_id,
+                        details={
+                            "timing_key_hash": context.key.digest,
+                            "reason": "no_execution_transition_observed",
+                        },
+                    )
+                    return
+                loading_duration = execution_started_at - context.started_at
+                updated = self.timing_store.record_loading_duration(
+                    context.key,
+                    loading_duration,
+                )
                 context.timing_record = updated
-                sample_kind = "running"
-                history_count = len(updated.running_durations_seconds)
-            elif context.execution_started_at is not None:
-                duration = context.execution_started_at - context.started_at
-                updated = self.timing_store.record_loading_duration(context.key, duration)
-                context.timing_record = updated
-                sample_kind = "loading"
-                history_count = len(updated.loading_durations_seconds)
-            else:
+                samples.append(
+                    (
+                        "loading",
+                        loading_duration,
+                        len(updated.loading_durations_seconds),
+                    )
+                )
+            elif execution_started_at is None:
+                execution_started_at = context.started_at
+
+            if execution_started_at is None:
                 self._log(
                     "debug",
                     "Workflow progress timing sample skipped",
@@ -312,19 +331,33 @@ class WorkflowProgressEstimator:
                     },
                 )
                 return
-            self._retain_terminal_context_locked(result.job_id)
-            self._log(
-                "info",
-                "Workflow progress timing sample persisted",
-                job_id=result.job_id,
-                workflow_id=context.workflow_id,
-                details={
-                    "timing_key_hash": context.key.digest,
-                    "sample_kind": sample_kind,
-                    "duration_seconds": round(duration, 3),
-                    "history_count": history_count,
-                },
+            running_duration = now - execution_started_at
+            updated = self.timing_store.record_running_duration(
+                context.key,
+                running_duration,
             )
+            context.timing_record = updated
+            samples.append(
+                (
+                    "running",
+                    running_duration,
+                    len(updated.running_durations_seconds),
+                )
+            )
+            self._retain_terminal_context_locked(result.job_id)
+            for sample_kind, duration, history_count in samples:
+                self._log(
+                    "info",
+                    "Workflow progress timing sample persisted",
+                    job_id=result.job_id,
+                    workflow_id=context.workflow_id,
+                    details={
+                        "timing_key_hash": context.key.digest,
+                        "sample_kind": sample_kind,
+                        "duration_seconds": round(duration, 3),
+                        "history_count": history_count,
+                    },
+                )
 
     def discard_job(self, job_id: str) -> None:
         with self._lock:
@@ -384,9 +417,10 @@ class WorkflowProgressEstimator:
         }:
             return progress
 
+        if self._has_engine_execution_signal(progress) and context.execution_started_at is None:
+            context.execution_started_at = now
+
         if self._has_real_engine_progress(progress):
-            if context.execution_started_at is None:
-                context.execution_started_at = now
             value = self._real_engine_value(progress, context)
             value = self._monotonic_value(context, value, now)
             return progress.model_copy(
@@ -493,11 +527,7 @@ class WorkflowProgressEstimator:
             if context.execution_started_at is not None
             else elapsed
         )
-        history = (
-            context.timing_record.running_durations_seconds
-            if context.warm_model_expected
-            else []
-        )
+        history = context.timing_record.running_durations_seconds
         source = "running_history" if history else "no_history"
         estimated = _average(history) or DEFAULT_RUNNING_SECONDS
         ratio, slower = _phase_ratio(execution_elapsed, estimated)
@@ -644,6 +674,14 @@ class WorkflowProgressEstimator:
             and progress.max is not None
             and progress.max > 0
         )
+
+    @staticmethod
+    def _has_engine_execution_signal(progress: JobProgress) -> bool:
+        if progress.status != "running":
+            return False
+        if WorkflowProgressEstimator._has_real_engine_progress(progress):
+            return True
+        return progress.current_node is not None or progress.message == "Execution started"
 
 
 def progress_ready_for_result_fetch(progress: JobProgress) -> bool:
