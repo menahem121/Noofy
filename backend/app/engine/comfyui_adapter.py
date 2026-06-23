@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import struct
+import time
 from pathlib import Path
 from collections.abc import Callable, Iterator
 from typing import Any
@@ -81,6 +82,8 @@ class ComfyUIEngineAdapter:
         self._output_kinds_by_job: dict[str, dict[str, str]] = {}
         self._preview_targets_by_job: dict[str, dict[str, list[str]]] = {}
         self._live_preview_sequences: dict[str, int] = {}
+        self._submitted_at_by_job: dict[str, float] = {}
+        self._first_progress_logged_job_ids: set[str] = set()
         self._terminal_notifier: Callable[[str], None] | None = None
 
     def configure_endpoint(self, base_url: str, ws_url: str | None = None) -> None:
@@ -197,6 +200,7 @@ class ComfyUIEngineAdapter:
             "extra_data": extra_data,
         }
 
+        prompt_submit_started_at = time.monotonic()
         try:
             async with httpx.AsyncClient(timeout=30) as client:
                 response = await client.post(f"{self.base_url}/prompt", json=payload)
@@ -255,12 +259,15 @@ class ComfyUIEngineAdapter:
                 f"Failed to submit workflow to ComfyUI: {sanitize_text(str(exc))}"
             ) from exc
 
+        submit_duration_seconds = time.monotonic() - prompt_submit_started_at
+        self._submitted_at_by_job[job_id] = time.monotonic()
         self.log_store.add(
             "info",
             "Submitted workflow to ComfyUI",
             "comfyui.adapter",
             job_id=job_id,
             workflow_id=workflow_package.metadata.id,
+            details={"duration_seconds": round(submit_duration_seconds, 3)},
         )
         return job
 
@@ -346,6 +353,7 @@ class ComfyUIEngineAdapter:
             "info", "ComfyUI job canceled", "comfyui.adapter", job_id=job_id
         )
         self._terminal_log_job_ids.add(job_id)
+        self._forget_job_timing(job_id)
         self._notify_terminal(job_id)
         return progress
 
@@ -755,6 +763,7 @@ class ComfyUIEngineAdapter:
             message = json.loads(raw_message)
             progress = self._progress_from_ws_message(job_id, message)
             if progress is not None:
+                self._log_first_progress_signal(job_id, message, progress)
                 self.job_store.set_progress(progress)
                 if progress.status == "failed":
                     self.job_store.set_result(
@@ -778,6 +787,45 @@ class ComfyUIEngineAdapter:
                 )
                 return result.status in {"completed", "failed", "canceled"}
         return False
+
+    def _log_first_progress_signal(
+        self,
+        job_id: str,
+        message: dict[str, Any],
+        progress: JobProgress,
+    ) -> None:
+        if job_id in self._first_progress_logged_job_ids:
+            return
+        has_numeric_progress = (
+            progress.value is not None
+            and progress.max is not None
+            and progress.max > 0
+        )
+        if not has_numeric_progress:
+            return
+        self._first_progress_logged_job_ids.add(job_id)
+        submitted_at = self._submitted_at_by_job.get(job_id)
+        details: dict[str, Any] = {
+            "message_type": message.get("type"),
+            "status": progress.status,
+            "current_node": progress.current_node,
+        }
+        if progress.value is not None:
+            details["value"] = progress.value
+        if progress.max is not None:
+            details["max"] = progress.max
+        if submitted_at is not None:
+            details["seconds_since_prompt_submission"] = round(
+                max(0.0, time.monotonic() - submitted_at),
+                3,
+            )
+        self.log_store.add(
+            "info",
+            "ComfyUI first numeric progress signal received",
+            "comfyui.adapter",
+            job_id=job_id,
+            details=details,
+        )
 
     def _handle_ws_binary_message(self, job_id: str, raw_message: bytes) -> None:
         preview = self._live_preview_from_binary_message(job_id, raw_message)
@@ -1117,10 +1165,15 @@ class ComfyUIEngineAdapter:
                 "comfyui.adapter",
                 job_id=progress.job_id,
             )
+        self._forget_job_timing(progress.job_id)
 
     def _notify_terminal(self, job_id: str) -> None:
         if self._terminal_notifier is not None:
             self._terminal_notifier(job_id)
+
+    def _forget_job_timing(self, job_id: str) -> None:
+        self._submitted_at_by_job.pop(job_id, None)
+        self._first_progress_logged_job_ids.discard(job_id)
 
     def _cleanup_staged_files(self, job_id: str) -> None:
         for path in self._staged_files.pop(job_id, []):

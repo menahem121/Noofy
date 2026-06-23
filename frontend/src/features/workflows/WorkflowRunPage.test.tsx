@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { useEffect, useState, type ComponentProps, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { ResourceStatusProvider } from "../app/ResourceStatusProvider";
 import { RuntimeStatusProvider, type RuntimeHealthState } from "../app/RuntimeStatusProvider";
 import { WorkflowTabsProvider, WorkflowTabsRouteProvider, useWorkflowTabs, type WorkflowTabRuntimeState } from "../app/WorkflowTabs";
 import { splitDiagnosticLogs, WorkflowRunPage } from "./WorkflowRunPage";
@@ -790,12 +791,14 @@ function renderRunPage(
 ) {
   return render(
     <RuntimeStatusProvider initialRuntimeState={runtimeState} skipInitialRefresh>
-      <WorkflowRunPage
-        workflowId="text_to_image_v0"
-        onBack={vi.fn()}
-        onNavigate={vi.fn()}
-        {...props}
-      />
+      <ResourceStatusProvider initialSnapshot={resourceSnapshot} skipInitialRefresh>
+        <WorkflowRunPage
+          workflowId="text_to_image_v0"
+          onBack={vi.fn()}
+          onNavigate={vi.fn()}
+          {...props}
+        />
+      </ResourceStatusProvider>
     </RuntimeStatusProvider>,
   );
 }
@@ -807,16 +810,18 @@ function renderRunPageWithWorkflowRuntime(
 ) {
   return render(
     <RuntimeStatusProvider initialRuntimeState={runtimeState} skipInitialRefresh>
-      <WorkflowTabsProvider>
-        <WorkflowRuntimeSeeder workflowRuntime={workflowRuntime}>
-          <WorkflowRunPage
-            workflowId="text_to_image_v0"
-            onBack={vi.fn()}
-            onNavigate={vi.fn()}
-            {...props}
-          />
-        </WorkflowRuntimeSeeder>
-      </WorkflowTabsProvider>
+      <ResourceStatusProvider initialSnapshot={resourceSnapshot} skipInitialRefresh>
+        <WorkflowTabsProvider>
+          <WorkflowRuntimeSeeder workflowRuntime={workflowRuntime}>
+            <WorkflowRunPage
+              workflowId="text_to_image_v0"
+              onBack={vi.fn()}
+              onNavigate={vi.fn()}
+              {...props}
+            />
+          </WorkflowRuntimeSeeder>
+        </WorkflowTabsProvider>
+      </ResourceStatusProvider>
     </RuntimeStatusProvider>,
   );
 }
@@ -839,16 +844,18 @@ function WorkflowTabSwitchRunHarness() {
   const [activeWorkflowId, setActiveWorkflowId] = useState("first-workflow");
   return (
     <RuntimeStatusProvider initialRuntimeState={readyRuntimeState} skipInitialRefresh>
-      <WorkflowTabsProvider>
-        <WorkflowTabsRouteProvider
-          activeWorkflowId={activeWorkflowId}
-          onActivateWorkflowTab={(workflowId) => setActiveWorkflowId(workflowId)}
-          onRequestCloseWorkflowTab={vi.fn()}
-        >
-          <WorkflowTabSwitchSeeder />
-          <WorkflowRunPage workflowId={activeWorkflowId} onBack={vi.fn()} onNavigate={vi.fn()} />
-        </WorkflowTabsRouteProvider>
-      </WorkflowTabsProvider>
+      <ResourceStatusProvider initialSnapshot={resourceSnapshot} skipInitialRefresh>
+        <WorkflowTabsProvider>
+          <WorkflowTabsRouteProvider
+            activeWorkflowId={activeWorkflowId}
+            onActivateWorkflowTab={(workflowId) => setActiveWorkflowId(workflowId)}
+            onRequestCloseWorkflowTab={vi.fn()}
+          >
+            <WorkflowTabSwitchSeeder />
+            <WorkflowRunPage workflowId={activeWorkflowId} onBack={vi.fn()} onNavigate={vi.fn()} />
+          </WorkflowTabsRouteProvider>
+        </WorkflowTabsProvider>
+      </ResourceStatusProvider>
     </RuntimeStatusProvider>
   );
 }
@@ -4334,6 +4341,8 @@ describe("WorkflowRunPage", () => {
     });
     expect(canvasCss).toMatch(/\.canvas-widget-group__control\s*{[^}]*flex-basis:\s*0;[^}]*flex-shrink:\s*1;/);
     expect(canvasCss).toMatch(/\.layout-canvas-widget--compact \.canvas-widget-group__control\s*{[^}]*overflow:\s*auto;/);
+    expect(canvasCss).toMatch(/\.layout-canvas-widget--inline-toggle \.layout-canvas-widget__header\s*{[^}]*align-items:\s*center;/);
+    expect(canvasCss).toMatch(/\.canvas-widget-inline-toggle \.canvas-widget-toggle\s*{[^}]*--canvas-toggle-track-width:\s*44px;/);
   });
 
   it("keeps the run canvas within the visible workspace width", () => {
@@ -6044,6 +6053,61 @@ describe("WorkflowRunPage", () => {
     const promptCell = (await screen.findByRole("textbox")).closest("article");
     expect(promptCell).toHaveClass("layout-canvas-widget--compact");
     expect(promptCell).toHaveStyle({ width: "15.625%", height: "128px" });
+  });
+
+  it.each([1, 2])("renders %s-row toggle widgets inline in the canvas header", async (height) => {
+    const compactTogglePackage = {
+      ...configuredPackageData,
+      inputs: [
+        ...configuredPackageData.inputs,
+        {
+          id: "thinking",
+          label: "Thinking",
+          control: "toggle",
+          binding: { node_id: "42", input_name: "thinking" },
+          default: false,
+          validation: {},
+        },
+      ],
+      dashboard: {
+        ...configuredPackageData.dashboard,
+        sections: [
+          {
+            id: "main",
+            title: "Main",
+            controls: [
+              {
+                id: "thinking",
+                type: "toggle",
+                label: "Thinking",
+                input_id: "thinking",
+                layout: { x: 0, y: 0, w: 16, h: height },
+              },
+            ],
+          },
+        ],
+      },
+    };
+    mockConfiguredDashboardFetch(fetchMock, readyRuntime, compactTogglePackage);
+
+    renderRunPage();
+
+    const checkbox = await screen.findByRole("checkbox", { name: "Off" });
+    const toggleCell = document.querySelector('[data-dashboard-control-id="thinking"]') as HTMLElement;
+    const header = toggleCell.querySelector(".layout-canvas-widget__header") as HTMLElement;
+
+    expect(toggleCell).toHaveClass("layout-canvas-widget--compact", "layout-canvas-widget--inline-toggle");
+    if (height === 1) {
+      expect(toggleCell).toHaveClass("layout-canvas-widget--one-row-toggle");
+    } else {
+      expect(toggleCell).not.toHaveClass("layout-canvas-widget--one-row-toggle");
+    }
+    expect(within(header).getByRole("checkbox", { name: "Off" })).toBe(checkbox);
+    expect(toggleCell.querySelector(".widget-canvas-cell__content")).not.toBeInTheDocument();
+    expect(toggleCell).toHaveStyle({ height: `${height * 32}px` });
+
+    fireEvent.click(checkbox);
+    expect(await screen.findByRole("checkbox", { name: "On" })).toBeChecked();
   });
 
   it("saves normal action bar drags only to user state", async () => {

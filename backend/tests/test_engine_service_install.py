@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+import app.runtime.runners.lifecycle_service as runner_lifecycle_module
 from app.artifacts import AssetOwnership, ModelVerificationLevel
 from app.diagnostics import LogStore
 from app.engine.models import EngineJob, JobProgress
@@ -829,6 +830,49 @@ async def test_start_workflow_runner_reuses_compatible_resident_runner(tmp_path:
     assert coordinator is not None
     assert first["runner"]["runner_id"] == second["runner"]["runner_id"]
     assert len(coordinator.started_specs) == 1
+
+
+@pytest.mark.anyio
+async def test_start_workflow_runner_reuses_ready_install_without_revalidating_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    packages_dir = tmp_path / "packages"
+    capsule_payload = _runner_capsule_payload(runner_char="2")
+    _write_workflow_with_capsule(packages_dir, "runner_workflow", capsule_payload)
+    coordinator = None
+
+    def coordinator_factory(supervisor: RunnerSupervisor) -> RecordingRunnerCoordinator:
+        nonlocal coordinator
+        coordinator = RecordingRunnerCoordinator(supervisor)
+        return coordinator
+
+    service = _build_service(
+        tmp_path,
+        packages_dir=packages_dir,
+        runner_coordinator_factory=coordinator_factory,
+    )
+    await service.prepare_workflow("runner_workflow")
+    first = await service.start_workflow_runner("runner_workflow")
+
+    def fail_if_runtime_paths_are_revalidated(*args, **kwargs):
+        raise AssertionError("resident runner reuse should not revalidate launch paths")
+
+    monkeypatch.setattr(
+        runner_lifecycle_module,
+        "_prepared_runtime_paths",
+        fail_if_runtime_paths_are_revalidated,
+    )
+    second = await service.start_workflow_runner("runner_workflow")
+
+    assert coordinator is not None
+    assert first["runner"]["runner_id"] == second["runner"]["runner_id"]
+    assert len(coordinator.started_specs) == 1
+    assert any(
+        event.message == "Workflow runner reused"
+        and event.details.get("reuse_source") == "ready_install_state"
+        for event in service.log_store.list_events().events
+    )
 
 
 @pytest.mark.anyio

@@ -2357,6 +2357,10 @@
   min-width: 0;
 }
 
+.layout-canvas-widget__title > div {
+  min-width: 0;
+}
+
 .layout-canvas-widget__title > span {
   display: grid;
   flex: 0 0 auto;
@@ -2724,6 +2728,19 @@
   background: var(--surface-2);
   border: 1px solid rgba(255, 255, 255, 0.08);
   color: var(--text-secondary);
+}
+
+.layout-canvas-widget--inline-toggle .layout-preview-toggle {
+  min-height: 30px;
+  padding: 4px 8px 4px 6px;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.layout-canvas-widget--one-row-toggle .layout-preview-toggle {
+  min-height: 24px;
+  padding: 2px 6px;
+  gap: 6px;
 }
 
 .layout-preview-toggle span {

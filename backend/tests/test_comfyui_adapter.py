@@ -655,6 +655,45 @@ async def test_run_workflow_does_not_hardcode_prompt_preview_method(
 
 
 @pytest.mark.anyio
+async def test_run_workflow_logs_prompt_submission_duration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/prompt"
+        return httpx.Response(200, json={"prompt_id": "job"})
+
+    transport = httpx.MockTransport(handler)
+    original_client = httpx.AsyncClient
+
+    def mock_client(*args, **kwargs):
+        kwargs["transport"] = transport
+        return original_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", mock_client)
+
+    log_store = LogStore()
+    package = _media_package("load_image", node_id="10", input_name="image")
+    adapter = ComfyUIEngineAdapter("http://comfyui.test", tmp_path, log_store=log_store)
+
+    await adapter.run_workflow(
+        package,
+        package.comfyui_graph,
+        {},
+        {"listen_for_events": False, "job_id": "job"},
+    )
+
+    submitted_events = [
+        event
+        for event in log_store.list_events(job_id="job").events
+        if event.message == "Submitted workflow to ComfyUI"
+    ]
+    assert submitted_events
+    submitted = submitted_events[0]
+    assert isinstance(submitted.details["duration_seconds"], float)
+    assert submitted.details["duration_seconds"] >= 0
+
+
+@pytest.mark.anyio
 async def test_adapter_redacts_resolved_api_key_from_http_errors(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1319,6 +1358,67 @@ def test_handle_ws_error_message_logs_failure(tmp_path: Path) -> None:
     assert should_stop
     assert log_store.latest_error() is not None
     assert log_store.latest_error().message == "ComfyUI execution failed"
+
+
+def test_handle_ws_message_logs_first_comfyui_progress_signal(
+    tmp_path: Path,
+) -> None:
+    log_store = LogStore()
+    adapter = ComfyUIEngineAdapter(
+        "http://127.0.0.1:8188", tmp_path, log_store=log_store
+    )
+    adapter._submitted_at_by_job["job-1"] = (
+        comfyui_adapter_module.time.monotonic() - 8.3456
+    )
+
+    should_stop = adapter._handle_ws_message(
+        "job-1",
+        """
+        {
+          "type": "progress",
+          "data": {
+            "prompt_id": "job-1",
+            "node": "3",
+            "value": 7,
+            "max": 20
+          }
+        }
+        """,
+    )
+    adapter._handle_ws_message(
+        "job-1",
+        """
+        {
+          "type": "progress",
+          "data": {
+            "prompt_id": "job-1",
+            "node": "3",
+            "value": 8,
+            "max": 20
+          }
+        }
+        """,
+    )
+
+    first_progress_events = [
+        event
+        for event in log_store.list_events(job_id="job-1").events
+        if event.message == "ComfyUI first numeric progress signal received"
+    ]
+    assert not should_stop
+    assert len(first_progress_events) == 1
+    details = first_progress_events[0].details
+    assert details.pop("seconds_since_prompt_submission") == pytest.approx(
+        8.346,
+        abs=0.01,
+    )
+    assert details == {
+        "message_type": "progress",
+        "status": "running",
+        "current_node": "3",
+        "value": 7,
+        "max": 20,
+    }
 
 
 def test_result_from_comfyui_executed_ws_message(tmp_path: Path) -> None:

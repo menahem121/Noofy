@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -72,6 +73,7 @@ _PREPARABLE_TRUST_LEVELS = {
     TrustLevel.REGISTRY_LOCKED,
     TrustLevel.QUARANTINED_COMMUNITY,
 }
+_SLOW_RUNNER_START_STAGE_SECONDS = 1.0
 
 
 class WorkflowRunnerLifecycleService:
@@ -977,7 +979,13 @@ class WorkflowRunnerLifecycleService:
             )
             return self._unsupported_runner_payload(workflow_id, "capsule_installer_not_configured")
 
+        capsule_lookup_started_at = time.monotonic()
         capsule_lock = self._preparable_capsule_lock(workflow_id)
+        self._log_slow_runner_start_stage(
+            workflow_id,
+            "capsule_lock_lookup",
+            time.monotonic() - capsule_lookup_started_at,
+        )
         if capsule_lock is None:
             self.log_store.add(
                 "warning",
@@ -987,7 +995,14 @@ class WorkflowRunnerLifecycleService:
             )
             return self._unsupported_runner_payload(workflow_id, "verified_capsule_not_available")
 
+        install_state_lookup_started_at = time.monotonic()
         install_state = self.capsule_installer.get_state(capsule_lock)
+        self._log_slow_runner_start_stage(
+            workflow_id,
+            "install_state_lookup",
+            time.monotonic() - install_state_lookup_started_at,
+            install_status=install_state.status.value,
+        )
         if install_state.status is not InstallStatus.READY:
             self.log_store.add(
                 "warning",
@@ -1008,8 +1023,21 @@ class WorkflowRunnerLifecycleService:
                 "error": install_state.last_error,
             }
 
+        reused = self._reuse_resident_runner_from_ready_install_state(
+            workflow_id,
+            install_state,
+        )
+        if reused is not None:
+            return reused
+
         try:
+            launch_spec_started_at = time.monotonic()
             spec = self._runner_launch_spec(capsule_lock, install_state)
+            self._log_slow_runner_start_stage(
+                workflow_id,
+                "runner_launch_spec",
+                time.monotonic() - launch_spec_started_at,
+            )
         except ValueError as exc:
             self.log_store.add(
                 "error",
@@ -1096,11 +1124,22 @@ class WorkflowRunnerLifecycleService:
         memory_decision = None
         try:
             if self.memory_service is not None:
+                memory_decision_started_at = time.monotonic()
                 memory_decision = self.memory_service.decision_for_runner_start(
                     workflow_id=workflow_id,
                     capsule_lock=capsule_lock,
                     install_state=install_state,
                     spec=spec,
+                )
+                self._log_slow_runner_start_stage(
+                    workflow_id,
+                    "memory_decision",
+                    time.monotonic() - memory_decision_started_at,
+                    memory_action=(
+                        memory_decision.action.value
+                        if memory_decision is not None
+                        else None
+                    ),
                 )
                 if memory_decision is not None:
                     self.memory_service.record_metric(f"runner_start_decision_{memory_decision.action.value}")
@@ -1254,7 +1293,14 @@ class WorkflowRunnerLifecycleService:
                         "reason": decision.reason,
                     },
                 )
+            process_start_started_at = time.monotonic()
             handle = await self.runner_process_coordinator.start_runner(spec, workflow_id=workflow_id)
+            self._log_slow_runner_start_stage(
+                workflow_id,
+                "runner_process_start",
+                time.monotonic() - process_start_started_at,
+                runner_id=handle.runner_id,
+            )
         except RunnerRuntimeActivationInProgressError as exc:
             return {
                 "workflow_id": workflow_id,
@@ -1451,6 +1497,72 @@ class WorkflowRunnerLifecycleService:
                 details={"error": str(exc)},
             )
             return None
+
+    def _log_slow_runner_start_stage(
+        self,
+        workflow_id: str,
+        stage: str,
+        duration_seconds: float,
+        **details: object,
+    ) -> None:
+        if duration_seconds < _SLOW_RUNNER_START_STAGE_SECONDS:
+            return
+        self.log_store.add(
+            "info",
+            "Workflow runner start stage was slow",
+            "runtime.runners.lifecycle_service",
+            workflow_id=workflow_id,
+            details={
+                "stage": stage,
+                "duration_seconds": round(duration_seconds, 3),
+                **{key: value for key, value in details.items() if value is not None},
+            },
+        )
+
+    def _reuse_resident_runner_from_ready_install_state(
+        self,
+        workflow_id: str,
+        install_state: InstallState,
+    ) -> dict[str, object] | None:
+        compatibility_key = (
+            install_state.runner_process_compatibility_key
+            or install_state.runner_workspace_fingerprint
+        )
+        if not compatibility_key:
+            return None
+        decision = self.runner_supervisor.runner_selection_for(
+            runner_process_compatibility_key=compatibility_key,
+        )
+        if (
+            decision.action is not RunnerSelectionAction.REUSE
+            or decision.runner_id is None
+        ):
+            return None
+        descriptor = self.runner_supervisor.bind_workflow_runner(
+            workflow_id,
+            decision.runner_id,
+        )
+        self.log_store.add(
+            "info",
+            "Workflow runner reused",
+            "runtime.runners.lifecycle_service",
+            workflow_id=workflow_id,
+            details={
+                "runner_id": descriptor.runner_id,
+                "runner_process_compatibility_key": (
+                    descriptor.runner_process_compatibility_key
+                ),
+                "reuse_source": "ready_install_state",
+            },
+        )
+        return {
+            "workflow_id": workflow_id,
+            "status": descriptor.status.value,
+            "runner": descriptor.model_dump(),
+            "pid": descriptor.pid,
+            "install_status": InstallStatus.READY.value,
+            "error": None,
+        }
 
     def _runner_launch_spec(self, capsule_lock: CapsuleLock, install_state: InstallState) -> RunnerLaunchSpec:
         assert self.runtime_manager is not None, "runtime_manager required for runner launch"

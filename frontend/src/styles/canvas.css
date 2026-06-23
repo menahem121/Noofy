@@ -412,6 +412,68 @@
   display: none;
 }
 
+.layout-canvas-widget--inline-toggle {
+  justify-content: center;
+  gap: 0;
+  padding: calc(7px + var(--layout-widget-visual-inset, 0px));
+}
+
+.layout-canvas-widget--inline-toggle .layout-canvas-widget__header {
+  align-items: center;
+  gap: 8px;
+}
+
+.layout-canvas-widget--inline-toggle .layout-canvas-widget__title {
+  flex: 1 1 auto;
+  align-items: center;
+}
+
+.layout-canvas-widget--inline-toggle .layout-canvas-widget__title > span {
+  width: 24px;
+  height: 24px;
+}
+
+.layout-canvas-widget--inline-toggle .layout-canvas-widget__title p {
+  display: none;
+}
+
+.canvas-widget-inline-toggle {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.canvas-widget-inline-toggle .canvas-widget-toggle {
+  --canvas-toggle-track-width: 44px;
+  --canvas-toggle-track-height: 24px;
+  --canvas-toggle-knob-inset: 4px;
+
+  min-height: 30px;
+  padding: 4px 8px 4px 6px;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.layout-canvas-widget--one-row-toggle {
+  padding: calc(4px + var(--layout-widget-visual-inset, 0px));
+}
+
+.layout-canvas-widget--one-row-toggle .canvas-widget-inline-toggle .canvas-widget-toggle {
+  --canvas-toggle-track-width: 36px;
+  --canvas-toggle-track-height: 20px;
+  --canvas-toggle-knob-inset: 3px;
+
+  min-height: 24px;
+  padding: 2px 6px;
+  gap: 6px;
+}
+
+.layout-canvas-widget--one-row-toggle .canvas-widget-toggle__label {
+  min-width: 0;
+}
+
 .canvas-widget-group {
   display: flex;
   flex: 1;

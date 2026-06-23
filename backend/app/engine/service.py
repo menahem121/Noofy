@@ -1,5 +1,6 @@
 import asyncio
 import re
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -99,6 +100,10 @@ from app.workflows.widget_metadata import (
     comfyui_widget_metadata_from_object_info,
     merge_comfyui_widget_metadata,
 )
+
+_SLOW_RUNNER_PREPARATION_STAGE_SECONDS = 1.0
+
+
 class EngineService:
     def __init__(
         self,
@@ -824,8 +829,15 @@ class EngineService:
     ) -> str | dict[str, object] | WorkflowValidationResult | None:
         """Prepare and bind a workflow runner before running custom-node capsules."""
         workflow_id = package.metadata.id
+        capsule_lookup_started_at = time.monotonic()
         capsule_lock = self.workflow_runner_lifecycle_service.preparable_capsule_lock(
             workflow_id
+        )
+        self._log_slow_runner_preparation_stage(
+            workflow_id,
+            "capsule_lock_lookup",
+            time.monotonic() - capsule_lookup_started_at,
+            queue_id=queue_id,
         )
         if capsule_lock is None or not capsule_lock.custom_nodes:
             return None
@@ -833,12 +845,40 @@ class EngineService:
         # Rapid repeated Run presses must not race concurrent prepare/start
         # cycles; the second press waits, then sees the bound runner and queues.
         lock = self._workflow_runner_ensure_locks.setdefault(workflow_id, asyncio.Lock())
+        lock_wait_started_at = time.monotonic()
         async with lock:
+            self._log_slow_runner_preparation_stage(
+                workflow_id,
+                "runner_ensure_lock_wait",
+                time.monotonic() - lock_wait_started_at,
+                queue_id=queue_id,
+            )
             return await self._ensure_workflow_runner_for_run_locked(
                 workflow_id, capsule_lock, queue_id
             )
 
     async def _ensure_workflow_runner_for_run_locked(
+        self,
+        workflow_id: str,
+        capsule_lock: CapsuleLock,
+        queue_id: str | None = None,
+    ) -> str | dict[str, object] | WorkflowValidationResult | None:
+        ensure_started_at = time.monotonic()
+        try:
+            return await self._ensure_workflow_runner_for_run_locked_inner(
+                workflow_id,
+                capsule_lock,
+                queue_id,
+            )
+        finally:
+            self._log_slow_runner_preparation_stage(
+                workflow_id,
+                "ensure_workflow_runner_for_run",
+                time.monotonic() - ensure_started_at,
+                queue_id=queue_id,
+            )
+
+    async def _ensure_workflow_runner_for_run_locked_inner(
         self,
         workflow_id: str,
         capsule_lock: CapsuleLock,
@@ -872,7 +912,15 @@ class EngineService:
         ):
             return None
 
+        install_lookup_started_at = time.monotonic()
         install = self.workflow_runner_lifecycle_service.get_install_state(workflow_id)
+        self._log_slow_runner_preparation_stage(
+            workflow_id,
+            "install_state_lookup",
+            time.monotonic() - install_lookup_started_at,
+            queue_id=queue_id,
+            install_status=install.get("status"),
+        )
         if install.get("status") != InstallStatus.READY.value:
             self.log_store.add(
                 "info",
@@ -884,8 +932,16 @@ class EngineService:
                     "install_status": install.get("status"),
                 },
             )
+            prepare_started_at = time.monotonic()
             install = await self.workflow_runner_lifecycle_service.prepare_workflow(
                 workflow_id
+            )
+            self._log_slow_runner_preparation_stage(
+                workflow_id,
+                "prepare_workflow",
+                time.monotonic() - prepare_started_at,
+                queue_id=queue_id,
+                install_status=install.get("status"),
             )
 
         if install.get("status") in {
@@ -907,6 +963,7 @@ class EngineService:
                 memory_status=status,
             )
 
+        start_started_at = time.monotonic()
         start = (
             await self.workflow_runner_lifecycle_service.start_workflow_runner(workflow_id)
             if queue_id is None
@@ -914,6 +971,13 @@ class EngineService:
                 workflow_id,
                 memory_status_callback=report_memory_status,
             )
+        )
+        self._log_slow_runner_preparation_stage(
+            workflow_id,
+            "start_workflow_runner",
+            time.monotonic() - start_started_at,
+            queue_id=queue_id,
+            runner_status=start.get("status"),
         )
         if _workflow_runner_start_needs_reprepare(start):
             self.log_store.add(
@@ -926,11 +990,20 @@ class EngineService:
                     "error": start.get("error"),
                 },
             )
+            reprepare_started_at = time.monotonic()
             install = await self.workflow_runner_lifecycle_service.prepare_workflow(
                 workflow_id
             )
+            self._log_slow_runner_preparation_stage(
+                workflow_id,
+                "reprepare_workflow",
+                time.monotonic() - reprepare_started_at,
+                queue_id=queue_id,
+                install_status=install.get("status"),
+            )
             if install.get("status") != InstallStatus.READY.value:
                 return _workflow_runner_unavailable_result(workflow_id, install)
+            restart_started_at = time.monotonic()
             start = (
                 await self.workflow_runner_lifecycle_service.start_workflow_runner(workflow_id)
                 if queue_id is None
@@ -938,6 +1011,13 @@ class EngineService:
                     workflow_id,
                     memory_status_callback=report_memory_status,
                 )
+            )
+            self._log_slow_runner_preparation_stage(
+                workflow_id,
+                "restart_workflow_runner_after_reprepare",
+                time.monotonic() - restart_started_at,
+                queue_id=queue_id,
+                runner_status=start.get("status"),
             )
         if start.get("status") not in {
             RunnerStatus.READY.value,
@@ -959,6 +1039,32 @@ class EngineService:
                 return start
             return _workflow_runner_unavailable_result(workflow_id, start)
         return None
+
+    def _log_slow_runner_preparation_stage(
+        self,
+        workflow_id: str,
+        stage: str,
+        duration_seconds: float,
+        *,
+        queue_id: str | None = None,
+        **details: object,
+    ) -> None:
+        if duration_seconds < _SLOW_RUNNER_PREPARATION_STAGE_SECONDS:
+            return
+        payload = {
+            "stage": stage,
+            "duration_seconds": round(duration_seconds, 3),
+            **{key: value for key, value in details.items() if value is not None},
+        }
+        if queue_id is not None:
+            payload["queue_id"] = queue_id
+        self.log_store.add(
+            "info",
+            "Workflow runner preparation stage was slow",
+            "engine.service",
+            workflow_id=workflow_id,
+            details=payload,
+        )
 
     async def handoff_next_queued_runner_start(
         self,

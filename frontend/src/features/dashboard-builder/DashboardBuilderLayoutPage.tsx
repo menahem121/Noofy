@@ -803,6 +803,10 @@ function PlacedDashboardItem({
   const compact = item.kind === "group"
     ? isWidgetGroupLayoutCompact(layout, item.widgets.map((widget) => widget.widgetType))
     : isWidgetLayoutCompact(layout, item.widget.widgetType);
+  const inlineHeaderToggleWidget = item.kind === "group" || item.widget.widgetType !== "toggle" || layout.h > 2
+    ? null
+    : item.widget;
+  const inlineHeaderToggle = Boolean(inlineHeaderToggleWidget);
 
   return (
     <DashboardCanvasWidgetShell
@@ -815,7 +819,9 @@ function PlacedDashboardItem({
       style={{ height: `${layout.h * rowHeight}px` }}
       className={`${dragging ? "layout-canvas-widget--moving" : ""}${
         dropPreview ? " layout-canvas-widget--drop-preview" : ""
-      }${compact ? " layout-canvas-widget--compact" : ""}`}
+      }${compact ? " layout-canvas-widget--compact" : ""}${
+        inlineHeaderToggle ? " layout-canvas-widget--inline-toggle" : ""
+      }${inlineHeaderToggle && layout.h <= 1 ? " layout-canvas-widget--one-row-toggle" : ""}`}
       aria-hidden={preview ? true : undefined}
       onClick={onSelect}
       onPointerDown={!preview ? onMoveStart : undefined}
@@ -830,20 +836,27 @@ function PlacedDashboardItem({
             <p>{description || subtitle}</p>
           </div>
         </div>
-        {!preview ? (
-          <div className="layout-canvas-widget__actions" onClick={(event) => event.stopPropagation()}>
-            <button className="icon-button icon-button--card" type="button" aria-label={`Remove ${title}`} title="Remove from canvas" onClick={onRemove}>
-              <Trash2 size={14} aria-hidden="true" />
-            </button>
+        {inlineHeaderToggle || !preview ? (
+          <div className="layout-canvas-widget__header-actions" onClick={(event) => event.stopPropagation()}>
+            {inlineHeaderToggleWidget ? <WidgetSurfacePreview workflowId={workflowId} widget={inlineHeaderToggleWidget} /> : null}
+            {!preview ? (
+              <div className="layout-canvas-widget__actions">
+                <button className="icon-button icon-button--card" type="button" aria-label={`Remove ${title}`} title="Remove from canvas" onClick={onRemove}>
+                  <Trash2 size={14} aria-hidden="true" />
+                </button>
+              </div>
+            ) : null}
           </div>
         ) : null}
       </header>
 
-      <div className="layout-canvas-widget__preview-surface">
-        {item.kind === "group"
-          ? <GroupSurfacePreview workflowId={workflowId} item={item} />
-          : <WidgetSurfacePreview workflowId={workflowId} widget={item.widget} />}
-      </div>
+      {inlineHeaderToggle ? null : (
+        <div className="layout-canvas-widget__preview-surface">
+          {item.kind === "group"
+            ? <GroupSurfacePreview workflowId={workflowId} item={item} />
+            : <WidgetSurfacePreview workflowId={workflowId} widget={item.widget} />}
+        </div>
+      )}
       {!preview ? <DashboardCanvasResizeHandles label={title} onResizeStart={(handle, event) => onResizeStart(event, handle)} /> : null}
     </DashboardCanvasWidgetShell>
   );

@@ -45,7 +45,7 @@ describe("widget sizing policy", () => {
     ["string_field", 6, 4, 4, 3],
     ["textarea", 8, 6, 5, 4],
     ["note", 6, 4, 4, 3],
-    ["toggle", 6, 4, 4, 3],
+    ["toggle", 6, 4, 4, 1],
     ["load_image", 10, 10, 6, 6],
     ["load_image_mask", 10, 10, 6, 6],
     ["load_audio", 10, 8, 6, 4],

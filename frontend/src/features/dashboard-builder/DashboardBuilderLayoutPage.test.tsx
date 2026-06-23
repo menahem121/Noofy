@@ -720,6 +720,53 @@ describe("DashboardBuilderLayoutPage", () => {
     expect(screen.getByText("Compact prompt").closest("article")).toHaveClass("layout-canvas-widget--compact");
   });
 
+  it.each([1, 2])("previews %s-row toggle widgets inline in the layout header", async (height) => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+    const schema: DashboardSchema = {
+      ...placedSchema,
+      widgets: [
+        {
+          id: "ctrl-thinking",
+          valueId: "node-42-thinking",
+          binding: { nodeId: "42", inputName: "thinking" },
+          widgetType: "toggle",
+          title: "Thinking",
+          description: "",
+          defaultValue: false,
+          layout: { x: 0, y: 0, w: 8, h: height },
+        },
+      ],
+    };
+
+    render(
+      <DashboardBuilderLayoutPage
+        workflowId="wf-1"
+        workflowName="Workflow"
+        initialSchema={schema}
+        onBackToWidgets={vi.fn()}
+        onSaveComplete={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    const toggleCell = (await screen.findByText("Thinking")).closest("article") as HTMLElement;
+    const header = toggleCell.querySelector(".layout-canvas-widget__header") as HTMLElement;
+
+    expect(toggleCell).toHaveClass("layout-canvas-widget--compact", "layout-canvas-widget--inline-toggle");
+    if (height === 1) {
+      expect(toggleCell).toHaveClass("layout-canvas-widget--one-row-toggle");
+    } else {
+      expect(toggleCell).not.toHaveClass("layout-canvas-widget--one-row-toggle");
+    }
+    expect(header).toHaveTextContent("Off");
+    expect(toggleCell.querySelector(".layout-canvas-widget__preview-surface")).not.toBeInTheDocument();
+    expect(toggleCell).toHaveStyle({ height: `${height * 32}px` });
+  });
+
   it("resizes a widget down to the current Noofy minimum and serializes that minimum", async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);

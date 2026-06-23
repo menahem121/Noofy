@@ -537,6 +537,40 @@ async def _no_retry():
 
 
 @pytest.mark.anyio
+async def test_run_accepted_dispatch_yields_before_handoff() -> None:
+    queue = WorkflowRunQueueService()
+    record = queue.enqueue(
+        workflow_id="wf",
+        inputs={},
+        options={},
+        run_submission_snapshot=_snapshot(),
+    )
+    lifecycle = RunLifecycleService(queue_service=queue, log_store=LogStore())
+    lifecycle.response_flush_dispatch_delay_seconds = 60
+    calls = 0
+
+    async def submit(queued):
+        nonlocal calls
+        calls += 1
+        return EngineJob(
+            job_id="job-1",
+            workflow_id=queued.workflow_id,
+            engine="comfyui",
+            status="queued",
+        )
+
+    lifecycle.submit_queued_run = submit
+    lifecycle.request_dispatch("workflow_run_accepted")
+    await asyncio.sleep(0)
+
+    assert calls == 0
+    queued = queue.get(record.queue_id)
+    assert queued is not None
+    assert queued.status is WorkflowRunQueueStatus.QUEUED
+    await lifecycle.shutdown()
+
+
+@pytest.mark.anyio
 async def test_run_lifecycle_requeues_under_same_id_until_state_change() -> None:
     queue = WorkflowRunQueueService()
     record = queue.enqueue(

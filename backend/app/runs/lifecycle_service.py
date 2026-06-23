@@ -25,6 +25,8 @@ class RunLifecycleService:
     """Own workflow dispatch wakes, queue loop guards, and job watchers."""
 
     max_records_per_wake = 8
+    response_flush_dispatch_delay_seconds = 0.001
+    _response_flush_dispatch_reasons = frozenset({"workflow_run_accepted"})
 
     def __init__(
         self,
@@ -57,7 +59,18 @@ class RunLifecycleService:
         if self._dispatch_task is not None and not self._dispatch_task.done():
             self._dispatch_requested = True
             return
-        self._dispatch_task = loop.create_task(self._drain(reason))
+        if reason in self._response_flush_dispatch_reasons:
+            self._dispatch_task = loop.create_task(self._deferred_drain(reason))
+        else:
+            self._dispatch_task = loop.create_task(self._drain(reason))
+
+    async def _deferred_drain(self, reason: str) -> None:
+        delay = max(0.0, self.response_flush_dispatch_delay_seconds)
+        if delay > 0:
+            await asyncio.sleep(delay)
+        else:
+            await asyncio.sleep(0)
+        await self._drain(reason)
 
     async def handoff(self, queue_id: str) -> Any:
         self._dispatch_epoch += 1

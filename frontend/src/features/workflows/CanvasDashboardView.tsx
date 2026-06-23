@@ -802,6 +802,7 @@ function CanvasWidgetCell({
   const compact = isGroup
     ? isWidgetGroupLayoutCompact(layout, item.controls.map((child) => child.type))
     : isWidgetLayoutCompact(layout, control!.type);
+  const inlineHeaderToggle = !isGroup && control?.type === "toggle" && layout.h <= 2;
 
   useEffect(() => {
     if (!copiedTextOutput) return undefined;
@@ -820,6 +821,8 @@ function CanvasWidgetCell({
         isEditingLayout ? " layout-canvas-widget--run-editing" : " layout-canvas-widget--readonly"
       }${isMoving ? " layout-canvas-widget--moving" : ""}${
         compact ? " layout-canvas-widget--compact" : ""
+      }${inlineHeaderToggle ? " layout-canvas-widget--inline-toggle" : ""}${
+        inlineHeaderToggle && layout.h <= 1 ? " layout-canvas-widget--one-row-toggle" : ""
       }`}
       layout={layout}
       style={{ height: `${layout.h * DASHBOARD_CANVAS_ROW_HEIGHT}px` }}
@@ -854,8 +857,27 @@ function CanvasWidgetCell({
             {description ? <p>{description}</p> : null}
           </div>
         </div>
-        {control && (supportsGallery || textOutputs.length > 0 || isSeed) ? (
+        {control && (supportsGallery || textOutputs.length > 0 || isSeed || inlineHeaderToggle) ? (
           <div className="layout-canvas-widget__header-actions">
+            {inlineHeaderToggle ? (
+              <div className="canvas-widget-inline-toggle">
+                <InputWidgetContent
+                  control={control}
+                  inputIndex={inputIndex}
+                  inputValues={inputValues}
+                  disabled={isEditingLayout}
+                  onChange={onChange}
+                  onImageUpload={onImageUpload}
+                  onGalleryImageMaskPrepare={onGalleryImageMaskPrepare}
+                  onImageMaskApply={onImageMaskApply}
+                  onAudioUpload={onAudioUpload}
+                  onVideoUpload={onVideoUpload}
+                  onFileUpload={onFileUpload}
+                  onThreeDUpload={onThreeDUpload}
+                  loraBrowserFor={loraBrowserFor}
+                />
+              </div>
+            ) : null}
             {isSeed && seedInputId ? (
               <SeedModeToggleButton
                 mode={seedModes[seedInputId] ?? DEFAULT_SEED_MODE}
@@ -900,46 +922,12 @@ function CanvasWidgetCell({
         ) : null}
       </header>
 
-      <div className="widget-canvas-cell__content">
-        {item.kind === "group" ? (
-          <GroupedCanvasControls
-            item={item}
-            inputIndex={inputIndex}
-            outputIndex={outputIndex}
-            outputImagesByNodeId={outputImagesByNodeId}
-            outputAudiosByNodeId={outputAudiosByNodeId}
-            outputTextsByNodeId={outputTextsByNodeId}
-            outputVideosByNodeId={outputVideosByNodeId}
-            outputFilesByNodeId={outputFilesByNodeId}
-            outputThreeDsByNodeId={outputThreeDsByNodeId}
-            livePreview={livePreview}
-            livePreviewFallbackControlId={livePreviewFallbackControlId}
-            comparisonBeforeImageUrl={comparisonBeforeImageUrl}
-            inputValues={inputValues}
-            outputPreferences={outputPreferences}
-            disabled={isEditingLayout}
-            onChange={onChange}
-            onImageUpload={onImageUpload}
-            onGalleryImageMaskPrepare={onGalleryImageMaskPrepare}
-            onImageMaskApply={onImageMaskApply}
-            onAudioUpload={onAudioUpload}
-            onVideoUpload={onVideoUpload}
-            onFileUpload={onFileUpload}
-            onThreeDUpload={onThreeDUpload}
-            loraBrowserFor={loraBrowserFor}
-            onOutputPreferenceChange={onOutputPreferenceChange}
-            gallerySaveByControlId={gallerySaveByControlId}
-            onSaveOutputToGallery={onSaveOutputToGallery}
-            onCancelOutputGallerySave={onCancelOutputGallerySave}
-            onControlTitleChange={onControlTitleChange}
-            onControlTitleCommit={onControlTitleCommit}
-          />
-        ) : control!.type === "note" ? (
-          <DashboardNoteBody body={control!.description} />
-        ) : isOutput ? (
-          <>
-            <OutputWidgetContent
-              control={control!}
+      {inlineHeaderToggle ? null : (
+        <div className="widget-canvas-cell__content">
+          {item.kind === "group" ? (
+            <GroupedCanvasControls
+              item={item}
+              inputIndex={inputIndex}
               outputIndex={outputIndex}
               outputImagesByNodeId={outputImagesByNodeId}
               outputAudiosByNodeId={outputAudiosByNodeId}
@@ -950,32 +938,68 @@ function CanvasWidgetCell({
               livePreview={livePreview}
               livePreviewFallbackControlId={livePreviewFallbackControlId}
               comparisonBeforeImageUrl={comparisonBeforeImageUrl}
-              imagePreviewEnabled={!isEditingLayout}
+              inputValues={inputValues}
+              outputPreferences={outputPreferences}
+              disabled={isEditingLayout}
+              onChange={onChange}
+              onImageUpload={onImageUpload}
+              onGalleryImageMaskPrepare={onGalleryImageMaskPrepare}
+              onImageMaskApply={onImageMaskApply}
+              onAudioUpload={onAudioUpload}
+              onVideoUpload={onVideoUpload}
+              onFileUpload={onFileUpload}
+              onThreeDUpload={onThreeDUpload}
+              loraBrowserFor={loraBrowserFor}
+              onOutputPreferenceChange={onOutputPreferenceChange}
+              gallerySaveByControlId={gallerySaveByControlId}
+              onSaveOutputToGallery={onSaveOutputToGallery}
+              onCancelOutputGallerySave={onCancelOutputGallerySave}
+              onControlTitleChange={onControlTitleChange}
+              onControlTitleCommit={onControlTitleCommit}
             />
-            {supportsGallery && onSaveOutputToGallery && onCancelOutputGallerySave ? (
-              <div className="widget-output-gallery-action">
-                <GallerySaveAction status={gallerySaveByControlId?.[control!.id]} onSave={() => onSaveOutputToGallery(control!.id)} onCancel={() => onCancelOutputGallerySave(control!.id)} />
-              </div>
-            ) : null}
-          </>
-        ) : (
-          <InputWidgetContent
-            control={control!}
-            inputIndex={inputIndex}
-            inputValues={inputValues}
-            disabled={isEditingLayout}
-            onChange={onChange}
-            onImageUpload={onImageUpload}
-            onGalleryImageMaskPrepare={onGalleryImageMaskPrepare}
-            onImageMaskApply={onImageMaskApply}
-            onAudioUpload={onAudioUpload}
-            onVideoUpload={onVideoUpload}
-            onFileUpload={onFileUpload}
-            onThreeDUpload={onThreeDUpload}
-            loraBrowserFor={loraBrowserFor}
-          />
-        )}
-      </div>
+          ) : control!.type === "note" ? (
+            <DashboardNoteBody body={control!.description} />
+          ) : isOutput ? (
+            <>
+              <OutputWidgetContent
+                control={control!}
+                outputIndex={outputIndex}
+                outputImagesByNodeId={outputImagesByNodeId}
+                outputAudiosByNodeId={outputAudiosByNodeId}
+                outputTextsByNodeId={outputTextsByNodeId}
+                outputVideosByNodeId={outputVideosByNodeId}
+                outputFilesByNodeId={outputFilesByNodeId}
+                outputThreeDsByNodeId={outputThreeDsByNodeId}
+                livePreview={livePreview}
+                livePreviewFallbackControlId={livePreviewFallbackControlId}
+                comparisonBeforeImageUrl={comparisonBeforeImageUrl}
+                imagePreviewEnabled={!isEditingLayout}
+              />
+              {supportsGallery && onSaveOutputToGallery && onCancelOutputGallerySave ? (
+                <div className="widget-output-gallery-action">
+                  <GallerySaveAction status={gallerySaveByControlId?.[control!.id]} onSave={() => onSaveOutputToGallery(control!.id)} onCancel={() => onCancelOutputGallerySave(control!.id)} />
+                </div>
+              ) : null}
+            </>
+          ) : (
+            <InputWidgetContent
+              control={control!}
+              inputIndex={inputIndex}
+              inputValues={inputValues}
+              disabled={isEditingLayout}
+              onChange={onChange}
+              onImageUpload={onImageUpload}
+              onGalleryImageMaskPrepare={onGalleryImageMaskPrepare}
+              onImageMaskApply={onImageMaskApply}
+              onAudioUpload={onAudioUpload}
+              onVideoUpload={onVideoUpload}
+              onFileUpload={onFileUpload}
+              onThreeDUpload={onThreeDUpload}
+              loraBrowserFor={loraBrowserFor}
+            />
+          )}
+        </div>
+      )}
       {isEditingLayout ? <DashboardCanvasResizeHandles label={title} onResizeStart={(handle, event) => onResizeStart(event, handle)} /> : null}
     </DashboardCanvasWidgetShell>
   );
