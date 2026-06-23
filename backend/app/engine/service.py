@@ -1770,6 +1770,8 @@ def _workflow_runner_unavailable_result(
 
 
 def _workflow_runner_start_needs_reprepare(payload: dict[str, object]) -> bool:
+    if payload.get("status") == "needs_reprepare":
+        return True
     error = payload.get("error")
     if not isinstance(error, str):
         return False

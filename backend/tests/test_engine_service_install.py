@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+import app.runtime.models.model_store as model_store_module
 import app.runtime.runners.lifecycle_service as runner_lifecycle_module
 from app.artifacts import AssetOwnership, ModelVerificationLevel
 from app.diagnostics import LogStore
@@ -806,7 +807,9 @@ async def test_start_workflow_runner_uses_effective_prepared_artifact_fingerprin
 
 
 @pytest.mark.anyio
-async def test_start_workflow_runner_reuses_compatible_resident_runner(tmp_path: Path) -> None:
+async def test_start_workflow_runner_reuses_compatible_resident_runner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     packages_dir = tmp_path / "packages"
     capsule_payload = _runner_capsule_payload(runner_char="2")
     _write_workflow_with_capsule(packages_dir, "runner_workflow", capsule_payload)
@@ -825,6 +828,13 @@ async def test_start_workflow_runner_reuses_compatible_resident_runner(tmp_path:
     await service.prepare_workflow("runner_workflow")
 
     first = await service.start_workflow_runner("runner_workflow")
+    monkeypatch.setattr(
+        service.workflow_runner_lifecycle_service,
+        "_runner_launch_spec",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("launch spec should not be rebuilt for resident reuse")
+        ),
+    )
     second = await service.start_workflow_runner("runner_workflow")
 
     assert coordinator is not None
@@ -1691,7 +1701,7 @@ async def test_run_does_not_reuse_bound_runner_from_stale_runtime_fingerprint(
 
 
 @pytest.mark.anyio
-async def test_start_workflow_runner_fails_when_ready_state_lacks_runtime_artifacts(tmp_path: Path) -> None:
+async def test_start_workflow_runner_needs_reprepare_when_ready_state_lacks_runtime_artifacts(tmp_path: Path) -> None:
     packages_dir = tmp_path / "packages"
     capsule_payload = {
         "schema_version": "0.1.0",
@@ -1744,10 +1754,17 @@ async def test_start_workflow_runner_fails_when_ready_state_lacks_runtime_artifa
         include_workspace_preparer=False,
     )
     await service.prepare_workflow("runner_workflow")
+    capsule_lock = service.capsule_loader.get_bundled_capsule_lock("runner_workflow")
+    service.capsule_installer.install_state_store.update(
+        capsule_lock.runtime.capsule_fingerprint,
+        status=InstallStatus.READY,
+        smoke_test_status=SmokeTestStatus.PASSED,
+    )
 
     result = await service.start_workflow_runner("runner_workflow")
 
-    assert result["status"] == "failed"
+    assert result["status"] == "needs_reprepare"
+    assert result["reason_code"] == "missing_runtime_artifact_paths"
     assert "Prepared runtime artifact paths are missing" in result["error"]
     assert coordinator is not None
     assert coordinator.started_specs == []
@@ -1782,7 +1799,8 @@ async def test_start_workflow_runner_blocks_staged_runtime_manifests(tmp_path: P
 
     result = await service.start_workflow_runner("runner_workflow")
 
-    assert result["status"] == "failed"
+    assert result["status"] == "needs_reprepare"
+    assert result["reason_code"] == "stale_runtime_artifact"
     assert "Prepared runtime artifact is not ready" in result["error"]
     assert "runner workspace manifest status checking_compatibility" in result["error"]
     assert coordinator is not None
@@ -1812,7 +1830,8 @@ async def test_start_workflow_runner_blocks_invalid_runtime_manifest(tmp_path: P
 
     result = await service.start_workflow_runner("runner_workflow")
 
-    assert result["status"] == "failed"
+    assert result["status"] == "needs_reprepare"
+    assert result["reason_code"] == "invalid_runtime_artifact_manifest"
     assert "Prepared runtime artifact manifest is invalid" in result["error"]
     assert coordinator is not None
     assert coordinator.started_specs == []
@@ -1844,7 +1863,8 @@ async def test_start_workflow_runner_blocks_manifest_fingerprint_mismatch(tmp_pa
 
     result = await service.start_workflow_runner("runner_workflow")
 
-    assert result["status"] == "failed"
+    assert result["status"] == "needs_reprepare"
+    assert result["reason_code"] == "stale_runtime_artifact"
     assert "runner workspace manifest fingerprint mismatch" in result["error"]
     assert "runner workspace dependency environment mismatch" in result["error"]
     assert coordinator is not None
@@ -1949,7 +1969,8 @@ async def test_start_workflow_runner_blocks_missing_model_view_file(tmp_path: Pa
 
     result = await service.start_workflow_runner("runner_workflow")
 
-    assert result["status"] == "failed"
+    assert result["status"] == "needs_reprepare"
+    assert result["reason_code"] == "stale_model_view"
     assert "model view file missing for runner-model" in result["error"]
     assert coordinator is not None
     assert coordinator.started_specs == []
@@ -1986,8 +2007,133 @@ async def test_start_workflow_runner_blocks_missing_model_blob(tmp_path: Path) -
 
     result = await service.start_workflow_runner("runner_workflow")
 
-    assert result["status"] == "failed"
+    assert result["status"] == "needs_reprepare"
+    assert result["reason_code"] == "stale_model_view"
     assert "model blob missing for runner-model" in result["error"]
+    assert coordinator is not None
+    assert coordinator.started_specs == []
+
+
+@pytest.mark.anyio
+async def test_start_workflow_runner_does_not_hash_model_refs_during_launch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = b"runner-model-no-launch-hash"
+    packages_dir = tmp_path / "packages"
+    capsule_payload = _runner_capsule_payload_with_model(payload, runner_char="c")
+    _write_workflow_with_capsule(packages_dir, "runner_workflow", capsule_payload)
+    coordinator = None
+
+    async def downloader(url: str, dest: Path) -> int:
+        dest.write_bytes(payload)
+        return len(payload)
+
+    def coordinator_factory(supervisor: RunnerSupervisor) -> RecordingRunnerCoordinator:
+        nonlocal coordinator
+        coordinator = RecordingRunnerCoordinator(supervisor)
+        return coordinator
+
+    service = _build_service(
+        tmp_path,
+        packages_dir=packages_dir,
+        downloader=downloader,
+        runner_coordinator_factory=coordinator_factory,
+    )
+    await service.prepare_workflow("runner_workflow")
+
+    def fail_if_hashed(*args, **kwargs):
+        raise AssertionError("runner launch must not hash model bytes")
+
+    monkeypatch.setattr(runner_lifecycle_module, "_sha256_file", fail_if_hashed, raising=False)
+    monkeypatch.setattr(model_store_module, "_sha256_file", fail_if_hashed)
+
+    result = await service.start_workflow_runner("runner_workflow")
+
+    assert result["status"] == RunnerStatus.READY.value
+    assert coordinator is not None
+    assert len(coordinator.started_specs) == 1
+
+
+@pytest.mark.anyio
+async def test_start_workflow_runner_blocks_invalid_model_blob_sidecar(
+    tmp_path: Path,
+) -> None:
+    payload = b"runner-model-invalid-sidecar"
+    packages_dir = tmp_path / "packages"
+    capsule_payload = _runner_capsule_payload_with_model(payload, runner_char="d")
+    _write_workflow_with_capsule(packages_dir, "runner_workflow", capsule_payload)
+    coordinator = None
+
+    async def downloader(url: str, dest: Path) -> int:
+        dest.write_bytes(payload)
+        return len(payload)
+
+    def coordinator_factory(supervisor: RunnerSupervisor) -> RecordingRunnerCoordinator:
+        nonlocal coordinator
+        coordinator = RecordingRunnerCoordinator(supervisor)
+        return coordinator
+
+    service = _build_service(
+        tmp_path,
+        packages_dir=packages_dir,
+        downloader=downloader,
+        runner_coordinator_factory=coordinator_factory,
+    )
+    await service.prepare_workflow("runner_workflow")
+    state = service.capsule_installer.install_state_store.get("runner_workflow-fp")
+    assert state is not None
+    blob_path = Path(state.model_references[0].blob_path or "")
+    record_path = blob_path.with_name("verified.json")
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    record["sha256"] = "0" * 64
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+
+    result = await service.start_workflow_runner("runner_workflow")
+
+    assert result["status"] == "needs_reprepare"
+    assert result["reason_code"] == "stale_model_view"
+    assert "model blob verification record stale or missing for runner-model" in result["error"]
+    assert coordinator is not None
+    assert coordinator.started_specs == []
+
+
+@pytest.mark.anyio
+async def test_start_workflow_runner_blocks_model_view_size_mismatch(
+    tmp_path: Path,
+) -> None:
+    payload = b"runner-model-size-mismatch"
+    packages_dir = tmp_path / "packages"
+    capsule_payload = _runner_capsule_payload_with_model(payload, runner_char="e")
+    _write_workflow_with_capsule(packages_dir, "runner_workflow", capsule_payload)
+    coordinator = None
+
+    async def downloader(url: str, dest: Path) -> int:
+        dest.write_bytes(payload)
+        return len(payload)
+
+    def coordinator_factory(supervisor: RunnerSupervisor) -> RecordingRunnerCoordinator:
+        nonlocal coordinator
+        coordinator = RecordingRunnerCoordinator(supervisor)
+        return coordinator
+
+    service = _build_service(
+        tmp_path,
+        packages_dir=packages_dir,
+        downloader=downloader,
+        runner_coordinator_factory=coordinator_factory,
+    )
+    await service.prepare_workflow("runner_workflow")
+    state = service.capsule_installer.install_state_store.get("runner_workflow-fp")
+    assert state is not None
+    materialized_path = Path(state.model_references[0].materialized_path or "")
+    materialized_path.unlink()
+    materialized_path.write_bytes(payload + b"-changed-size")
+
+    result = await service.start_workflow_runner("runner_workflow")
+
+    assert result["status"] == "needs_reprepare"
+    assert result["reason_code"] == "stale_model_view"
+    assert "model view file size mismatch for runner-model" in result["error"]
     assert coordinator is not None
     assert coordinator.started_specs == []
 
@@ -2486,7 +2632,8 @@ async def test_start_workflow_runner_blocks_missing_user_local_model_source(tmp_
 
     result = await service.start_workflow_runner("runner_workflow")
 
-    assert result["status"] == "failed"
+    assert result["status"] == "needs_reprepare"
+    assert result["reason_code"] == "stale_model_view"
     assert "local model source missing for checkpoints/creator-local-model.safetensors" in result["error"]
     assert coordinator is not None
     assert coordinator.started_specs == []

@@ -13,7 +13,7 @@ import pytest
 import app.runtime.models.model_store as model_store_module
 from app.artifacts import AssetOwnership, ModelVerificationLevel
 from app.diagnostics import LogStore
-from app.runtime.dependencies.isolation import ModelLock
+from app.runtime.dependencies.isolation import InstalledModelReference, ModelLock
 from app.runtime.models.model_store import (
     LocalModelRequirement,
     ModelDownloadError,
@@ -40,6 +40,7 @@ def _build_store(
     *,
     local_model_roots: list[Path] | None = None,
     owned_model_root: Path | None = None,
+    local_model_identity_store: LocalModelIdentityStore | None = None,
 ) -> tuple[ModelStore, LogStore]:
     log_store = LogStore()
     store = ModelStore(
@@ -48,6 +49,7 @@ def _build_store(
         downloader=downloader,
         local_model_roots=local_model_roots,
         owned_model_root=owned_model_root,
+        local_model_identity_store=local_model_identity_store,
     )
     return store, log_store
 
@@ -1088,6 +1090,135 @@ async def test_unchanged_copy_target_reused_via_stat_cache(
     assert repeat.model_references[0].materialized_file_verified is True
     assert counter.count == 0
     assert Path(repeat.model_references[0].materialized_path).read_bytes() == payload
+
+
+@pytest.mark.anyio
+async def test_launch_validation_accepts_linked_model_view_without_hashing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = b"launch-linked-view-payload"
+    lock = _model_lock(payload)
+    store, _ = _build_store(tmp_path, _make_downloader({lock.source_urls[0]: payload}))
+    view = await store.materialize_model_view(view_id="capsule-fp", model_locks=[lock])
+    assert view.model_references[0].materialization_strategy in {"hardlink", "symlink"}
+
+    monkeypatch.setattr(
+        model_store_module,
+        "_sha256_file",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("launch validation must not hash model bytes")
+        ),
+    )
+
+    assert store.validate_installed_model_references_for_launch(view.model_references) == []
+
+
+@pytest.mark.anyio
+async def test_launch_validation_accepts_copied_model_view_from_identity_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = b"launch-copy-view-payload"
+    lock = _model_lock(payload)
+    store, _ = _build_store(
+        tmp_path,
+        _make_downloader({lock.source_urls[0]: payload}),
+        local_model_identity_store=_identity_store(tmp_path),
+    )
+
+    monkeypatch.setattr(
+        model_store_module.os,
+        "link",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("cross-device link")),
+    )
+    monkeypatch.setattr(
+        model_store_module.os,
+        "symlink",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("symlink denied")),
+    )
+    view = await store.materialize_model_view(view_id="capsule-fp", model_locks=[lock])
+    assert view.model_references[0].materialization_strategy == "copy"
+    monkeypatch.setattr(
+        model_store_module,
+        "_sha256_file",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("launch validation must not hash copied model bytes")
+        ),
+    )
+
+    assert store.validate_installed_model_references_for_launch(view.model_references) == []
+
+
+@pytest.mark.anyio
+async def test_launch_validation_rejects_stale_copied_model_view_without_hashing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = b"launch-copy-stale-payload"
+    lock = _model_lock(payload)
+    store, _ = _build_store(
+        tmp_path,
+        _make_downloader({lock.source_urls[0]: payload}),
+        local_model_identity_store=_identity_store(tmp_path),
+    )
+
+    monkeypatch.setattr(
+        model_store_module.os,
+        "link",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("cross-device link")),
+    )
+    monkeypatch.setattr(
+        model_store_module.os,
+        "symlink",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("symlink denied")),
+    )
+    view = await store.materialize_model_view(view_id="capsule-fp", model_locks=[lock])
+    materialized_path = Path(view.model_references[0].materialized_path or "")
+    materialized_path.write_bytes(b"X" * len(payload))
+    monkeypatch.setattr(
+        model_store_module,
+        "_sha256_file",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("launch validation must not repair stale copied views by hashing")
+        ),
+    )
+
+    invalid = store.validate_installed_model_references_for_launch(view.model_references)
+
+    assert invalid == [
+        "model view file has no valid materialized identity record for model-1"
+    ]
+
+
+def test_launch_validation_rejects_materialized_verified_flag_without_stat_proof(
+    tmp_path: Path,
+) -> None:
+    payload = b"flag-alone-is-not-proof"
+    sha256 = hashlib.sha256(payload).hexdigest()
+    blob_path = tmp_path / "blob"
+    materialized_path = tmp_path / "materialized" / "model.safetensors"
+    blob_path.write_bytes(payload)
+    materialized_path.parent.mkdir()
+    materialized_path.write_bytes(payload)
+    store, _ = _build_store(tmp_path, _make_downloader({}))
+    ref = InstalledModelReference(
+        requirement_id="model-1",
+        comfyui_folder="checkpoints",
+        filename="model.safetensors",
+        verification_level=ModelVerificationLevel.SHA256_SIZE,
+        asset_ownership=AssetOwnership.NOOFY_DOWNLOADED,
+        model_id="model-1",
+        sha256=f"sha256:{sha256}",
+        size_bytes=len(payload),
+        blob_path=str(blob_path),
+        materialized_path=str(materialized_path),
+        materialization_strategy="copy",
+        materialized_file_verified=True,
+    )
+
+    invalid = store.validate_installed_model_references_for_launch([ref])
+
+    assert invalid == [
+        "model blob verification record stale or missing for model-1"
+    ]
 
 
 @pytest.mark.anyio

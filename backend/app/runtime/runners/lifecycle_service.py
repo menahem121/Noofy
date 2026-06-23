@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import hashlib
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -25,6 +24,7 @@ from app.runtime.dependencies.isolation import (
     DependencyEnvManifest,
     InstallState,
     InstallStatus,
+    InstalledModelReference,
     RunnerWorkspaceManifest,
     SmokeTestStatus,
     TrustLevel,
@@ -74,6 +74,19 @@ _PREPARABLE_TRUST_LEVELS = {
     TrustLevel.QUARANTINED_COMMUNITY,
 }
 _SLOW_RUNNER_START_STAGE_SECONDS = 1.0
+
+
+class PreparedRuntimeArtifactError(ValueError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason_code: str,
+        start_status: str = "needs_reprepare",
+    ) -> None:
+        super().__init__(message)
+        self.reason_code = reason_code
+        self.start_status = start_status
 
 
 class WorkflowRunnerLifecycleService:
@@ -1025,6 +1038,7 @@ class WorkflowRunnerLifecycleService:
 
         reused = self._reuse_resident_runner_from_ready_install_state(
             workflow_id,
+            capsule_lock,
             install_state,
         )
         if reused is not None:
@@ -1038,6 +1052,27 @@ class WorkflowRunnerLifecycleService:
                 "runner_launch_spec",
                 time.monotonic() - launch_spec_started_at,
             )
+        except PreparedRuntimeArtifactError as exc:
+            self.log_store.add(
+                "warning",
+                "Workflow runner start needs workflow reprepare",
+                "runtime.runners.lifecycle_service",
+                workflow_id=workflow_id,
+                details={
+                    "capsule_fingerprint": capsule_lock.runtime.capsule_fingerprint,
+                    "reason_code": exc.reason_code,
+                    "error": str(exc),
+                },
+            )
+            return {
+                "workflow_id": workflow_id,
+                "status": exc.start_status,
+                "runner": None,
+                "pid": None,
+                "install_status": install_state.status.value,
+                "reason_code": exc.reason_code,
+                "error": str(exc),
+            }
         except ValueError as exc:
             self.log_store.add(
                 "error",
@@ -1522,26 +1557,24 @@ class WorkflowRunnerLifecycleService:
     def _reuse_resident_runner_from_ready_install_state(
         self,
         workflow_id: str,
+        capsule_lock: CapsuleLock,
         install_state: InstallState,
     ) -> dict[str, object] | None:
-        compatibility_key = (
-            install_state.runner_process_compatibility_key
-            or install_state.runner_workspace_fingerprint
+        if install_state.smoke_test_status is not SmokeTestStatus.PASSED:
+            return None
+        compatibility_key = _ready_install_runner_process_compatibility_key(
+            capsule_lock,
+            install_state,
         )
         if not compatibility_key:
             return None
         decision = self.runner_supervisor.runner_selection_for(
             runner_process_compatibility_key=compatibility_key,
+            memory_class=_memory_class_for_runtime_backend(capsule_lock.runtime.gpu_backend),
         )
-        if (
-            decision.action is not RunnerSelectionAction.REUSE
-            or decision.runner_id is None
-        ):
+        if decision.action is not RunnerSelectionAction.REUSE or decision.runner_id is None:
             return None
-        descriptor = self.runner_supervisor.bind_workflow_runner(
-            workflow_id,
-            decision.runner_id,
-        )
+        descriptor = self.runner_supervisor.bind_workflow_runner(workflow_id, decision.runner_id)
         self.log_store.add(
             "info",
             "Workflow runner reused",
@@ -1566,6 +1599,12 @@ class WorkflowRunnerLifecycleService:
 
     def _runner_launch_spec(self, capsule_lock: CapsuleLock, install_state: InstallState) -> RunnerLaunchSpec:
         assert self.runtime_manager is not None, "runtime_manager required for runner launch"
+        assert self.capsule_installer is not None, "capsule_installer required for runner launch"
+        if install_state.smoke_test_status is not SmokeTestStatus.PASSED:
+            raise ValueError(
+                "Prepared runtime smoke test has not passed: "
+                f"{install_state.smoke_test_status.value}"
+            )
         (
             dependency_env_path,
             runner_workspace_path,
@@ -1575,13 +1614,11 @@ class WorkflowRunnerLifecycleService:
             install_state,
             capsule_lock,
             expected_python_version=capsule_lock.runtime.python_version,
+            model_reference_validator=(
+                self.capsule_installer.model_store.validate_installed_model_references_for_launch
+            ),
         )
         self._validate_runtime_python_abi(capsule_lock)
-        if install_state.smoke_test_status is not SmokeTestStatus.PASSED:
-            raise ValueError(
-                "Prepared runtime smoke test has not passed: "
-                f"{install_state.smoke_test_status.value}"
-            )
         spec = _workflow_runner_launch_spec(
             capsule_lock,
             dependency_env_path=dependency_env_path,
@@ -1819,14 +1856,30 @@ def _memory_class_for_runtime_backend(gpu_backend: str) -> RunnerMemoryClass:
     return RunnerMemoryClass.CPU_ONLY if gpu_backend.lower() == "cpu" else RunnerMemoryClass.GPU_HEAVY
 
 
+def _ready_install_runner_process_compatibility_key(
+    capsule_lock: CapsuleLock,
+    install_state: InstallState,
+) -> str | None:
+    return (
+        install_state.runner_process_compatibility_key
+        or install_state.runner_workspace_fingerprint
+        or capsule_lock.runtime.runner_process_compatibility_key
+        or capsule_lock.runtime.runner_fingerprint
+    )
+
+
 def _prepared_runtime_paths(
     install_state: InstallState,
     capsule_lock: CapsuleLock,
     *,
     expected_python_version: str | None = None,
+    model_reference_validator: Callable[[list[InstalledModelReference]], list[str]],
 ) -> tuple[Path, Path, str, str]:
     if not install_state.dependency_env_path or not install_state.runner_workspace_path:
-        raise ValueError("Prepared runtime artifact paths are missing; prepare the workflow again.")
+        raise PreparedRuntimeArtifactError(
+            "Prepared runtime artifact paths are missing; prepare the workflow again.",
+            reason_code="missing_runtime_artifact_paths",
+        )
 
     dependency_env_path = Path(install_state.dependency_env_path)
     runner_workspace_path = Path(install_state.runner_workspace_path)
@@ -1838,10 +1891,19 @@ def _prepared_runtime_paths(
     if not (runner_workspace_path / "main.py").exists():
         missing.append("runner workspace entrypoint")
     if missing:
-        raise ValueError(f"Prepared runtime artifact is missing: {', '.join(missing)}")
+        raise PreparedRuntimeArtifactError(
+            f"Prepared runtime artifact is missing: {', '.join(missing)}",
+            reason_code="missing_runtime_artifact",
+        )
 
-    dependency_manifest = _read_dependency_manifest(dependency_env_path / "manifest.json")
-    runner_manifest = _read_runner_workspace_manifest(runner_workspace_path / "manifest.json")
+    try:
+        dependency_manifest = _read_dependency_manifest(dependency_env_path / "manifest.json")
+        runner_manifest = _read_runner_workspace_manifest(runner_workspace_path / "manifest.json")
+    except ValueError as exc:
+        raise PreparedRuntimeArtifactError(
+            str(exc),
+            reason_code="invalid_runtime_artifact_manifest",
+        ) from exc
     expected_dependency_fingerprint = (
         install_state.dependency_env_fingerprint
         or capsule_lock.runtime.dependency_env_fingerprint
@@ -1851,6 +1913,7 @@ def _prepared_runtime_paths(
         or capsule_lock.runtime.runner_fingerprint
     )
     not_ready: list[str] = []
+    fatal_not_ready: list[str] = []
     if dependency_manifest.status is not InstallStatus.READY:
         not_ready.append(f"dependency environment manifest status {dependency_manifest.status.value}")
     if runner_manifest.status is not InstallStatus.READY:
@@ -1861,16 +1924,28 @@ def _prepared_runtime_paths(
         expected_python_version is not None
         and dependency_manifest.python_version != expected_python_version
     ):
-        not_ready.append(
+        fatal_not_ready.append(
             "dependency environment Python ABI mismatch"
         )
     if runner_manifest.fingerprint != expected_runner_fingerprint:
         not_ready.append("runner workspace manifest fingerprint mismatch")
     if runner_manifest.dependency_env_fingerprint != dependency_manifest.fingerprint:
         not_ready.append("runner workspace dependency environment mismatch")
-    not_ready.extend(_invalid_model_references(install_state))
+    invalid_model_references = model_reference_validator(install_state.model_references)
+    not_ready.extend(invalid_model_references)
+    if fatal_not_ready:
+        details = fatal_not_ready + not_ready
+        raise ValueError(f"Prepared runtime artifact is not ready: {', '.join(details)}")
     if not_ready:
-        raise ValueError(f"Prepared runtime artifact is not ready: {', '.join(not_ready)}")
+        reason_code = (
+            "stale_model_view"
+            if invalid_model_references
+            else "stale_runtime_artifact"
+        )
+        raise PreparedRuntimeArtifactError(
+            f"Prepared runtime artifact is not ready: {', '.join(not_ready)}",
+            reason_code=reason_code,
+        )
     return (
         dependency_env_path,
         runner_workspace_path,
@@ -1895,54 +1970,6 @@ def _read_runner_workspace_manifest(path: Path) -> RunnerWorkspaceManifest:
         raise ValueError(f"Prepared runtime artifact manifest is unreadable: {path}") from exc
     except ValidationError as exc:
         raise ValueError(f"Prepared runtime artifact manifest is invalid: {path}") from exc
-
-
-def _invalid_model_references(install_state: InstallState) -> list[str]:
-    from app.artifacts import AssetOwnership
-    invalid: list[str] = []
-    for ref in install_state.model_references:
-        if ref.asset_ownership is AssetOwnership.USER_LOCAL:
-            if not ref.source_path:
-                invalid.append(f"local model reference missing source path for {ref.requirement_id}")
-                continue
-            source_path = Path(ref.source_path)
-            if not source_path.exists():
-                invalid.append(f"local model source missing for {ref.requirement_id}")
-                continue
-        else:
-            if not ref.blob_path:
-                invalid.append(f"model reference missing blob path for {ref.requirement_id}")
-                continue
-            blob_path = Path(ref.blob_path)
-            if not blob_path.exists():
-                invalid.append(f"model blob missing for {ref.requirement_id}")
-                continue
-        if not ref.materialized_path:
-            invalid.append(f"model reference missing materialized path for {ref.requirement_id}")
-            continue
-        materialized_path = Path(ref.materialized_path)
-        if not materialized_path.exists():
-            invalid.append(f"model view file missing for {ref.requirement_id}")
-            continue
-        if ref.size_bytes is not None and materialized_path.stat().st_size != ref.size_bytes:
-            invalid.append(f"model view file size mismatch for {ref.requirement_id}")
-            continue
-        if ref.sha256 is not None:
-            expected = ref.sha256.removeprefix("sha256:")
-            if _sha256_file(materialized_path) != expected:
-                invalid.append(f"model view file hash mismatch for {ref.requirement_id}")
-    return invalid
-
-
-def _sha256_file(path: Path, chunk_size: int = 1 << 20) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as file:
-        while True:
-            chunk = file.read(chunk_size)
-            if not chunk:
-                break
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _unresolved_model_requirement_message(

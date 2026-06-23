@@ -141,8 +141,10 @@ class ResolvedLocalModel:
 
 
 def _sha256_file(path: Path, chunk_size: int = 1 << 20) -> str:
-    digest = hashlib.sha256()
     with path.open("rb") as file:
+        if hasattr(hashlib, "file_digest"):
+            return hashlib.file_digest(file, "sha256").hexdigest()
+        digest = hashlib.sha256()
         while True:
             chunk = file.read(chunk_size)
             if not chunk:
@@ -693,6 +695,22 @@ class ModelStore:
     def is_materialized(self, model_lock: ModelLock) -> bool:
         return self._materialized_path(model_lock).exists()
 
+    def validate_installed_model_references_for_launch(
+        self, refs: list[InstalledModelReference]
+    ) -> list[str]:
+        """Cheap launch-time validation for prepared model views.
+
+        This intentionally never hashes model bytes. Launch can trust existing
+        verified stat evidence, or return a stale-model reason so prepare can
+        repair the view through the normal visible workflow.
+        """
+        invalid: list[str] = []
+        for ref in refs:
+            reason = self._invalid_installed_model_reference_for_launch(ref)
+            if reason is not None:
+                invalid.append(reason)
+        return invalid
+
     def sweep_orphan_materialized_links(self) -> int:
         """Remove materialized links/files whose recorded model blob no longer exists."""
         views_dir = self.materialized_dir / "views"
@@ -1171,6 +1189,105 @@ class ModelStore:
         )
         return strategy, verified
 
+    def _invalid_installed_model_reference_for_launch(
+        self, ref: InstalledModelReference
+    ) -> str | None:
+        expected_sha256 = _normalize_optional_sha256(ref.sha256)
+        if expected_sha256 is None:
+            return f"model reference missing sha256 for {ref.requirement_id}"
+        materialized_path = self._launch_materialized_path(ref)
+        if isinstance(materialized_path, str):
+            return materialized_path
+        try:
+            materialized_stat = materialized_path.stat()
+        except OSError:
+            return f"model view file missing for {ref.requirement_id}"
+        if ref.size_bytes is not None and materialized_stat.st_size != ref.size_bytes:
+            return f"model view file size mismatch for {ref.requirement_id}"
+        if ref.materialized_file_verified is not True:
+            return f"model view file has no verified materialization record for {ref.requirement_id}"
+
+        if ref.asset_ownership is AssetOwnership.USER_LOCAL:
+            return self._invalid_user_local_model_reference_for_launch(
+                ref,
+                expected_sha256=expected_sha256,
+                materialized_path=materialized_path,
+            )
+        return self._invalid_store_model_reference_for_launch(
+            ref,
+            expected_sha256=expected_sha256,
+            materialized_path=materialized_path,
+        )
+
+    def _launch_materialized_path(
+        self, ref: InstalledModelReference
+    ) -> Path | str:
+        if not ref.materialized_path:
+            return f"model reference missing materialized path for {ref.requirement_id}"
+        materialized_path = Path(ref.materialized_path)
+        if not materialized_path.exists():
+            return f"model view file missing for {ref.requirement_id}"
+        return materialized_path
+
+    def _invalid_store_model_reference_for_launch(
+        self,
+        ref: InstalledModelReference,
+        *,
+        expected_sha256: str,
+        materialized_path: Path,
+    ) -> str | None:
+        if not ref.blob_path:
+            return f"model reference missing blob path for {ref.requirement_id}"
+        blob_path = Path(ref.blob_path)
+        try:
+            blob_stat = blob_path.stat()
+        except OSError:
+            return f"model blob missing for {ref.requirement_id}"
+        if ref.size_bytes is not None and blob_stat.st_size != ref.size_bytes:
+            return f"model blob size mismatch for {ref.requirement_id}"
+        record = self._read_blob_verification(blob_path)
+        if record is None or not _blob_verification_matches(
+            record, blob_stat, expected_sha256
+        ):
+            return f"model blob verification record stale or missing for {ref.requirement_id}"
+        if _samefile(blob_path, materialized_path):
+            return None
+        if self._cached_target_sha256(
+            materialized_path,
+            comfyui_folder=ref.comfyui_folder,
+            filename=ref.filename,
+        ) == expected_sha256:
+            return None
+        return f"model view file has no valid materialized identity record for {ref.requirement_id}"
+
+    def _invalid_user_local_model_reference_for_launch(
+        self,
+        ref: InstalledModelReference,
+        *,
+        expected_sha256: str,
+        materialized_path: Path,
+    ) -> str | None:
+        if not ref.source_path:
+            return f"local model reference missing source path for {ref.requirement_id}"
+        source_path = Path(ref.source_path)
+        try:
+            source_stat = source_path.stat()
+        except OSError:
+            return f"local model source missing for {ref.requirement_id}"
+        if ref.size_bytes is not None and source_stat.st_size != ref.size_bytes:
+            return f"local model source size mismatch for {ref.requirement_id}"
+        if self._cached_local_source_sha256_for_launch(source_path) != expected_sha256:
+            return f"local model source identity record stale or missing for {ref.requirement_id}"
+        if _samefile(source_path, materialized_path):
+            return None
+        if self._cached_target_sha256(
+            materialized_path,
+            comfyui_folder=ref.comfyui_folder,
+            filename=ref.filename,
+        ) == expected_sha256:
+            return None
+        return f"model view file has no valid materialized identity record for {ref.requirement_id}"
+
     def _reuse_existing_target(
         self,
         source_path: Path,
@@ -1268,6 +1385,30 @@ class ModelStore:
         except Exception as exc:
             self._log_identity_cache_failure("lookup", target, exc)
             return None
+
+    def _cached_local_source_sha256_for_launch(self, path: Path) -> str | None:
+        if self.local_model_identity_store is None:
+            return None
+        root = self._local_model_root_for(path)
+        if root is None:
+            return None
+        context = self._local_root_context(path, root)
+        try:
+            return self.local_model_identity_store.get_valid_hash(path, context)
+        except Exception as exc:
+            self._log_identity_cache_failure("lookup", path, exc)
+            return None
+
+    def _local_model_root_for(self, path: Path) -> Path | None:
+        path_resolved = path.expanduser().resolve(strict=False)
+        for root in self.local_model_roots:
+            root_resolved = root.expanduser().resolve(strict=False)
+            try:
+                path_resolved.relative_to(root_resolved)
+            except ValueError:
+                continue
+            return root
+        return None
 
     def _remember_target_sha256(
         self, target: Path, sha256: str, *, comfyui_folder: str, filename: str
@@ -1654,6 +1795,19 @@ def _safe_fingerprint(fingerprint: str) -> str:
         .replace("\\", "_")
         .replace(":", "_")
     )
+
+
+def _normalize_optional_sha256(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return _normalize_sha256(value)
+
+
+def _samefile(left: Path, right: Path) -> bool:
+    try:
+        return os.path.samefile(left, right)
+    except OSError:
+        return False
 
 
 def _model_view_conflict_message(comfyui_folder: str, filename: str) -> str:
