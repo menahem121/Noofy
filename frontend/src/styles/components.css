@@ -2264,6 +2264,7 @@ button.dashboard-image-input__surface {
   min-height: 184px;
   padding: 0;
   border-style: solid;
+  cursor: zoom-in;
   background:
     radial-gradient(circle at center, rgba(139, 92, 246, 0.08), transparent 68%),
     rgba(28, 27, 29, 0.86);
@@ -2830,7 +2831,31 @@ button.dashboard-image-input__surface {
   align-content: start;
 }
 
+.dashboard-video-input__preview-button {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: rgba(20, 19, 22, 0.72);
+  cursor: pointer;
+}
+
+.dashboard-video-input__preview-button:hover,
+.dashboard-video-input__preview-button:focus-visible {
+  outline: 2px solid rgba(139, 92, 246, 0.72);
+  outline-offset: 2px;
+}
+
+.dashboard-video-input__preview-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
 .dashboard-video-input__player {
+  display: block;
   width: 100%;
   max-height: 280px;
   background: rgba(20, 19, 22, 0.72);

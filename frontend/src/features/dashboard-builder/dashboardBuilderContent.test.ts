@@ -1844,7 +1844,7 @@ describe("workflowFromBindableInputs", () => {
 
     expect(widget).toMatchObject({
       widgetType: "slider",
-      title: "Refinement Level",
+      title: "Image Refinement",
       defaultValue: 20,
       min: 1,
       max: 100,
@@ -1888,7 +1888,7 @@ describe("workflowFromBindableInputs", () => {
 
     expect(createDashboardWidgetForValue(workflow.nodes[0].values[0], workflow.nodes[0])).toMatchObject({
       widgetType: "slider",
-      title: "Refinement Level",
+      title: "Image Refinement",
       defaultValue: 100,
       min: 1,
       max: 100,

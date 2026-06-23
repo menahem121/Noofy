@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -458,6 +458,53 @@ describe("DashboardInputControl", () => {
       expect(screen.getByRole("button", { name: "Remove" })).toHaveClass("dashboard-image-input__preview-action");
       expect(screen.queryByText("Replace image")).not.toBeInTheDocument();
     });
+  });
+
+  it("opens selected images in the fullscreen viewer without starting replacement", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        asset_id: "12345678-1234-1234-1234-123456789abc.png",
+        kind: "image",
+        original_filename: "demo.png",
+        content_type: "image/png",
+        size: 1024,
+        format: "png",
+      }),
+    );
+
+    render(
+      <DashboardInputControl
+        control={{ id: "image", type: "load_image", label: "Input image", input_id: "image" }}
+        input={{
+          id: "image",
+          label: "Input image",
+          control: "load_image",
+          binding: { node_id: "10", input_name: "image" },
+          default: null,
+          validation: {},
+        }}
+        value="12345678-1234-1234-1234-123456789abc.png"
+        onChange={vi.fn()}
+        onImageUpload={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByAltText("Selected image: demo.png")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /open selected image demo\.png full-screen/i }));
+
+    expect(screen.getByRole("dialog", { name: /input image full-screen preview/i })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: /selected image: demo\.png full-screen preview/i })).toHaveAttribute(
+      "src",
+      "/api/assets/12345678-1234-1234-1234-123456789abc.png",
+    );
+    expect(screen.queryByRole("button", { name: "Choose from Gallery" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /close full-screen image preview/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Replace" }));
+
+    expect(screen.getByRole("button", { name: "Upload from computer" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Choose from Gallery" })).toBeInTheDocument();
   });
 
   it("shows a packaged default image through the workflow-owned asset endpoint", () => {
@@ -1407,6 +1454,56 @@ describe("DashboardInputControl", () => {
     fireEvent.click(screen.getByRole("button", { name: "Remove" }));
     expect(onChange).toHaveBeenCalledWith(null);
     expect(createObjectUrlMock).not.toHaveBeenCalled();
+  });
+
+  it("opens selected videos in the fullscreen viewer without starting replacement", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        asset_id: "12345678-1234-1234-1234-123456789abc.mp4",
+        kind: "video",
+        original_filename: "demo.mp4",
+        content_type: "video/mp4",
+        size: 4096,
+        format: "mp4",
+      }),
+    );
+
+    render(
+      <DashboardInputControl
+        control={{ id: "video", type: "load_video", label: "Input video", input_id: "video" }}
+        input={{
+          id: "video",
+          label: "Input video",
+          control: "load_video",
+          binding: { node_id: "10", input_name: "video_path" },
+          default: null,
+          validation: {},
+        }}
+        value="12345678-1234-1234-1234-123456789abc.mp4"
+        onChange={vi.fn()}
+        onImageUpload={vi.fn()}
+        onVideoUpload={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("demo.mp4");
+
+    fireEvent.click(screen.getByRole("button", { name: /open selected video demo\.mp4 full-screen/i }));
+
+    const dialog = screen.getByRole("dialog", { name: /input video full-screen preview/i });
+    expect(dialog).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("demo.mp4")).toHaveAttribute(
+      "src",
+      "/api/assets/12345678-1234-1234-1234-123456789abc.mp4",
+    );
+    expect(within(dialog).getByLabelText("demo.mp4")).toHaveAttribute("controls");
+    expect(screen.queryByRole("button", { name: "Choose from Gallery" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /close full-screen video preview/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Replace" }));
+
+    expect(screen.getByRole("button", { name: "Upload from computer" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Choose from Gallery" })).toBeInTheDocument();
   });
 
   it("saves API credentials through settings and emits only a reference", async () => {

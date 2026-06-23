@@ -542,7 +542,7 @@ const REFINEMENT_LEVEL_NAMES = new Set([
   "num steps",
   "num inference steps",
   "number of steps",
-  "refinement level",
+  "Image Refinement",
 ]);
 
 export function defaultNumericRangeForValue(value: WorkflowNodeValue): { min: number; max: number; step: number } | undefined {
@@ -597,7 +597,7 @@ function refinementLevelDefaultValue(value: unknown): number {
 export function suggestTitle(value: WorkflowNodeValue, nodeTitle: string): string {
   if (value.valueKind === "note") return nodeTitle || "Note";
   if (value.valueKind === "three_d_input" || value.valueKind === "three_d_output") return "3D model";
-  if (isRefinementLevelValue(value)) return "Refinement Level";
+  if (isRefinementLevelValue(value)) return "Image Refinement";
   if (
     value.inputName.toLowerCase() === "text" &&
     ["positive prompt", "negative prompt", "prompt"].includes(value.label.toLowerCase())

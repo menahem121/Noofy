@@ -1375,7 +1375,7 @@ describe("DashboardBuilderPage", () => {
     fireEvent.click(within(valuesPanel).getByRole("button", { name: /KSampler/i }));
     fireEvent.click(within(valuesPanel).getByRole("button", { name: /^steps/i }));
 
-    expect(screen.getByLabelText(/widget title/i)).toHaveValue("Refinement Level");
+    expect(screen.getByLabelText(/widget title/i)).toHaveValue("Image Refinement");
     expect(screen.getByLabelText(/widget type/i)).toHaveValue("slider");
     expect(screen.getByLabelText("Default value")).toHaveValue("20");
     expect(screen.getByLabelText("Minimum value")).toHaveValue("1");
@@ -1387,7 +1387,7 @@ describe("DashboardBuilderPage", () => {
     expect(payload.inputs).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          label: "Refinement Level",
+          label: "Image Refinement",
           control: "slider",
           default: 20,
           validation: { min: 1, max: 100, step: 1 },

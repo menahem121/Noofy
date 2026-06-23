@@ -31,6 +31,7 @@ import type { ApiKeyProviderId } from "../../lib/api/noofyApi";
 import { audioMetadataLabel, fileMetadataLabel, formatMediaDuration, isGalleryMediaReference, isPackageAssetReference, isUploadedAssetValue, videoMetadataLabel } from "./media";
 import { ThreeDViewer } from "../three-d/ThreeDViewer";
 import { GalleryPickerModal } from "./GalleryPickerModal";
+import { ImagePreviewViewer, VideoPreviewViewer } from "./MediaPreviewViewer";
 import {
   SEED_MODE_LABELS,
   nextSeedMode,
@@ -316,6 +317,7 @@ function renderControl(
         <AssetImageInput
           value={value}
           inputId={input.id}
+          label={control.label || input.label || "Input image"}
           disabled={disabled}
           variant={variant}
           galleryEnabled
@@ -332,6 +334,7 @@ function renderControl(
         <AssetImageInput
           value={value}
           inputId={input.id}
+          label={control.label || input.label || "Input image"}
           disabled={disabled}
           variant={variant}
           galleryEnabled={false}
@@ -360,6 +363,7 @@ function renderControl(
       return (
         <AssetVideoInput
           inputId={input.id}
+          label={control.label || input.label || "Input video"}
           value={value}
           disabled={disabled}
           variant={variant}
@@ -869,6 +873,7 @@ interface ImageMaskEditorState {
 
 function AssetImageInput({
   inputId,
+  label,
   value,
   disabled,
   variant,
@@ -880,6 +885,7 @@ function AssetImageInput({
   onImageMaskApply,
 }: {
   inputId: string;
+  label: string;
   value: unknown;
   disabled: boolean;
   variant: DashboardInputControlVariant;
@@ -894,6 +900,7 @@ function AssetImageInput({
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [replaceChoiceOpen, setReplaceChoiceOpen] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [maskPreviewUrl, setMaskPreviewUrl] = useState<string | null>(null);
   const [assetMetadata, setAssetMetadata] = useState<DashboardAssetMetadata | null>(null);
@@ -1045,16 +1052,14 @@ function AssetImageInput({
   function handleSurfaceClick(event: MouseEvent<HTMLButtonElement>) {
     event.preventDefault();
     event.stopPropagation();
-    if (hasSelection) setReplaceChoiceOpen(galleryEnabled);
-    if (!galleryEnabled) openFilePicker();
+    if (selectedImageUrl && !missing) setPreviewOpen(true);
   }
 
   function handleKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>) {
     if (event.key !== "Enter" && event.key !== " ") return;
     event.preventDefault();
     event.stopPropagation();
-    if (hasSelection) setReplaceChoiceOpen(galleryEnabled);
-    if (!galleryEnabled) openFilePicker();
+    if (selectedImageUrl && !missing) setPreviewOpen(true);
   }
 
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
@@ -1069,6 +1074,7 @@ function AssetImageInput({
     setAssetMetadata(null);
     setMissing(false);
     setReplaceChoiceOpen(false);
+    setPreviewOpen(false);
     closeMaskEditor();
   }
 
@@ -1147,6 +1153,7 @@ function AssetImageInput({
   const assetMaskAvailable = Boolean(assetId && !missing && (uploadedImageUrl || blobUrl || assetMetadata));
   const galleryMaskAvailable = Boolean(galleryReference && onGalleryImageMaskPrepare);
   const maskAvailable = Boolean(onImageMaskApply && (assetMaskAvailable || galleryMaskAvailable));
+  const selectedImageAlt = selectedFilename ? `Selected image: ${selectedFilename}` : "Selected image";
 
   return (
     <div className={`dashboard-image-input dashboard-image-input--${variant} ${stateClass}`} data-noofy-workflow-import-drop-ignore>
@@ -1177,10 +1184,10 @@ function AssetImageInput({
           <button
             className="dashboard-image-input__surface"
             type="button"
-            disabled={disabled}
+            disabled={disabled || missing || !selectedImageUrl}
             onClick={handleSurfaceClick}
             onKeyDown={handleKeyDown}
-            aria-label={selectedFilename ? `Replace selected image ${selectedFilename}` : "Replace selected image"}
+            aria-label={selectedFilename ? `Open selected image ${selectedFilename} full-screen` : "Open selected image full-screen"}
           >
             {missing ? (
               <>
@@ -1193,7 +1200,7 @@ function AssetImageInput({
             ) : selectedImageUrl ? (
               <img
                 src={selectedImageUrl}
-                alt={selectedFilename ? `Selected image: ${selectedFilename}` : "Selected image"}
+                alt={selectedImageAlt}
                 className="dashboard-image-input__preview"
                 onError={() => setMissing(true)}
               />
@@ -1240,6 +1247,14 @@ function AssetImageInput({
         />
       ) : null}
       {maskError && !maskEditor ? <small className="field-error">{maskError}</small> : null}
+      {previewOpen && selectedImageUrl ? (
+        <ImagePreviewViewer
+          imageUrl={selectedImageUrl}
+          alt={selectedImageAlt}
+          label={label}
+          onClose={() => setPreviewOpen(false)}
+        />
+      ) : null}
       {maskEditor ? (
         <ImageMaskEditorModal
           sourceUrl={maskEditor.sourceUrl}
@@ -1928,6 +1943,7 @@ function AssetAudioInput({
 
 function AssetVideoInput({
   inputId,
+  label,
   value,
   disabled,
   variant,
@@ -1936,6 +1952,7 @@ function AssetVideoInput({
   onVideoUpload,
 }: {
   inputId: string;
+  label: string;
   value: unknown;
   disabled: boolean;
   variant: DashboardInputControlVariant;
@@ -1948,6 +1965,7 @@ function AssetVideoInput({
   const uploadAbortRef = useRef<AbortController | null>(null);
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [replaceChoiceOpen, setReplaceChoiceOpen] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const [metadata, setMetadata] = useState<DashboardAssetMetadata | null>(null);
   const [duration, setDuration] = useState<number | null>(null);
   const [width, setWidth] = useState<number | null>(null);
@@ -1968,6 +1986,10 @@ function AssetVideoInput({
         : null;
 
   useEffect(() => () => uploadAbortRef.current?.abort(), []);
+
+  useEffect(() => {
+    if (!mediaUrl) setPreviewOpen(false);
+  }, [mediaUrl]);
 
   useEffect(() => {
     setMetadata(null);
@@ -2038,6 +2060,7 @@ function AssetVideoInput({
     setHeight(null);
     setError(null);
     setReplaceChoiceOpen(false);
+    setPreviewOpen(false);
   }
 
   const filename = galleryReference?.filename ?? packageReference?.filename ?? metadata?.original_filename ?? assetId ?? "Video file";
@@ -2075,24 +2098,45 @@ function AssetVideoInput({
       ) : null}
       {hasSelection && mediaUrl ? (
         <div className="dashboard-video-input__selected">
-          <video
-            className="dashboard-video-input__player"
-            controls
-            src={mediaUrl}
-            preload="metadata"
-            onLoadedMetadata={(event) => {
-              const player = event.currentTarget;
-              if (Number.isFinite(player.duration)) setDuration(player.duration);
-              if (player.videoWidth > 0) setWidth(player.videoWidth);
-              if (player.videoHeight > 0) setHeight(player.videoHeight);
+          <button
+            className="dashboard-video-input__preview-button"
+            type="button"
+            disabled={disabled || uploading}
+            aria-label={`Open selected video ${filename} full-screen`}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              setPreviewOpen(true);
             }}
-            onError={() => setError("Video could not be loaded. Choose another file.")}
-          />
+          >
+            <video
+              className="dashboard-video-input__player"
+              src={mediaUrl}
+              preload="metadata"
+              muted
+              playsInline
+              onLoadedMetadata={(event) => {
+                const player = event.currentTarget;
+                if (Number.isFinite(player.duration)) setDuration(player.duration);
+                if (player.videoWidth > 0) setWidth(player.videoWidth);
+                if (player.videoHeight > 0) setHeight(player.videoHeight);
+              }}
+              onError={() => setError("Video could not be loaded. Choose another file.")}
+            />
+          </button>
           <div className="dashboard-video-input__meta">
             <strong>{filename}</strong>
             <span>{videoMetadataLabel(extension, mimeType, size, duration, width, height, fps, "Video file")}</span>
           </div>
           <GallerySelectedActions disabled={disabled || uploading} onReplace={() => setReplaceChoiceOpen((current) => !current)} onRemove={removeVideo} />
+          {previewOpen ? (
+            <VideoPreviewViewer
+              videoUrl={mediaUrl}
+              filename={filename}
+              label={label}
+              onClose={() => setPreviewOpen(false)}
+            />
+          ) : null}
         </div>
       ) : (
         <MediaSourceChooser
