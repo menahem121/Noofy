@@ -13,6 +13,7 @@ import {
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 
+import { ThreeDViewer } from "../three-d/ThreeDViewer";
 import { ImageComparisonSlider } from "./ImageComparisonSlider";
 
 export function ImagePreviewViewer({
@@ -335,6 +336,51 @@ export function VideoPreviewViewer({
           preload="metadata"
           aria-label={filename}
           onClick={(event) => event.stopPropagation()}
+        />
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+export function ThreeDPreviewViewer({
+  modelUrl,
+  filename,
+  size,
+  label,
+  onClose,
+}: {
+  modelUrl: string;
+  filename: string;
+  size?: number | null;
+  label: string;
+  onClose: () => void;
+}) {
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+  useViewerCloseShortcut(closeButtonRef, onClose);
+
+  return createPortal(
+    <div className="widget-image-viewer widget-image-viewer--three-d" role="dialog" aria-modal="true" aria-label={`${label} full-screen preview`}>
+      <div className="widget-image-viewer__bar">
+        <button
+          ref={closeButtonRef}
+          className="widget-image-viewer__close"
+          type="button"
+          aria-label="Close full-screen 3D preview"
+          onClick={onClose}
+        >
+          <X size={18} aria-hidden="true" />
+          Close
+        </button>
+      </div>
+      <div className="widget-image-viewer__stage widget-image-viewer__stage--three-d" role="presentation">
+        <ThreeDViewer
+          className="widget-image-viewer__three-d"
+          url={modelUrl}
+          filename={filename}
+          size={size}
+          autoPreviewUnknownSize
+          showFullscreenButton={false}
         />
       </div>
     </div>,

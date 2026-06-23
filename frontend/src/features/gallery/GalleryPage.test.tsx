@@ -1,12 +1,13 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { GalleryPage } from "./GalleryPage";
 
 const galleryCss = readFileSync(resolve(process.cwd(), "src/styles/gallery.css"), "utf8");
+const canvasCss = readFileSync(resolve(process.cwd(), "src/styles/canvas.css"), "utf8");
 const { createThreeDScene, disposeThreeDScene } = vi.hoisted(() => ({
   createThreeDScene: vi.fn(),
   disposeThreeDScene: vi.fn(),
@@ -87,12 +88,74 @@ describe("GalleryPage", () => {
     expect(screen.queryByRole("button", { name: "Preview 3D model" })).not.toBeInTheDocument();
     await waitFor(() => expect(createThreeDScene).toHaveBeenCalledWith(expect.anything(), "/api/gallery/three-d-1/content", "mesh.glb"));
     expect(screen.getByRole("button", { name: "Reset view" })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Fullscreen" }));
+
+    const fullScreenViewer = screen.getByRole("dialog", { name: "mesh.glb full-screen preview" });
+    expect(fullScreenViewer).toBeInTheDocument();
+    expect(within(fullScreenViewer).queryByRole("button", { name: "Fullscreen" })).not.toBeInTheDocument();
+    await waitFor(() => expect(createThreeDScene).toHaveBeenCalledTimes(2));
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "mesh.glb full-screen preview" })).not.toBeInTheDocument());
+    expect(screen.getByRole("dialog", { name: "3D model details" })).toBeInTheDocument();
   });
 
   it("keeps the Gallery 3D stage and controls inside the modal", () => {
     expect(galleryCss).toMatch(/\.img-modal--three-d\s*\{[^}]*height:\s*min\(760px,\s*calc\(100vh - 48px\)\)/s);
     expect(galleryCss).toMatch(/\.gallery-detail-three-d\s*\{[^}]*grid-template-rows:\s*minmax\(0,\s*1fr\)\s+auto\s+auto/s);
     expect(galleryCss).toMatch(/\.gallery-detail-three-d \.three-d-viewer__stage\s*\{[^}]*min-height:\s*0/s);
+    expect(canvasCss).toMatch(/\.widget-image-viewer__three-d\s*\{[^}]*grid-template-rows:\s*minmax\(0,\s*1fr\)\s+auto\s+auto/s);
+  });
+
+  it("opens image details media in the fullscreen viewer before closing the Gallery modal", async () => {
+    render(<GalleryPage onNavigate={onNavigate} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Open image: Portrait Maker" }));
+
+    const details = screen.getByRole("dialog", { name: "Image details" });
+    const previewButton = screen.getByRole("button", { name: "Open portrait.png full-screen" });
+
+    fireEvent.click(previewButton);
+
+    const fullScreenViewer = screen.getByRole("dialog", { name: "portrait.png full-screen preview" });
+    expect(fullScreenViewer).toBeInTheDocument();
+    expect(within(fullScreenViewer).getByRole("img", { name: "studio portrait full-screen preview" })).toHaveAttribute(
+      "src",
+      "/api/gallery/image-1/content",
+    );
+    expect(details).toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "portrait.png full-screen preview" })).not.toBeInTheDocument());
+    expect(screen.getByRole("dialog", { name: "Image details" })).toBeInTheDocument();
+    await waitFor(() => expect(previewButton).toHaveFocus());
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Image details" })).not.toBeInTheDocument());
+  });
+
+  it("provides a reliable fullscreen action for Gallery videos", async () => {
+    render(<GalleryPage onNavigate={onNavigate} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Open video: Motion Maker" }));
+
+    expect(screen.getByRole("dialog", { name: "Video details" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Open motion.webm full-screen" }));
+
+    const fullScreenViewer = screen.getByRole("dialog", { name: "motion.webm full-screen preview" });
+    expect(within(fullScreenViewer).getByLabelText("motion.webm")).toHaveAttribute(
+      "src",
+      "/api/gallery/video-1/content",
+    );
+
+    fireEvent.click(within(fullScreenViewer).getByRole("button", { name: "Close full-screen video preview" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "motion.webm full-screen preview" })).not.toBeInTheDocument());
+    expect(screen.getByRole("dialog", { name: "Video details" })).toBeInTheDocument();
+  });
+
+  it("styles Gallery detail fullscreen affordances", () => {
+    expect(galleryCss).toMatch(/\.img-modal__media-button--image\s*\{[^}]*cursor:\s*zoom-in/s);
+    expect(galleryCss).toMatch(/\.gallery-detail-video-wrap\s*\{[^}]*display:\s*grid/s);
+    expect(galleryCss).toMatch(/\.gallery-detail-fullscreen-button\s*\{[^}]*justify-self:\s*end/s);
   });
 
   it("keeps overflowing Gallery details in a viewport-bounded scroll panel", () => {

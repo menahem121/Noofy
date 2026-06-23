@@ -11,9 +11,19 @@ interface ThreeDViewerProps {
   size?: number | null;
   className?: string;
   autoPreviewUnknownSize?: boolean;
+  showFullscreenButton?: boolean;
+  onFullscreen?: (trigger: HTMLButtonElement) => void;
 }
 
-export function ThreeDViewer({ url, filename, size, className = "", autoPreviewUnknownSize = false }: ThreeDViewerProps) {
+export function ThreeDViewer({
+  url,
+  filename,
+  size,
+  className = "",
+  autoPreviewUnknownSize = false,
+  showFullscreenButton = true,
+  onFullscreen,
+}: ThreeDViewerProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const controllerRef = useRef<ThreeDSceneController | null>(null);
   const sourceKey = JSON.stringify([url, filename]);
@@ -82,7 +92,20 @@ export function ThreeDViewer({ url, filename, size, className = "", autoPreviewU
       </div>
       <div className="three-d-viewer__toolbar">
         <button type="button" disabled={phase !== "ready"} onClick={() => controllerRef.current?.resetCamera()}><RotateCcw size={14} />Reset view</button>
-        <button type="button" onClick={() => containerRef.current?.parentElement?.requestFullscreen()}><Maximize size={14} />Fullscreen</button>
+        {showFullscreenButton ? (
+          <button
+            type="button"
+            onClick={(event) => {
+              if (onFullscreen) {
+                onFullscreen(event.currentTarget);
+                return;
+              }
+              void containerRef.current?.parentElement?.requestFullscreen?.();
+            }}
+          >
+            <Maximize size={14} />Fullscreen
+          </button>
+        ) : null}
         <button type="button" disabled={phase !== "ready"} onClick={() => controllerRef.current?.screenshot()}><Camera size={14} />Screenshot</button>
         <button type="button" onClick={download}><Download size={14} />Download</button>
       </div>

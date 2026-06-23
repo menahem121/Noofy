@@ -1073,6 +1073,12 @@
   touch-action: auto;
 }
 
+.widget-image-viewer__stage--three-d {
+  place-items: stretch;
+  cursor: default;
+  touch-action: auto;
+}
+
 .widget-image-viewer__image,
 .widget-image-viewer__comparison {
   max-width: 100%;
@@ -1101,6 +1107,18 @@
   border-radius: 10px;
   background: #000000;
   box-shadow: 0 20px 70px rgba(0, 0, 0, 0.42);
+}
+
+.widget-image-viewer__three-d {
+  height: 100%;
+  min-height: 0;
+  grid-template-rows: minmax(0, 1fr) auto auto;
+  align-content: stretch;
+  overflow: auto;
+}
+
+.widget-image-viewer__three-d .three-d-viewer__stage {
+  min-height: 0;
 }
 
 .widget-image-viewer__image--zoomed,

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   ArrowRight,
@@ -16,6 +16,7 @@ import {
   Film,
   Heart,
   Image as ImageIcon,
+  Maximize,
   RefreshCw,
   Search,
   Trash2,
@@ -33,6 +34,7 @@ import {
 } from "../../lib/api/noofyApi";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
 import { ThreeDViewer } from "../three-d/ThreeDViewer";
+import { ImagePreviewViewer, ThreeDPreviewViewer, VideoPreviewViewer } from "../workflows/MediaPreviewViewer";
 
 type KindFilter = "all" | GalleryKind;
 type SortOrder = "newest" | "oldest";
@@ -47,6 +49,11 @@ interface PendingGalleryDeletion {
 interface GalleryPageProps {
   onNavigate: (route: AppRouteId) => void;
 }
+
+type GalleryFullscreenPreview =
+  | { kind: "image"; url: string; alt: string; label: string }
+  | { kind: "video"; url: string; posterUrl?: string | null; filename: string; label: string }
+  | { kind: "3d"; url: string; filename: string; size?: number | null; label: string };
 
 function formatDateTime(iso: string): string {
   return new Date(iso).toLocaleString(undefined, {
@@ -362,23 +369,42 @@ function CardVisual({ item }: { item: GalleryItem }) {
 function MediaDetail({ item, index, total, onClose, onFavorite, onDelete, deleteDialogOpen, onPrev, onNext }: { item: GalleryItem; index: number; total: number; onClose: () => void; onFavorite: () => void; onDelete: () => void; deleteDialogOpen: boolean; onPrev: (() => void) | null; onNext: (() => void) | null }) {
   const contentUrl = galleryContentUrl(item);
   const isMissing = item.fileState === "missing";
+  const [fullscreenPreview, setFullscreenPreview] = useState<GalleryFullscreenPreview | null>(null);
+  const fullscreenReturnFocusRef = useRef<HTMLElement | null>(null);
+
+  function openFullscreenPreview(preview: GalleryFullscreenPreview, trigger: HTMLElement) {
+    fullscreenReturnFocusRef.current = trigger;
+    setFullscreenPreview(preview);
+  }
+
+  function closeFullscreenPreview() {
+    setFullscreenPreview(null);
+    window.setTimeout(() => fullscreenReturnFocusRef.current?.focus(), 0);
+  }
+
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
-      if (deleteDialogOpen) return;
+      if (deleteDialogOpen || fullscreenPreview) return;
       if (event.key === "Escape") onClose();
       if (event.key === "ArrowLeft") onPrev?.();
       if (event.key === "ArrowRight") onNext?.();
     }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [deleteDialogOpen, onClose, onNext, onPrev]);
+  }, [deleteDialogOpen, fullscreenPreview, onClose, onNext, onPrev]);
 
   return (
     <div className="img-modal-backdrop" role="dialog" aria-modal="true" aria-label={`${kindLabel(item.kind)} details`} onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <div className={item.kind === "3d" ? "img-modal img-modal--three-d" : "img-modal"}>
         <button className="img-modal__close icon-button" type="button" aria-label="Close" onClick={onClose}><X size={18} /></button>
         <div className={item.kind === "3d" ? "img-modal__preview-area img-modal__preview-area--three-d" : "img-modal__preview-area"}>
-          {isMissing ? <div className="img-modal__missing"><AlertCircle size={42} /><span>Output file unavailable</span></div> : <DetailPreview item={item} contentUrl={contentUrl} />}
+          {isMissing ? <div className="img-modal__missing"><AlertCircle size={42} /><span>Output file unavailable</span></div> : (
+            <DetailPreview
+              item={item}
+              contentUrl={contentUrl}
+              onOpenFullscreen={openFullscreenPreview}
+            />
+          )}
           {onPrev ? <button className="img-modal__nav img-modal__nav--prev" type="button" aria-label="Previous item" onClick={onPrev}><ChevronLeft size={22} /></button> : null}
           {onNext ? <button className="img-modal__nav img-modal__nav--next" type="button" aria-label="Next item" onClick={onNext}><ChevronRight size={22} /></button> : null}
           {total > 1 ? <div className="img-modal__counter">{index + 1} / {total}</div> : null}
@@ -402,6 +428,32 @@ function MediaDetail({ item, index, total, onClose, onFavorite, onDelete, delete
           </div>
         </aside>
       </div>
+      {fullscreenPreview?.kind === "image" ? (
+        <ImagePreviewViewer
+          imageUrl={fullscreenPreview.url}
+          alt={fullscreenPreview.alt}
+          label={fullscreenPreview.label}
+          onClose={closeFullscreenPreview}
+        />
+      ) : null}
+      {fullscreenPreview?.kind === "video" ? (
+        <VideoPreviewViewer
+          videoUrl={fullscreenPreview.url}
+          posterUrl={fullscreenPreview.posterUrl}
+          filename={fullscreenPreview.filename}
+          label={fullscreenPreview.label}
+          onClose={closeFullscreenPreview}
+        />
+      ) : null}
+      {fullscreenPreview?.kind === "3d" ? (
+        <ThreeDPreviewViewer
+          modelUrl={fullscreenPreview.url}
+          filename={fullscreenPreview.filename}
+          size={fullscreenPreview.size}
+          label={fullscreenPreview.label}
+          onClose={closeFullscreenPreview}
+        />
+      ) : null}
     </div>
   );
 }
@@ -502,11 +554,58 @@ function GalleryDeletionDialog({
   );
 }
 
-function DetailPreview({ item, contentUrl }: { item: GalleryItem; contentUrl: string }) {
-  if (item.kind === "image") return <img className="img-modal__img" src={contentUrl} alt={item.prompt || item.filename} />;
-  if (item.kind === "video") return <video className="gallery-detail-video" src={contentUrl} controls preload="metadata" />;
+function DetailPreview({
+  item,
+  contentUrl,
+  onOpenFullscreen,
+}: {
+  item: GalleryItem;
+  contentUrl: string;
+  onOpenFullscreen: (preview: GalleryFullscreenPreview, trigger: HTMLElement) => void;
+}) {
+  const label = item.filename || kindLabel(item.kind);
+  const alt = item.prompt || item.filename;
+  if (item.kind === "image") {
+    return (
+      <button
+        className="img-modal__media-button img-modal__media-button--image"
+        type="button"
+        aria-label={`Open ${label} full-screen`}
+        onClick={(event) => onOpenFullscreen({ kind: "image", url: contentUrl, alt, label }, event.currentTarget)}
+      >
+        <img className="img-modal__img" src={contentUrl} alt={alt} />
+      </button>
+    );
+  }
+  if (item.kind === "video") {
+    return (
+      <div className="gallery-detail-video-wrap">
+        <video className="gallery-detail-video" src={contentUrl} controls preload="metadata" />
+        <button
+          className="secondary-button secondary-button--small gallery-detail-fullscreen-button"
+          type="button"
+          aria-label={`Open ${label} full-screen`}
+          onClick={(event) => onOpenFullscreen({ kind: "video", url: contentUrl, posterUrl: item.thumbnailUrl, filename: item.filename, label }, event.currentTarget)}
+        >
+          <Maximize size={14} aria-hidden="true" />
+          Fullscreen
+        </button>
+      </div>
+    );
+  }
   if (item.kind === "audio") return <div className="gallery-detail-audio"><FileAudio size={64} /><strong>{item.filename}</strong><audio src={contentUrl} controls preload="metadata" /></div>;
-  if (item.kind === "3d") return <ThreeDViewer className="gallery-detail-three-d" url={contentUrl} filename={item.filename} size={item.sizeBytes} autoPreviewUnknownSize />;
+  if (item.kind === "3d") {
+    return (
+      <ThreeDViewer
+        className="gallery-detail-three-d"
+        url={contentUrl}
+        filename={item.filename}
+        size={item.sizeBytes}
+        autoPreviewUnknownSize
+        onFullscreen={(trigger) => onOpenFullscreen({ kind: "3d", url: contentUrl, filename: item.filename, size: item.sizeBytes, label }, trigger)}
+      />
+    );
+  }
   return <div className="gallery-detail-file"><FileText size={72} /><strong>{item.extension?.replace(".", "").toUpperCase() || "FILE"}</strong><span>{item.filename}</span></div>;
 }
 
