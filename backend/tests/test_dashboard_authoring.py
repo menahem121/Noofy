@@ -1012,6 +1012,103 @@ def test_save_dashboard_rejects_invalid_control_groups(tmp_path: Path) -> None:
         service.save_dashboard(workflow_id, inputs, dashboard)
 
 
+@pytest.mark.parametrize(
+    ("layout", "message"),
+    [
+        ({"x": -1, "y": 0, "w": 8, "h": 4}, "layout.x must be greater than or equal to 0"),
+        ({"x": 0, "y": -1, "w": 8, "h": 4}, "layout.y must be greater than or equal to 0"),
+        ({"x": 0, "y": 0, "w": 0, "h": 4}, "layout.w must be greater than 0"),
+        ({"x": 0, "y": 0, "w": 8, "h": -1}, "layout.h must be greater than 0"),
+        ({"x": 0, "y": 0, "w": 8, "h": 4, "min_w": 9}, "layout.min_w must not be larger than layout.w"),
+        ({"x": 0, "y": 0, "w": 8, "h": 4, "min_h": 5}, "layout.min_h must not be larger than layout.h"),
+        ({"x": 0, "y": 0, "w": 33, "h": 4}, "layout.w must not exceed the 32-column grid"),
+        ({"x": 28, "y": 0, "w": 8, "h": 4}, "extends beyond the 32-column grid"),
+    ],
+)
+def test_validate_and_save_dashboard_reject_invalid_control_layouts(
+    tmp_path: Path,
+    layout: dict[str, int],
+    message: str,
+) -> None:
+    archive = _make_minimal_archive()
+    service, workflow_id = _import_and_setup(tmp_path, archive)
+    inputs, dashboard = _minimal_inputs_and_dashboard()
+    dashboard["sections"][0]["controls"][0]["layout"] = layout
+
+    result = service.validate_dashboard(workflow_id, inputs, dashboard)
+
+    assert result["valid"] is False
+    assert any(message in error for error in result["errors"])
+    with pytest.raises(DashboardAuthoringError, match=message):
+        service.save_dashboard(workflow_id, inputs, dashboard)
+
+
+def test_validate_and_save_dashboard_reject_invalid_group_layouts(tmp_path: Path) -> None:
+    archive = _make_minimal_archive()
+    service, workflow_id = _import_and_setup(tmp_path, archive)
+    inputs, dashboard = _minimal_inputs_and_dashboard()
+    dashboard["sections"][0]["groups"] = [
+        {
+            "id": "broken-layout",
+            "title": "Broken layout",
+            "control_ids": ["ctrl_prompt", "ctrl_result"],
+            "layout": {"x": 0, "y": 0, "w": 10, "h": 4, "min_w": 11},
+        }
+    ]
+
+    result = service.validate_dashboard(workflow_id, inputs, dashboard)
+
+    assert result["valid"] is False
+    assert any("layout.min_w must not be larger than layout.w" in error for error in result["errors"])
+    with pytest.raises(DashboardAuthoringError, match="layout.min_w must not be larger than layout.w"):
+        service.save_dashboard(workflow_id, inputs, dashboard)
+
+
+def test_validate_and_save_dashboard_reject_overlapping_top_level_layouts(tmp_path: Path) -> None:
+    archive = _make_minimal_archive()
+    service, workflow_id = _import_and_setup(tmp_path, archive)
+    inputs, dashboard = _minimal_inputs_and_dashboard()
+    dashboard["sections"][0]["controls"][0]["layout"] = {"x": 0, "y": 0, "w": 12, "h": 6}
+    dashboard["sections"][0]["controls"][1]["layout"] = {"x": 8, "y": 2, "w": 12, "h": 6}
+
+    result = service.validate_dashboard(workflow_id, inputs, dashboard)
+
+    assert result["valid"] is False
+    assert any("overlaps" in error for error in result["errors"])
+    with pytest.raises(DashboardAuthoringError, match="overlaps"):
+        service.save_dashboard(workflow_id, inputs, dashboard)
+
+
+def test_validate_and_save_dashboard_reject_group_overlap_with_top_level_control(tmp_path: Path) -> None:
+    archive = _make_minimal_archive()
+    service, workflow_id = _import_and_setup(tmp_path, archive)
+    inputs, dashboard = _minimal_inputs_and_dashboard()
+    dashboard["sections"][0]["controls"].append(
+        {
+            "id": "creator-note",
+            "type": "note",
+            "label": "Note",
+            "description": "Instructions",
+            "layout": {"x": 4, "y": 2, "w": 10, "h": 4},
+        }
+    )
+    dashboard["sections"][0]["groups"] = [
+        {
+            "id": "main-group",
+            "title": "Main group",
+            "control_ids": ["ctrl_prompt", "ctrl_result"],
+            "layout": {"x": 0, "y": 0, "w": 12, "h": 6},
+        }
+    ]
+
+    result = service.validate_dashboard(workflow_id, inputs, dashboard)
+
+    assert result["valid"] is False
+    assert any("Dashboard layout item 'creator-note' overlaps 'main-group'" in error for error in result["errors"])
+    with pytest.raises(DashboardAuthoringError, match="overlaps 'main-group'"):
+        service.save_dashboard(workflow_id, inputs, dashboard)
+
+
 def test_dashboard_schema_accepts_api_credential_without_raw_secret(tmp_path: Path) -> None:
     archive = _make_minimal_archive()
     service, workflow_id = _import_and_setup(tmp_path, archive)

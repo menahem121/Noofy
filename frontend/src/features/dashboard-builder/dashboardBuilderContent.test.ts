@@ -1017,6 +1017,64 @@ describe("workflowFromBindableInputs", () => {
     ]);
   });
 
+  it("preserves loaded output ids and legacy result_image controls when saving", () => {
+    const schema: DashboardSchema = {
+      version: 1,
+      workflowId: "wf-outputs",
+      workflowName: "Output workflow",
+      widgets: [
+        {
+          id: "after",
+          valueId: "after-output",
+          backendOutputId: "after-output",
+          binding: { nodeId: "9", inputName: "" },
+          widgetType: "result_image",
+          title: "After",
+          description: "",
+          defaultValue: null,
+        },
+        {
+          id: "before",
+          valueId: "before-output",
+          backendOutputId: "before-output",
+          binding: { nodeId: "9", inputName: "" },
+          widgetType: "display_image",
+          title: "Before",
+          description: "",
+          defaultValue: null,
+        },
+        {
+          id: "new",
+          valueId: "node-10-output",
+          binding: { nodeId: "10", inputName: "output" },
+          widgetType: "display_image",
+          title: "New image",
+          description: "",
+          defaultValue: null,
+        },
+      ],
+      groups: [],
+      layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+    };
+
+    const payload = toBackendPayload(schema);
+
+    expect(payload.dashboard.outputs).toEqual([
+      { id: "after-output", label: "After", node_id: "9", type: "image", kind: "image" },
+      { id: "before-output", label: "Before", node_id: "9", type: "image", kind: "image" },
+      { id: "image", label: "New image", node_id: "10", type: "image", kind: "image" },
+    ]);
+    expect(payload.dashboard.sections[0].controls.map((control) => ({
+      id: control.id,
+      type: control.type,
+      output_id: control.output_id,
+    }))).toEqual([
+      { id: "after", type: "result_image", output_id: "after-output" },
+      { id: "before", type: "display_image", output_id: "before-output" },
+      { id: "new", type: "display_image", output_id: "image" },
+    ]);
+  });
+
   it("auto-creates empty text widgets for backend-marked required runtime string inputs", () => {
     const workflow = workflowFromBindableInputs("wf-required-text", "Required Text Workflow", [
       {

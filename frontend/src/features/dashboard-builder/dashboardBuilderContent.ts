@@ -37,6 +37,7 @@ export type WidgetType =
   | "load_file"
   | "load_3d"
   | "display_image"
+  | "result_image"
   | "display_audio"
   | "display_text"
   | "display_video"
@@ -44,7 +45,8 @@ export type WidgetType =
   | "display_3d"
   | "seed_widget"
   | "lora_loader"
-  | "select";
+  | "select"
+  | "api_credential";
 
 export type WorkflowValueKind =
   | "string"
@@ -132,6 +134,7 @@ export interface DashboardWidget {
   binding: { nodeId: string; inputName: string };
   valueId: string;
   backendInputId?: string;
+  backendOutputId?: string;
   widgetType: WidgetType;
   title: string;
   description: string;
@@ -146,6 +149,10 @@ export interface DashboardWidget {
   seedMode?: SeedMode;
   defaultPinned?: boolean;
   hasExecutableBinding?: boolean;
+  provider?: string;
+  required?: boolean;
+  secretRef?: string;
+  injectionStrategy?: { kind: string; field?: string | null };
   layout?: DashboardWidgetLayout;
 }
 
@@ -305,6 +312,7 @@ function widgetFingerprintShape(widget: DashboardWidget) {
     id: widget.id,
     valueId: widget.valueId,
     backendInputId: widget.backendInputId,
+    backendOutputId: widget.backendOutputId,
     binding: widget.binding,
     widgetType: widget.widgetType,
     title: widget.title,
@@ -326,6 +334,10 @@ function widgetFingerprintShape(widget: DashboardWidget) {
     drawMask: widget.drawMask,
     defaultPinned: widget.defaultPinned,
     hasExecutableBinding: widget.hasExecutableBinding,
+    provider: widget.provider,
+    required: widget.required,
+    secretRef: widget.secretRef,
+    injectionStrategy: widget.injectionStrategy,
   };
 }
 
@@ -401,6 +413,7 @@ export const WIDGET_TYPE_LABELS: Record<WidgetType, string> = {
   load_file: "Load file",
   load_3d: "Load 3D model",
   display_image: "Display image",
+  result_image: "Result image",
   display_audio: "Display audio",
   display_text: "Display text",
   display_video: "Display video",
@@ -409,6 +422,7 @@ export const WIDGET_TYPE_LABELS: Record<WidgetType, string> = {
   seed_widget: "Variation ID (seed)",
   lora_loader: "LoRA loader",
   select: "Dropdown",
+  api_credential: "API credential",
 };
 
 function parseWidgetType(value: string): WidgetType | undefined {
@@ -921,6 +935,10 @@ export interface BackendDashboardControl {
   input_id?: string;
   output_id?: string;
   description?: string;
+  provider?: string;
+  required?: boolean;
+  secret_ref?: string;
+  injection_strategy?: { kind: string; field?: string | null };
   layout?: { x: number; y: number; w: number; h: number; min_w?: number; min_h?: number };
 }
 
@@ -1061,7 +1079,7 @@ export function toBackendPayload(schema: DashboardSchema): BackendSavePayload {
   const inputWidgets = [...normalized.widgets, ...(normalized.hiddenWidgets ?? [])];
   const inputIdForWidget = (widget: DashboardWidget) => widget.backendInputId ?? widget.id;
   const inputs: BackendWorkflowInput[] = inputWidgets
-    .filter((w) => !isOutputWidgetType(w.widgetType) && hasExecutableWorkflowBinding(w))
+    .filter((w) => !isOutputWidgetType(w.widgetType) && hasBackendInputRecord(w))
     .map((w) => ({
       id: inputIdForWidget(w),
       label: w.title,
@@ -1088,13 +1106,8 @@ export function toBackendPayload(schema: DashboardSchema): BackendSavePayload {
     }));
 
   const outputWidgets = normalized.widgets.filter((w) => isOutputWidgetType(w.widgetType));
-  const outputIdForWidget = (widgetId: string) => {
-    const widget = outputWidgets.find((item) => item.id === widgetId);
-    const kind = mediaKindForOutputWidget(widget?.widgetType);
-    const sameKindWidgets = outputWidgets.filter((item) => mediaKindForOutputWidget(item.widgetType) === kind);
-    const index = sameKindWidgets.findIndex((item) => item.id === widgetId);
-    return index <= 0 ? kind : `${kind}_${index + 1}`;
-  };
+  const outputIdsByWidgetId = outputIdMapForWidgets(outputWidgets);
+  const outputIdForWidget = (widgetId: string) => outputIdsByWidgetId.get(widgetId) ?? "image";
   const outputs = outputWidgets.map((w) => ({
     id: outputIdForWidget(w.id),
     label: w.title,
@@ -1120,9 +1133,13 @@ export function toBackendPayload(schema: DashboardSchema): BackendSavePayload {
       id: widget.id,
       type: widget.widgetType,
       label: widget.title,
-      ...(!isOutputWidgetType(widget.widgetType) && hasExecutableWorkflowBinding(widget) ? { input_id: inputIdForWidget(widget) } : {}),
+      ...(!isOutputWidgetType(widget.widgetType) && hasBackendInputRecord(widget) ? { input_id: inputIdForWidget(widget) } : {}),
       ...(isOutputWidgetType(widget.widgetType) ? { output_id: outputIdForWidget(widget.id) } : {}),
       description: widget.description,
+      ...(widget.widgetType === "api_credential" && widget.provider ? { provider: widget.provider } : {}),
+      ...(widget.widgetType === "api_credential" && widget.required !== undefined ? { required: widget.required } : {}),
+      ...(widget.widgetType === "api_credential" && widget.secretRef ? { secret_ref: widget.secretRef } : {}),
+      ...(widget.widgetType === "api_credential" && widget.injectionStrategy ? { injection_strategy: widget.injectionStrategy } : {}),
       layout,
     };
   });
@@ -1178,6 +1195,31 @@ function mediaKindForOutputWidget(widgetType?: string): "image" | "audio" | "tex
   return "image";
 }
 
+function outputIdMapForWidgets(outputWidgets: DashboardWidget[]): Map<string, string> {
+  const ids = new Map<string, string>();
+  const used = new Set<string>();
+  for (const widget of outputWidgets) {
+    const existingId = typeof widget.backendOutputId === "string" ? widget.backendOutputId.trim() : "";
+    if (!existingId || used.has(existingId)) continue;
+    ids.set(widget.id, existingId);
+    used.add(existingId);
+  }
+
+  for (const widget of outputWidgets) {
+    if (ids.has(widget.id)) continue;
+    const kind = mediaKindForOutputWidget(widget.widgetType);
+    let candidate: string = kind;
+    let suffix = 2;
+    while (used.has(candidate)) {
+      candidate = `${kind}_${suffix}`;
+      suffix += 1;
+    }
+    ids.set(widget.id, candidate);
+    used.add(candidate);
+  }
+  return ids;
+}
+
 function mediaInputDefaultValue(value: WorkflowNodeValue): unknown {
   if (isPersistedMediaValue(value.rawValue)) return value.rawValue;
   return null;
@@ -1222,6 +1264,10 @@ function isMediaInputWidgetType(widgetType: WidgetType): boolean {
 
 function hasExecutableWorkflowBinding(widget: DashboardWidget): boolean {
   return widget.widgetType !== "note" || widget.hasExecutableBinding === true;
+}
+
+function hasBackendInputRecord(widget: DashboardWidget): boolean {
+  return hasExecutableWorkflowBinding(widget) && Boolean(widget.binding.nodeId && widget.binding.inputName);
 }
 
 export function canPreserveWidgetAsHiddenInput(widget: DashboardWidget): boolean {
@@ -1632,8 +1678,12 @@ export function addAutomaticThreeDOutputWidget(schema: DashboardSchema, workflow
  * sharing an id are also collapsed so a corrupt schema cannot break React keys.
  */
 function dedupeWidgets(widgets: DashboardWidget[]): DashboardWidget[] {
-  const outputKeyOf = (widget: DashboardWidget) =>
-    `${mediaKindForOutputWidget(widget.widgetType)}:${widget.binding.nodeId}`;
+  const outputKeyOf = (widget: DashboardWidget) => {
+    const explicitOutputId = typeof widget.backendOutputId === "string" && widget.backendOutputId.trim()
+      ? `output:${widget.backendOutputId.trim()}`
+      : `node:${widget.binding.nodeId}`;
+    return `${mediaKindForOutputWidget(widget.widgetType)}:${explicitOutputId}`;
+  };
   const chosenOutputByKey = new Map<string, DashboardWidget>();
   for (const widget of widgets) {
     if (!isOutputWidgetType(widget.widgetType)) continue;

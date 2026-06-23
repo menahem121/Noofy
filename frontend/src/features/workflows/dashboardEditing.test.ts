@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { toBackendPayload } from "../dashboard-builder/dashboardBuilderContent";
 import { buildDashboardSchemaForEditing } from "./dashboardEditing";
 
 describe("buildDashboardSchemaForEditing", () => {
@@ -317,5 +318,151 @@ describe("buildDashboardSchemaForEditing", () => {
       acceptedExtensions: [".json", ".csv"],
       acceptedMimeTypes: ["application/json"],
     });
+  });
+
+  it("preserves durable legacy, media, and credential widget types when reopening the builder", () => {
+    const schema = buildDashboardSchemaForEditing({
+      metadata: { id: "wf-durable", name: "Durable Workflow", version: "1.0.0", description: "" },
+      inputs: [
+        {
+          id: "comfy-key",
+          label: "Comfy API key",
+          control: "api_credential",
+          binding: { node_id: "1", input_name: "text" },
+          default: null,
+          validation: {},
+        },
+        {
+          id: "mask",
+          label: "Mask",
+          control: "load_image_mask",
+          binding: { node_id: "2", input_name: "image" },
+          default: null,
+          validation: {},
+        },
+        {
+          id: "audio",
+          label: "Audio",
+          control: "load_audio",
+          binding: { node_id: "3", input_name: "audio" },
+          default: null,
+          validation: {},
+        },
+        {
+          id: "video",
+          label: "Video",
+          control: "load_video",
+          binding: { node_id: "4", input_name: "video" },
+          default: null,
+          validation: {},
+        },
+        {
+          id: "model",
+          label: "Model",
+          control: "load_3d",
+          binding: { node_id: "5", input_name: "model" },
+          default: null,
+          validation: {},
+        },
+        {
+          id: "file",
+          label: "File",
+          control: "load_file",
+          binding: { node_id: "6", input_name: "file" },
+          default: null,
+          validation: { accepted_extensions: [".json"] },
+        },
+      ],
+      outputs: [
+        { id: "legacy-image", label: "Image", node_id: "10", type: "image", kind: "image" },
+        { id: "audio-out", label: "Audio", node_id: "11", type: "audio", kind: "audio" },
+        { id: "video-out", label: "Video", node_id: "12", type: "video", kind: "video" },
+        { id: "model-out", label: "3D", node_id: "13", type: "3d", kind: "3d" },
+        { id: "text-out", label: "Text", node_id: "14", type: "text", kind: "text" },
+        { id: "file-out", label: "File", node_id: "15", type: "file", kind: "file" },
+      ],
+      dashboard: {
+        version: "0.1.0",
+        status: "configured",
+        sections: [{
+          id: "main",
+          title: "Main",
+          controls: [
+            {
+              id: "comfy-key",
+              type: "api_credential",
+              label: "Comfy API key",
+              input_id: "comfy-key",
+              provider: "comfy_org",
+              required: true,
+              secret_ref: "api-key:comfy_org",
+              injection_strategy: { kind: "comfyui_extra_data", field: "api_key_comfy_org" },
+            },
+            {
+              id: "control-owned-key",
+              type: "api_credential",
+              label: "Control-owned key",
+              provider: "comfy_org",
+              required: true,
+              secret_ref: "api-key:comfy_org",
+              injection_strategy: { kind: "comfyui_extra_data", field: "api_key_comfy_org" },
+            },
+            { id: "mask", type: "load_image_mask", label: "Mask", input_id: "mask" },
+            { id: "audio", type: "load_audio", label: "Audio", input_id: "audio" },
+            { id: "video", type: "load_video", label: "Video", input_id: "video" },
+            { id: "model", type: "load_3d", label: "Model", input_id: "model" },
+            { id: "file", type: "load_file", label: "File", input_id: "file" },
+            { id: "legacy-image", type: "result_image", label: "Legacy image", output_id: "legacy-image" },
+            { id: "audio-out", type: "display_audio", label: "Audio out", output_id: "audio-out" },
+            { id: "video-out", type: "display_video", label: "Video out", output_id: "video-out" },
+            { id: "model-out", type: "display_3d", label: "3D out", output_id: "model-out" },
+            { id: "text-out", type: "display_text", label: "Text out", output_id: "text-out" },
+            { id: "file-out", type: "display_file", label: "File out", output_id: "file-out" },
+          ],
+        }],
+      },
+    });
+
+    expect(schema.widgets.map((widget) => widget.widgetType)).toEqual([
+      "api_credential",
+      "api_credential",
+      "load_image_mask",
+      "load_audio",
+      "load_video",
+      "load_3d",
+      "load_file",
+      "result_image",
+      "display_audio",
+      "display_video",
+      "display_3d",
+      "display_text",
+      "display_file",
+    ]);
+    expect(schema.widgets.find((widget) => widget.id === "legacy-image")).toMatchObject({
+      backendOutputId: "legacy-image",
+      widgetType: "result_image",
+    });
+    const payload = toBackendPayload(schema);
+    const credentialControls = payload.dashboard.sections[0].controls.slice(0, 2);
+    expect(credentialControls).toEqual([
+      expect.objectContaining({
+        id: "comfy-key",
+        type: "api_credential",
+        input_id: "comfy-key",
+        provider: "comfy_org",
+        required: true,
+        secret_ref: "api-key:comfy_org",
+        injection_strategy: { kind: "comfyui_extra_data", field: "api_key_comfy_org" },
+      }),
+      expect.objectContaining({
+        id: "control-owned-key",
+        type: "api_credential",
+        provider: "comfy_org",
+        required: true,
+        secret_ref: "api-key:comfy_org",
+        injection_strategy: { kind: "comfyui_extra_data", field: "api_key_comfy_org" },
+      }),
+    ]);
+    expect(credentialControls[1]).not.toHaveProperty("input_id");
   });
 });

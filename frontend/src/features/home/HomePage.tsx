@@ -372,6 +372,7 @@ export function HomePage({
   const localImportFlow = useWorkflowImportFlow({
     onOpenWorkflow,
     onConfigureDashboard,
+    workflowTabs,
     deferConfigurationAfterDownloadedImport: true,
   });
   const importFlowController = workflowImportFlow ?? localImportFlow;

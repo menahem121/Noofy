@@ -19,6 +19,53 @@ def _layouts_overlap(a: dict, b: dict) -> bool:
     return ax1 < bx2 and ax2 > bx1 and ay1 < by2 and ay2 > by1
 
 
+def _validate_layout(kind: str, item_id: str, layout: object, errors: list[str]) -> dict | None:
+    x = getattr(layout, "x")
+    y = getattr(layout, "y")
+    w = getattr(layout, "w")
+    h = getattr(layout, "h")
+    min_w = getattr(layout, "min_w", None)
+    min_h = getattr(layout, "min_h", None)
+    valid = True
+
+    if x < 0:
+        errors.append(f"Dashboard {kind} '{item_id}' layout.x must be greater than or equal to 0.")
+        valid = False
+    if y < 0:
+        errors.append(f"Dashboard {kind} '{item_id}' layout.y must be greater than or equal to 0.")
+        valid = False
+    if w <= 0:
+        errors.append(f"Dashboard {kind} '{item_id}' layout.w must be greater than 0.")
+        valid = False
+    if h <= 0:
+        errors.append(f"Dashboard {kind} '{item_id}' layout.h must be greater than 0.")
+        valid = False
+    if min_w is not None and min_w <= 0:
+        errors.append(f"Dashboard {kind} '{item_id}' layout.min_w must be greater than 0.")
+        valid = False
+    if min_h is not None and min_h <= 0:
+        errors.append(f"Dashboard {kind} '{item_id}' layout.min_h must be greater than 0.")
+        valid = False
+    if min_w is not None and w > 0 and min_w > w:
+        errors.append(f"Dashboard {kind} '{item_id}' layout.min_w must not be larger than layout.w.")
+        valid = False
+    if min_h is not None and h > 0 and min_h > h:
+        errors.append(f"Dashboard {kind} '{item_id}' layout.min_h must not be larger than layout.h.")
+        valid = False
+    if w > _GRID_COLUMNS:
+        errors.append(f"Dashboard {kind} '{item_id}' layout.w must not exceed the {_GRID_COLUMNS}-column grid.")
+        valid = False
+    if x >= 0 and w > 0 and x + w > _GRID_COLUMNS:
+        errors.append(
+            f"Dashboard {kind} '{item_id}' extends beyond the {_GRID_COLUMNS}-column grid."
+        )
+        valid = False
+
+    if not valid:
+        return None
+    return {"x": x, "y": y, "w": w, "h": h}
+
+
 def _finite_number(value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
@@ -253,46 +300,28 @@ class WorkflowPackageValidator:
                         section_grouped_control_ids.add(control_id)
 
                 if group.layout is not None:
-                    layout_dict = {
-                        "x": group.layout.x,
-                        "y": group.layout.y,
-                        "w": group.layout.w,
-                        "h": group.layout.h,
-                    }
-                    for other_id, other_layout in layouts_with_id:
-                        if _layouts_overlap(layout_dict, other_layout):
-                            errors.append(
-                                f"Dashboard layout item '{group.id}' overlaps '{other_id}'."
-                            )
-                    layouts_with_id.append((group.id, layout_dict))
-
-                    if group.layout.x + group.layout.w > _GRID_COLUMNS:
-                        errors.append(
-                            f"Dashboard group '{group.id}' extends beyond the {_GRID_COLUMNS}-column grid."
-                        )
+                    layout_dict = _validate_layout("group", group.id, group.layout, errors)
+                    if layout_dict is not None:
+                        for other_id, other_layout in layouts_with_id:
+                            if _layouts_overlap(layout_dict, other_layout):
+                                errors.append(
+                                    f"Dashboard layout item '{group.id}' overlaps '{other_id}'."
+                                )
+                        layouts_with_id.append((group.id, layout_dict))
 
             for control in section.controls:
                 if control.id in section_grouped_control_ids:
                     continue
                 # Layout overlap detection (responsive 32-column dashboard grid).
                 if control.layout is not None:
-                    layout_dict = {
-                        "x": control.layout.x,
-                        "y": control.layout.y,
-                        "w": control.layout.w,
-                        "h": control.layout.h,
-                    }
-                    for other_id, other_layout in layouts_with_id:
-                        if _layouts_overlap(layout_dict, other_layout):
-                            errors.append(
-                                f"Dashboard layout item '{control.id}' overlaps '{other_id}'."
-                            )
-                    layouts_with_id.append((control.id, layout_dict))
-
-                    if control.layout.x + control.layout.w > _GRID_COLUMNS:
-                        errors.append(
-                            f"Dashboard control '{control.id}' extends beyond the {_GRID_COLUMNS}-column grid."
-                        )
+                    layout_dict = _validate_layout("control", control.id, control.layout, errors)
+                    if layout_dict is not None:
+                        for other_id, other_layout in layouts_with_id:
+                            if _layouts_overlap(layout_dict, other_layout):
+                                errors.append(
+                                    f"Dashboard layout item '{control.id}' overlaps '{other_id}'."
+                                )
+                        layouts_with_id.append((control.id, layout_dict))
 
         # Warn if an input has no corresponding control (not an error — input may be hidden/advanced).
         for input_id in input_ids:

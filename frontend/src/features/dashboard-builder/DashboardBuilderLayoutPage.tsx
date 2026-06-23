@@ -8,6 +8,7 @@ import {
   FileAudio,
   GripVertical,
   ImagePlus,
+  KeyRound,
   LayoutGrid,
   Shuffle,
   SlidersHorizontal,
@@ -102,6 +103,7 @@ const WIDGET_ICONS: Record<WidgetType, typeof Type> = {
   load_file: File,
   load_3d: Box,
   display_image: Sparkles,
+  result_image: Sparkles,
   display_audio: FileAudio,
   display_text: Type,
   display_video: Video,
@@ -110,6 +112,7 @@ const WIDGET_ICONS: Record<WidgetType, typeof Type> = {
   seed_widget: Shuffle,
   lora_loader: Sparkles,
   select: ChevronDown,
+  api_credential: KeyRound,
 };
 
 export function DashboardBuilderLayoutPage({

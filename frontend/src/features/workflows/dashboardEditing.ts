@@ -58,6 +58,21 @@ export function buildDashboardSchemaForEditing(packageData: WorkflowPackageRespo
           ...(input ? { hasExecutableBinding: true } : {}),
           layout,
         });
+      } else if (control.type === "api_credential" && !control.input_id) {
+        widgets.push({
+          id: control.id,
+          valueId: `credential:${control.id}`,
+          binding: { nodeId: "", inputName: "" },
+          widgetType: "api_credential",
+          title: control.label,
+          description: control.description ?? "",
+          defaultValue: null,
+          ...(control.provider ? { provider: control.provider } : {}),
+          ...(control.required !== undefined ? { required: control.required } : {}),
+          ...(control.secret_ref ? { secretRef: control.secret_ref } : {}),
+          ...(control.injection_strategy ? { injectionStrategy: control.injection_strategy } : {}),
+          layout,
+        });
       } else if (control.input_id) {
         const input = inputIndex.get(control.input_id);
         if (!input) continue;
@@ -79,6 +94,10 @@ export function buildDashboardSchemaForEditing(packageData: WorkflowPackageRespo
           acceptedExtensions: stringArrayValidation(input.validation.accepted_extensions),
           acceptedMimeTypes: stringArrayValidation(input.validation.accepted_mime_types),
           ...(control.type === "seed_widget" ? { seedMode: seedModeFromValidation(input.validation) } : {}),
+          ...(control.type === "api_credential" && control.provider ? { provider: control.provider } : {}),
+          ...(control.type === "api_credential" && control.required !== undefined ? { required: control.required } : {}),
+          ...(control.type === "api_credential" && control.secret_ref ? { secretRef: control.secret_ref } : {}),
+          ...(control.type === "api_credential" && control.injection_strategy ? { injectionStrategy: control.injection_strategy } : {}),
           layout,
         });
       } else if (control.output_id) {
@@ -88,8 +107,9 @@ export function buildDashboardSchemaForEditing(packageData: WorkflowPackageRespo
         widgets.push({
           id: control.id,
           valueId: output.id,
+          backendOutputId: output.id,
           binding: { nodeId: output.node_id, inputName: "" },
-          widgetType: outputKind === "audio" ? "display_audio" : outputKind === "text" ? "display_text" : outputKind === "video" ? "display_video" : outputKind === "3d" ? "display_3d" : outputKind === "file" ? "display_file" : "display_image",
+          widgetType: outputWidgetTypeForBuilder(control.type, outputKind),
           title: control.label,
           description: control.description ?? "",
           defaultValue: null,
@@ -172,8 +192,29 @@ function groupForBuilder(group: DashboardControlGroupDef, childTypes: string[]) 
 }
 
 function toBuilderWidgetType(type: string): WidgetType {
-  if (type === "result_image") return "display_image";
   return inputWidgetTypeForBuilder(type) ?? "string_field";
+}
+
+function outputWidgetTypeForBuilder(type: string, outputKind: string): WidgetType {
+  if (isOutputWidgetTypeForBuilder(type)) return type;
+  if (outputKind === "audio") return "display_audio";
+  if (outputKind === "text") return "display_text";
+  if (outputKind === "video") return "display_video";
+  if (outputKind === "3d") return "display_3d";
+  if (outputKind === "file") return "display_file";
+  return "display_image";
+}
+
+function isOutputWidgetTypeForBuilder(type: string): type is WidgetType {
+  return [
+    "display_image",
+    "result_image",
+    "display_audio",
+    "display_text",
+    "display_video",
+    "display_file",
+    "display_3d",
+  ].includes(type);
 }
 
 function inputWidgetTypeForBuilder(type: string): WidgetType | null {
@@ -191,6 +232,7 @@ function inputWidgetTypeForBuilder(type: string): WidgetType | null {
     "load_file",
     "load_3d",
     "display_image",
+    "result_image",
     "display_audio",
     "display_text",
     "display_video",
@@ -199,6 +241,7 @@ function inputWidgetTypeForBuilder(type: string): WidgetType | null {
     "seed_widget",
     "lora_loader",
     "select",
+    "api_credential",
   ]);
   return knownTypes.has(type as WidgetType) ? (type as WidgetType) : null;
 }

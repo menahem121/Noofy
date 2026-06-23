@@ -1117,26 +1117,55 @@ def normalize_custom_nodes(
 def normalize_dashboard(
     dashboard_json: dict[str, Any],
 ) -> DashboardSchema:
+    schema, _diagnostics = normalize_dashboard_with_diagnostics(dashboard_json)
+    return schema
+
+
+def normalize_dashboard_with_diagnostics(
+    dashboard_json: dict[str, Any],
+) -> tuple[DashboardSchema, dict[str, Any]]:
     stripped = {
         k: v for k, v in dashboard_json.items() if k not in ("inputs", "outputs")
     }
     archive_status = stripped.get("status")
+    diagnostics: dict[str, Any] = {
+        "source": "dashboard.json" if dashboard_json else "missing_dashboard_json",
+        "source_status": archive_status if isinstance(archive_status, str) else None,
+        "parse_status": "missing_or_legacy",
+        "normalizations": [],
+        "downgraded_to_setup_required": False,
+    }
     if archive_status not in ("configured", "not_configured", "invalid"):
+        if archive_status is not None:
+            diagnostics["normalizations"].append("invalid_status_reset")
         archive_status = None
     if "version" in stripped and isinstance(stripped.get("sections"), list):
         try:
             schema = DashboardSchema.model_validate(stripped)
             if archive_status is None and not any(s.controls for s in schema.sections):
                 schema = schema.model_copy(update={"status": "not_configured"})
-            return schema
-        except Exception:
-            pass
-    explicit_status = archive_status if archive_status else "not_configured"
-    return DashboardSchema(
+                diagnostics["normalizations"].append("empty_dashboard_marked_not_configured")
+            elif archive_status is None:
+                diagnostics["normalizations"].append("missing_status_defaulted")
+            diagnostics["parse_status"] = (
+                "normalized" if diagnostics["normalizations"] else "parsed"
+            )
+            diagnostics["effective_status"] = schema.status
+            return schema, diagnostics
+        except Exception as exc:
+            diagnostics["parse_status"] = "rejected"
+            diagnostics["downgraded_to_setup_required"] = True
+            diagnostics["rejection_reason"] = exc.__class__.__name__
+            diagnostics["rejection_summary"] = str(exc).splitlines()[0] if str(exc) else exc.__class__.__name__
+    schema = DashboardSchema(
         version=NOOFY_ARCHIVE_SCHEMA_VERSION,
-        status=explicit_status,
+        status="not_configured",
         sections=[],
     )
+    diagnostics["effective_status"] = schema.status
+    if dashboard_json:
+        diagnostics["downgraded_to_setup_required"] = True
+    return schema, diagnostics
 
 
 def detect_unresolved_runtime_inputs(

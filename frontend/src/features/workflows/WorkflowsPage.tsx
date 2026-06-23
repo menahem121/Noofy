@@ -152,7 +152,7 @@ export function WorkflowsPage({
   const [detailsError, setDetailsError] = useState<string | null>(null);
   const [menuOpenFor, setMenuOpenFor] = useState<string | null>(null);
   const [showExportHelp, setShowExportHelp] = useState(false);
-  const localImportFlow = useWorkflowImportFlow({ onOpenWorkflow, onConfigureDashboard });
+  const localImportFlow = useWorkflowImportFlow({ onOpenWorkflow, onConfigureDashboard, workflowTabs });
   const importFlowController = workflowImportFlow ?? localImportFlow;
   const rendersOwnImportDialogs = !workflowImportFlow;
   const {

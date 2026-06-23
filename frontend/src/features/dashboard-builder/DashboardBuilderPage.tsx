@@ -1590,7 +1590,7 @@ function widgetSpecificPreviewDetails(value: WorkflowNodeValue, widgetType: Widg
     return [{ label: "Accepts", value: DEFAULT_FILE_ACCEPTED_EXTENSIONS.join(", "), multiline: true }];
   }
 
-  if (widgetType === "display_image") return [{ label: "Output", value: "Generated image result" }];
+  if (widgetType === "display_image" || widgetType === "result_image") return [{ label: "Output", value: "Generated image result" }];
   if (widgetType === "display_audio") return [{ label: "Output", value: "Generated audio result" }];
   if (widgetType === "display_text") return [{ label: "Output", value: "Generated text result" }];
   if (widgetType === "display_video") return [{ label: "Output", value: "Generated video result" }];
@@ -3193,7 +3193,7 @@ function PreviewWidgetInput({ workflowId, widget }: { workflowId: string; widget
     );
   }
 
-  if (widget.widgetType === "display_image") {
+  if (widget.widgetType === "display_image" || widget.widgetType === "result_image") {
     return (
       <div className="preview-image-output">
         <Sparkles size={22} aria-hidden="true" />

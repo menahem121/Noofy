@@ -21,6 +21,7 @@ import { workflowDisplayName } from "../../lib/workflowNames";
 import { addPendingImportedSetupReminder } from "../home/pendingSetupBanners";
 import { useWorkflowLibrary } from "../home/WorkflowLibraryProvider";
 import { importNeedsConfiguration } from "./workflowImportUtils";
+import { cleanupRemovedWorkflowFrontendState } from "./workflowRemoval";
 
 export interface WorkflowImportFlowState {
   importing: boolean;
@@ -111,11 +112,13 @@ export function importNeedsCustomNodeResolution(importResult: WorkflowImportResp
 export function useWorkflowImportFlow({
   onOpenWorkflow,
   onConfigureDashboard,
+  workflowTabs,
   allowUnverifiedCommunityPreparation = true,
   deferConfigurationAfterDownloadedImport = false,
 }: {
   onOpenWorkflow: (workflowId: string, workflowName?: string) => void;
   onConfigureDashboard?: (workflowId?: string, workflowName?: string) => void;
+  workflowTabs?: { closeWorkflowTab: (workflowId: string) => void } | null;
   allowUnverifiedCommunityPreparation?: boolean;
   deferConfigurationAfterDownloadedImport?: boolean;
 }): WorkflowImportFlowController {
@@ -293,6 +296,9 @@ export function useWorkflowImportFlow({
     setState((current) => ({ ...current, importing: true, importError: null }));
     try {
       const importResult = await commitWorkflowImport(sessionId, action);
+      if (action === "replace") {
+        cleanupRemovedWorkflowFrontendState(importResult.workflow.id, workflowTabs);
+      }
       await finishImport(importResult, true);
     } catch (error) {
       setState((current) => ({
@@ -301,7 +307,7 @@ export function useWorkflowImportFlow({
         importError: error instanceof Error ? error.message : String(error),
       }));
     }
-  }, [finishImport, state.pendingImport?.import_session_id]);
+  }, [finishImport, state.pendingImport?.import_session_id, workflowTabs]);
 
   const resolveCustomNodesFromUrls = useCallback(async (urlsByNodeType: Record<string, string>) => {
     const sessionId = state.pendingImport?.import_session_id;

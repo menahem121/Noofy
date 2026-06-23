@@ -131,7 +131,12 @@ def _import_result(tmp_path: Path, archive_bytes: bytes) -> dict[str, Any]:
     store = ImportedWorkflowPackageStore(tmp_path / "packages", log_store=log_store)
     package = store.import_archive(archive_bytes, original_filename="test.noofy")
     status = package.import_metadata.status if package.import_metadata else "imported"
-    return {"status": status, "workflow_id": package.metadata.id, "package": package}
+    return {
+        "status": status,
+        "workflow_id": package.metadata.id,
+        "package": package,
+        "package_dir": store.package_dir(package),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -157,9 +162,29 @@ def test_not_configured_dashboard_routes_to_needs_input_setup(tmp_path: Path) ->
     assert result["status"] == "needs_input_setup"
 
 
+def test_legacy_dashboard_missing_status_records_normalization(tmp_path: Path) -> None:
+    legacy_dashboard = {
+        "version": "0.1.0",
+        "inputs": [],
+        "outputs": [],
+        "sections": [],
+    }
+    result = _import_result(tmp_path, _archive(legacy_dashboard))
+
+    assert result["status"] == "needs_input_setup"
+    report = json.loads((result["package_dir"] / "import-report.json").read_text(encoding="utf-8"))
+    assert report["dashboard"]["parse_status"] == "normalized"
+    assert "empty_dashboard_marked_not_configured" in report["dashboard"]["normalizations"]
+    assert report["dashboard"]["effective_status"] == "not_configured"
+
+
 def test_configured_valid_dashboard_routes_to_imported(tmp_path: Path) -> None:
     result = _import_result(tmp_path, _archive(_CONFIGURED_DASHBOARD))
     assert result["status"] == "imported"
+    report = json.loads((result["package_dir"] / "import-report.json").read_text(encoding="utf-8"))
+    assert report["dashboard"]["parse_status"] == "parsed"
+    assert report["dashboard"]["validation_status"] == "valid"
+    assert report["dashboard"]["effective_status"] == "configured"
 
 
 def test_configured_valid_dashboard_preserves_inputs_and_outputs(tmp_path: Path) -> None:
@@ -173,3 +198,40 @@ def test_configured_valid_dashboard_preserves_inputs_and_outputs(tmp_path: Path)
 def test_configured_invalid_dashboard_routes_to_needs_input_setup(tmp_path: Path) -> None:
     result = _import_result(tmp_path, _archive(_INVALID_DASHBOARD))
     assert result["status"] == "needs_input_setup"
+    report = json.loads((result["package_dir"] / "import-report.json").read_text(encoding="utf-8"))
+    assert report["dashboard"]["parse_status"] == "parsed"
+    assert report["dashboard"]["validation_status"] == "invalid"
+    assert any("MISSING_NODE" in error for error in report["dashboard"]["validation_errors"])
+
+
+def test_schema_rejected_dashboard_routes_to_setup_with_diagnostics(tmp_path: Path) -> None:
+    malformed_dashboard = {
+        "version": "0.1.0",
+        "status": "configured",
+        "inputs": [],
+        "outputs": [],
+        "sections": [
+            {
+                "id": "main",
+                "title": "Controls",
+                "controls": [
+                    {
+                        "type": "textarea",
+                        "label": "Missing id",
+                        "input_id": "prompt",
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = _import_result(tmp_path, _archive(malformed_dashboard))
+
+    assert result["status"] == "needs_input_setup"
+    assert result["package"].dashboard.status == "not_configured"
+    report = json.loads((result["package_dir"] / "import-report.json").read_text(encoding="utf-8"))
+    assert report["dashboard"]["parse_status"] == "rejected"
+    assert report["dashboard"]["source_status"] == "configured"
+    assert report["dashboard"]["effective_status"] == "not_configured"
+    assert report["dashboard"]["downgraded_to_setup_required"] is True
+    assert report["dashboard"]["rejection_reason"]

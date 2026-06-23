@@ -113,6 +113,7 @@ from app.workflows.import_normalization import (
     normalize_asset_ownership,
     normalize_custom_nodes,
     normalize_dashboard,
+    normalize_dashboard_with_diagnostics,
     normalize_model_verification_level,
     normalize_models,
     required_models_from_comfyui_workflow,
@@ -824,6 +825,11 @@ class ImportedWorkflowPackageStore:
                 "custom_node_count": len(package.custom_nodes),
                 "required_model_count": len(unique_required_models(package.required_models)),
                 **_raw_comfyui_log_details(package),
+                "dashboard": (
+                    package.import_metadata.developer_details.get("dashboard")
+                    if package.import_metadata
+                    else None
+                ),
                 "unresolved_input_count": len(package.unresolved_runtime_inputs),
             },
         )
@@ -1425,7 +1431,7 @@ class NoofyArchiveImporter:
             _normalize_custom_nodes(capsule_json, package_json),
             self.members,
         )
-        dashboard = _normalize_dashboard(dashboard_json)
+        dashboard, dashboard_diagnostics = _normalize_dashboard_with_diagnostics(dashboard_json)
         dashboard_inputs = [
             WorkflowInput.model_validate(i)
             for i in (dashboard_json.get("inputs") or [])
@@ -1483,10 +1489,16 @@ class NoofyArchiveImporter:
             )
             _result = _validator.validate_structure(_candidate)
             dashboard_valid = _result.valid
+            dashboard_diagnostics["validation_status"] = "valid" if _result.valid else "invalid"
+            dashboard_diagnostics["validation_errors"] = _result.errors
+        else:
+            dashboard_diagnostics["validation_status"] = "skipped"
 
         import_status = _import_status(
             unresolved_inputs, dashboard, dashboard_valid=dashboard_valid
         )
+        if import_status == "needs_input_setup" and dashboard_diagnostics.get("parse_status") == "rejected":
+            dashboard_diagnostics["downgraded_to_setup_required"] = True
 
         try:
             return WorkflowPackage(
@@ -1547,6 +1559,7 @@ class NoofyArchiveImporter:
                     source_archive_sha256=f"sha256:{hashlib.sha256(self.data).hexdigest()}",
                     status=import_status,
                     user_facing_message=_import_status_message(import_status),
+                    developer_details={"dashboard": dashboard_diagnostics},
                 ),
             )
         except ValidationError as exc:
@@ -3247,6 +3260,12 @@ def _normalize_dashboard(
     dashboard_json: dict[str, Any],
 ) -> DashboardSchema:
     return normalize_dashboard(dashboard_json)
+
+
+def _normalize_dashboard_with_diagnostics(
+    dashboard_json: dict[str, Any],
+) -> tuple[DashboardSchema, dict[str, Any]]:
+    return normalize_dashboard_with_diagnostics(dashboard_json)
 
 
 def merge_unresolved_runtime_inputs(

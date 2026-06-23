@@ -111,6 +111,7 @@ function AppContent() {
   const workflowImportFlow = useWorkflowImportFlow({
     onOpenWorkflow: openWorkflow,
     onConfigureDashboard: configureDashboard,
+    workflowTabs,
     deferConfigurationAfterDownloadedImport: true,
   });
   const importStatusHidden = shouldHideImportStatusNotice(route, workflowImportFlow.state.importResult?.workflow.id);

@@ -191,6 +191,11 @@ def _write_import_report(
                     if package.import_metadata
                     else {}
                 ),
+                "dashboard": (
+                    package.import_metadata.developer_details.get("dashboard", {})
+                    if package.import_metadata
+                    else {}
+                ),
                 "source_policy": (
                     package.source_policy.model_dump(mode="json")
                     if package.source_policy
