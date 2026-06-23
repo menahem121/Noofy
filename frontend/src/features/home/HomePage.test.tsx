@@ -1435,6 +1435,11 @@ describe("HomePage", () => {
         body: JSON.stringify({ duplicate_action: "copy" }),
       });
     });
+    const notice = (await screen.findByText("Portrait Workflow Copy was added to your local workflows.")).closest(".notice");
+    expect(notice).not.toBeNull();
+
+    fireEvent.click(within(notice as HTMLElement).getByRole("button", { name: "Open" }));
+    expect(onOpenWorkflow).toHaveBeenCalledWith("local__portrait-copy__0.1.0", "Portrait Workflow Copy");
   });
 
   it("cancels a staged import when the popup X button is clicked", async () => {

@@ -985,7 +985,10 @@ describe("WorkflowsPage", () => {
         expect.objectContaining({ method: "POST" }),
       );
     });
-    expect(await screen.findByText("Missing Model Flow was added to your local workflows.")).toBeInTheDocument();
+    const notice = (await screen.findByText("Missing Model Flow was added to your local workflows.")).closest(".notice");
+    expect(notice).not.toBeNull();
+    fireEvent.click(within(notice as HTMLElement).getByRole("button", { name: "Open" }));
+    expect(onOpenWorkflow).toHaveBeenCalledWith("missing_model_flow", "Missing Model Flow");
     expect(screen.getByText("Missing Model Flow")).toBeInTheDocument();
   });
 

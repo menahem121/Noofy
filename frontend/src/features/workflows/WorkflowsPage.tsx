@@ -242,8 +242,9 @@ export function WorkflowsPage({
   const readyCount = workflows.filter((workflow) => workflowStatus(workflow) === "ready").length;
   const needSetupCount = workflows.filter((workflow) => workflowStatus(workflow) === "need_setup").length;
   const missingModelsCount = workflows.reduce((total, workflow) => total + (workflow.missing_model_count ?? 0), 0);
-  const importResultNeedsConfiguration =
-    importFlow.importResult !== null && importNeedsConfiguration(importFlow.importResult);
+  const importResult = importFlow.importResult;
+  const importResultWorkflowName = importResult ? workflowDisplayName(importResult.workflow) : "";
+  const importResultNeedsConfiguration = importResult !== null && importNeedsConfiguration(importResult);
 
   useEffect(() => {
     const workflowIds = new Set(workflows.map((workflow) => workflow.id));
@@ -537,12 +538,12 @@ Noofy hides the technical complexity, manages the workflow experience, and lets 
             </div>
           ) : null}
 
-          {importFlow.importResult ? (
+          {importResult ? (
             <div className="notice notice--row" role="status">
               <CheckCircle2 size={18} aria-hidden="true" />
               <div>
-                <strong>{importFlow.importResult.user_facing_message}</strong>
-                <span>{workflowDisplayName(importFlow.importResult.workflow)} was added to your local workflows.</span>
+                <strong>{importResult.user_facing_message}</strong>
+                <span>{importResultWorkflowName} was added to your local workflows.</span>
               </div>
               {importResultNeedsConfiguration && onConfigureDashboard ? (
                 <button
@@ -555,12 +556,23 @@ Noofy hides the technical complexity, manages the workflow experience, and lets 
                   Configure dashboard
                 </button>
               ) : null}
+              {!importResultNeedsConfiguration ? (
+                <button
+                  className="primary-button primary-button--compact"
+                  style={{ marginLeft: "auto" }}
+                  type="button"
+                  onClick={() => onOpenWorkflow(importResult.workflow.id, importResultWorkflowName)}
+                >
+                  <PackageOpen size={14} aria-hidden="true" />
+                  Open
+                </button>
+              ) : null}
               {importResultNeedsConfiguration ? (
                 <button
                   className="icon-button"
                   style={onConfigureDashboard ? undefined : { marginLeft: "auto" }}
                   type="button"
-                  aria-label={`Dismiss setup for ${workflowDisplayName(importFlow.importResult.workflow)}`}
+                  aria-label={`Dismiss setup for ${importResultWorkflowName}`}
                   title="Dismiss"
                   onClick={dismissSetupImportResult}
                 >

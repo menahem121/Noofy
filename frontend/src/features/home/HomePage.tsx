@@ -6,6 +6,7 @@ import {
   ChevronDown,
   Download,
   FileUp,
+  PackageOpen,
   PackagePlus,
   Plus,
   Search,
@@ -526,6 +527,8 @@ export function HomePage({
             message: "Noofy will keep trying in the background. Restart Noofy if this keeps happening.",
           }
         : null;
+  const importResult = homeData.importResult;
+  const importResultWorkflowName = importResult ? workflowDisplayName(importResult.workflow) : "";
 
   useEffect(() => {
     setHighlightedSearchIndex(-1);
@@ -721,13 +724,22 @@ export function HomePage({
             </div>
           ) : null}
 
-          {homeData.importResult && !importNeedsConfiguration(homeData.importResult) ? (
+          {importResult && !importNeedsConfiguration(importResult) ? (
             <div className="notice notice--row" role="status">
               <CheckCircle2 size={18} aria-hidden="true" />
               <div>
-                <strong>{homeData.importResult.user_facing_message}</strong>
-                <span>{workflowDisplayName(homeData.importResult.workflow)} was added to your local workflows.</span>
+                <strong>{importResult.user_facing_message}</strong>
+                <span>{importResultWorkflowName} was added to your local workflows.</span>
               </div>
+              <button
+                className="primary-button primary-button--compact"
+                style={{ marginLeft: "auto" }}
+                type="button"
+                onClick={() => onOpenWorkflow(importResult.workflow.id, importResultWorkflowName)}
+              >
+                <PackageOpen size={14} aria-hidden="true" />
+                Open
+              </button>
             </div>
           ) : null}
 
