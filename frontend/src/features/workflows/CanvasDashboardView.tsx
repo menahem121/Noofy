@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
   type PointerEvent,
+  type ReactNode,
 } from "react";
 import {
   CheckCircle2,
@@ -794,6 +795,10 @@ function CanvasWidgetCell({
   const outputKind = output?.kind ?? output?.type;
   const textOutputs = control && output && (outputKind === "text" || control.type === "display_text") ? outputTextsByNodeId.get(output.node_id) ?? [] : [];
   const textToCopy = textOutputs.join("\n\n");
+  const videoOutputOwnsFooter = control ? isVideoOutputControl(control, outputIndex) : false;
+  const galleryAction = control
+    ? renderOutputGalleryAction(control, gallerySaveByControlId, onSaveOutputToGallery, onCancelOutputGallerySave)
+    : null;
   const [copiedTextOutput, setCopiedTextOutput] = useState(false);
   const compact = isGroup
     ? isWidgetGroupLayoutCompact(layout, item.controls.map((child) => child.type))
@@ -970,10 +975,11 @@ function CanvasWidgetCell({
                 livePreviewFallbackControlId={livePreviewFallbackControlId}
                 comparisonBeforeImageUrl={comparisonBeforeImageUrl}
                 imagePreviewEnabled={!isEditingLayout}
+                galleryAction={videoOutputOwnsFooter ? galleryAction : null}
               />
-              {supportsGallery && onSaveOutputToGallery && onCancelOutputGallerySave ? (
+              {galleryAction && !videoOutputOwnsFooter ? (
                 <div className="widget-output-gallery-action">
-                  <GallerySaveAction status={gallerySaveByControlId?.[control!.id]} onSave={() => onSaveOutputToGallery(control!.id)} onCancel={() => onCancelOutputGallerySave(control!.id)} />
+                  {galleryAction}
                 </div>
               ) : null}
             </>
@@ -1069,6 +1075,8 @@ function GroupedCanvasControls({
       {item.controls.map((control) => {
         const isOutput = isOutputControlType(control.type);
         const supportsGallery = isGalleryOutputControlType(control.type);
+        const videoOutputOwnsFooter = isVideoOutputControl(control, outputIndex);
+        const galleryAction = renderOutputGalleryAction(control, gallerySaveByControlId, onSaveOutputToGallery, onCancelOutputGallerySave);
         const controlClasses = [
           "canvas-widget-group__control",
           control.type === "textarea" ? "canvas-widget-group__control--textarea" : "",
@@ -1108,10 +1116,11 @@ function GroupedCanvasControls({
                   livePreviewFallbackControlId={livePreviewFallbackControlId}
                   comparisonBeforeImageUrl={comparisonBeforeImageUrl}
                   imagePreviewEnabled={!disabled}
+                  galleryAction={videoOutputOwnsFooter ? galleryAction : null}
                 />
-                {supportsGallery && onSaveOutputToGallery && onCancelOutputGallerySave ? (
+                {galleryAction && !videoOutputOwnsFooter ? (
                   <div className="widget-output-gallery-action">
-                    <GallerySaveAction status={gallerySaveByControlId?.[control.id]} onSave={() => onSaveOutputToGallery(control.id)} onCancel={() => onCancelOutputGallerySave(control.id)} />
+                    {galleryAction}
                   </div>
                 ) : null}
                 {supportsGallery ? (
@@ -1236,6 +1245,28 @@ function isGalleryOutputControlType(type: string): boolean {
 function isLivePreviewVisualOutput(outputKind: string | null | undefined, controlType: string): boolean {
   const kind = outputKind ?? (controlType === "display_video" ? "video" : null);
   return kind === "image" || kind === "video" || kind === "3d" || controlType === "display_image" || controlType === "result_image" || controlType === "display_3d";
+}
+
+function isVideoOutputControl(control: DashboardControlDef, outputIndex: Map<string, WorkflowOutputDef>): boolean {
+  const output = control.output_id ? outputIndex.get(control.output_id) : null;
+  const outputKind = output?.kind ?? output?.type;
+  return outputKind === "video" || control.type === "display_video";
+}
+
+function renderOutputGalleryAction(
+  control: DashboardControlDef,
+  gallerySaveByControlId: Record<string, GallerySaveRequest> | undefined,
+  onSaveOutputToGallery: ((controlId: string) => void) | undefined,
+  onCancelOutputGallerySave: ((controlId: string) => void) | undefined,
+): ReactNode {
+  if (!isGalleryOutputControlType(control.type) || !onSaveOutputToGallery || !onCancelOutputGallerySave) return null;
+  return (
+    <GallerySaveAction
+      status={gallerySaveByControlId?.[control.id]}
+      onSave={() => onSaveOutputToGallery(control.id)}
+      onCancel={() => onCancelOutputGallerySave(control.id)}
+    />
+  );
 }
 
 function visualOutputWidgetNodeIds(
@@ -1398,6 +1429,7 @@ function OutputWidgetContent({
   livePreviewFallbackControlId,
   comparisonBeforeImageUrl,
   imagePreviewEnabled = true,
+  galleryAction = null,
 }: {
   control: DashboardControlDef;
   outputIndex: Map<string, WorkflowOutputDef>;
@@ -1411,6 +1443,7 @@ function OutputWidgetContent({
   livePreviewFallbackControlId?: string | null;
   comparisonBeforeImageUrl?: string | null;
   imagePreviewEnabled?: boolean;
+  galleryAction?: ReactNode;
 }) {
   const output = control.output_id ? outputIndex.get(control.output_id) : null;
   const outputKind = output?.kind ?? output?.type;
@@ -1594,22 +1627,73 @@ function OutputWidgetContent({
   }
 
   if (videoOutputs.length > 0) {
+    const singleVideoOutput = videoOutputs.length === 1 ? videoOutputs[0] : null;
     return (
       <div className="widget-output-video">
-        {videoOutputs.map((video, index) => (
-          <div className="widget-output-video__item" key={`${video.url}-${index}`}>
-            <video className="widget-output-video__player" controls src={video.url} poster={video.thumbnailUrl ?? undefined} preload="metadata" />
-            <div className="widget-output-video__meta">
-              <strong>{video.filename}</strong>
-              <span>{videoOutputMetaLabel(video)}</span>
+        {videoOutputs.map((video, index) => {
+          const useFooterActions = singleVideoOutput === video;
+          return (
+            <div
+              className={`widget-output-video__item${singleVideoOutput ? " widget-output-video__item--single" : ""}${useFooterActions ? " widget-output-video__item--footer-actions" : ""}`}
+              key={`${video.url}-${index}`}
+            >
+              <video className="widget-output-video__player" controls src={video.url} poster={video.thumbnailUrl ?? undefined} preload="metadata" />
+              {!useFooterActions ? (
+                <>
+                  <div className="widget-output-video__meta">
+                    <strong>{video.filename}</strong>
+                    <span>{videoOutputMetaLabel(video)}</span>
+                  </div>
+                  <div className="widget-output-video__actions">
+                    <button
+                      className="secondary-button secondary-button--small"
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        downloadMediaDirect(video.url, video.filename);
+                      }}
+                    >
+                      <Download size={14} aria-hidden="true" />
+                      Download
+                    </button>
+                    <button
+                      className="secondary-button secondary-button--small"
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        window.open(video.url, "_blank", "noopener,noreferrer");
+                      }}
+                    >
+                      <ExternalLink size={14} aria-hidden="true" />
+                      Open
+                    </button>
+                    <button
+                      className="secondary-button secondary-button--small"
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setPreviewVideo(video);
+                      }}
+                    >
+                      <Maximize size={14} aria-hidden="true" />
+                      Fullscreen
+                    </button>
+                  </div>
+                </>
+              ) : null}
             </div>
-            <div className="widget-output-video__actions">
+          );
+        })}
+        {singleVideoOutput ? (
+          <div className="widget-output-video__footer">
+            <div className="widget-output-video__footer-actions">
+              {galleryAction ? <div className="widget-output-gallery-action">{galleryAction}</div> : null}
               <button
                 className="secondary-button secondary-button--small"
                 type="button"
                 onClick={(event) => {
                   event.stopPropagation();
-                  downloadMediaDirect(video.url, video.filename);
+                  downloadMediaDirect(singleVideoOutput.url, singleVideoOutput.filename);
                 }}
               >
                 <Download size={14} aria-hidden="true" />
@@ -1620,7 +1704,7 @@ function OutputWidgetContent({
                 type="button"
                 onClick={(event) => {
                   event.stopPropagation();
-                  window.open(video.url, "_blank", "noopener,noreferrer");
+                  window.open(singleVideoOutput.url, "_blank", "noopener,noreferrer");
                 }}
               >
                 <ExternalLink size={14} aria-hidden="true" />
@@ -1631,15 +1715,18 @@ function OutputWidgetContent({
                 type="button"
                 onClick={(event) => {
                   event.stopPropagation();
-                  setPreviewVideo(video);
+                  setPreviewVideo(singleVideoOutput);
                 }}
               >
                 <Maximize size={14} aria-hidden="true" />
                 Fullscreen
               </button>
             </div>
+            <span className="widget-output-video__footer-meta">{videoOutputFooterMetaLabel(singleVideoOutput)}</span>
           </div>
-        ))}
+        ) : galleryAction ? (
+          <div className="widget-output-gallery-action">{galleryAction}</div>
+        ) : null}
         {previewVideo ? (
           <VideoPreviewViewer
             videoUrl={previewVideo.url}
@@ -1695,7 +1782,7 @@ function OutputWidgetContent({
     );
   }
 
-  return (
+  const placeholder = (
     <div className="widget-output-placeholder">
       {wantsAudio ? <FileAudio size={36} aria-hidden="true" /> : wantsText ? <Type size={36} aria-hidden="true" /> : wantsVideo ? <Video size={36} aria-hidden="true" /> : wantsThreeD ? <Box size={36} aria-hidden="true" /> : wantsFile ? <FileIcon size={36} aria-hidden="true" /> : <ImageIcon size={36} aria-hidden="true" />}
       <span>
@@ -1713,6 +1800,17 @@ function OutputWidgetContent({
       </span>
     </div>
   );
+
+  if (wantsVideo && galleryAction) {
+    return (
+      <>
+        {placeholder}
+        <div className="widget-output-gallery-action">{galleryAction}</div>
+      </>
+    );
+  }
+
+  return placeholder;
 }
 
 function audioOutputMetaLabel(audio: OutputAudioMedia): string {
@@ -1721,6 +1819,10 @@ function audioOutputMetaLabel(audio: OutputAudioMedia): string {
 
 function videoOutputMetaLabel(video: OutputVideoMedia): string {
   return videoMetadataLabel(null, video.mimeType, video.size, video.durationSeconds, video.width, video.height, video.fps, "Video output");
+}
+
+function videoOutputFooterMetaLabel(video: OutputVideoMedia): string {
+  return videoMetadataLabel(null, video.mimeType, video.size, null, null, null, null, "Video output");
 }
 
 function fileOutputMetaLabel(file: OutputFileMedia): string {

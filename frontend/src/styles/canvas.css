@@ -878,14 +878,28 @@
   background: rgba(20, 19, 22, 0.42);
 }
 
-.widget-output-video__item:only-child {
-  height: 100%;
+.widget-output-video__item:only-child,
+.widget-output-video__item--single {
+  flex: 1 1 0;
   min-height: 0;
   grid-template-rows: minmax(96px, 1fr) auto auto;
 }
 
-.layout-canvas-widget--compact .widget-output-video__item:only-child {
+.widget-output-video__item:only-child {
+  height: 100%;
+}
+
+.widget-output-video__item--footer-actions {
+  grid-template-rows: minmax(96px, 1fr);
+}
+
+.layout-canvas-widget--compact .widget-output-video__item:only-child,
+.layout-canvas-widget--compact .widget-output-video__item--single {
   grid-template-rows: minmax(0, 1fr) auto auto;
+}
+
+.layout-canvas-widget--compact .widget-output-video__item--footer-actions {
+  grid-template-rows: minmax(0, 1fr);
 }
 
 .widget-canvas-cell__content > .widget-output-three-d {
@@ -919,8 +933,10 @@
   background: rgba(20, 19, 22, 0.72);
 }
 
-.widget-output-video__item:only-child .widget-output-video__player {
+.widget-output-video__item:only-child .widget-output-video__player,
+.widget-output-video__item--single .widget-output-video__player {
   height: 100%;
+  max-height: none;
 }
 
 .widget-output-video__meta {
@@ -945,6 +961,45 @@
 .widget-output-video__actions {
   display: flex;
   flex-wrap: wrap;
+  gap: 6px;
+}
+
+.widget-output-video__footer {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.widget-output-video__footer-actions {
+  display: flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.widget-output-video__footer .widget-output-gallery-action {
+  margin-top: 0;
+}
+
+.widget-output-video__footer-meta {
+  flex: 1 1 120px;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.layout-canvas-widget--compact .widget-output-video__footer,
+.layout-canvas-widget--compact .widget-output-video__footer-actions {
   gap: 6px;
 }
 

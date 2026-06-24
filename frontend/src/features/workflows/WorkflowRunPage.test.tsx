@@ -4550,12 +4550,16 @@ describe("WorkflowRunPage", () => {
 
     expect(await screen.findByRole("button", { name: /enable auto save for video result/i })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
-    expect(await screen.findByText("clip.mp4")).toBeInTheDocument();
+    expect(await screen.findByText("MP4 · 4 KB")).toHaveClass("widget-output-video__footer-meta");
+    expect(screen.queryByText("clip.mp4")).not.toBeInTheDocument();
     expect(document.querySelector("video")).toHaveAttribute(
       "src",
       "/api/jobs/job-video/outputs/view?filename=clip.mp4&subfolder=&type=output",
     );
-    expect(screen.getByText("MP4 · 1280 × 720 · 24 fps · 4 KB · 0:03")).toBeInTheDocument();
+    expect(screen.queryByText("MP4 · 1280 × 720 · 24 fps · 4 KB · 0:03")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save to Gallery" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Download" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Fullscreen" })).toBeInTheDocument();
   });
 
