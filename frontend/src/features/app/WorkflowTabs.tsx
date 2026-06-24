@@ -10,7 +10,9 @@ import {
 } from "../../lib/api/noofyApi";
 import {
   clearBackendSessionRestartMarker,
+  clearWorkflowRunHandle,
   loadRestartRecoveryNotices,
+  storeWorkflowRunHandle,
   storeActiveRunWorkflowIds,
   vanishedRunRecoveryMessage,
 } from "./sessionRestore";
@@ -92,6 +94,10 @@ export function WorkflowTabsProvider({ children }: { children: ReactNode }) {
         .filter(([, runtime]) => hasActiveRuntimeHandle(runtime))
         .map(([workflowId]) => workflowId),
     );
+    for (const [workflowId, runtime] of Object.entries(runtimeByWorkflowId)) {
+      const snapshot = workflowRunHandleSnapshotFromRuntime(runtime);
+      if (snapshot) storeWorkflowRunHandle(workflowId, snapshot);
+    }
   }, [runtimeByWorkflowId]);
 
   useEffect(() => {
@@ -116,6 +122,7 @@ export function WorkflowTabsProvider({ children }: { children: ReactNode }) {
 
   const closeWorkflowTab = useCallback((workflowId: string) => {
     setTabs((current) => current.filter((tab) => tab.workflowId !== workflowId));
+    clearWorkflowRunHandle(workflowId);
     setRuntimeByWorkflowId((current) => {
       if (!(workflowId in current)) return current;
       const next = { ...current };
@@ -355,6 +362,18 @@ function hasActiveRuntimeHandle(runtime: WorkflowTabRuntimeState) {
       runtime.activeJobStatus &&
       activeJobStatuses.has(runtime.activeJobStatus),
   );
+}
+
+function workflowRunHandleSnapshotFromRuntime(runtime: WorkflowTabRuntimeState) {
+  const jobId = runtime.activeJobProgress?.job_id ?? runtime.activeJobId ?? runtime.queueId;
+  const status = runtime.activeJobStatus ?? runtime.activeJobProgress?.status;
+  if (!jobId || !status || status === "unknown") return null;
+  return {
+    jobId,
+    queueId: runtime.activeJobProgress?.queue_id ?? runtime.queueId ?? null,
+    status,
+    updatedAt: runtime.activeJobUpdatedAt ?? Date.now(),
+  };
 }
 
 function workflowRuntimeUpdateFromProgress(progress: JobProgress): Partial<WorkflowTabRuntimeState> {

@@ -121,7 +121,7 @@ import {
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
 import { useRuntimeStatus } from "../app/RuntimeStatusProvider";
 import { useOptionalWorkflowTabs, type WorkflowRuntimeHandleSource, type WorkflowTabRuntimeState } from "../app/WorkflowTabs";
-import { vanishedRunRecoveryMessage } from "../app/sessionRestore";
+import { loadWorkflowRunHandle, vanishedRunRecoveryMessage, type WorkflowRunHandleSnapshot } from "../app/sessionRestore";
 import { CanvasDashboardView, type CanvasActionBarPosition } from "./CanvasDashboardView";
 import { WorkflowActionBar, type WorkflowActionBarRunState } from "./WorkflowActionBar";
 import { GallerySaveAction } from "./GallerySaveAction";
@@ -276,6 +276,8 @@ const passivePreparationStatuses = new Set(["pending", "imported"]);
 const comparisonImageInputControlTypes = new Set(["load_image", "load_image_mask"]);
 const optimisticJobId = "__pending_workflow_run__";
 const logLimit = 200;
+const runtimeResultRecoveryRetryMs = 1000;
+const runtimeResultRecoveryMaxAttempts = 90;
 
 type ComparisonImageSource =
   | { kind: "uploaded_asset"; workflowId: string; inputId: string; assetId: string }
@@ -350,8 +352,23 @@ export function WorkflowRunPage({
   const runtimeStatus = useRuntimeStatus();
   const workflowTabs = useOptionalWorkflowTabs();
   const workflowRuntime = workflowTabs?.runtimeByWorkflowId[workflowId] ?? null;
+  const [storedWorkflowRunHandle, setStoredWorkflowRunHandle] = useState<WorkflowRunHandleSnapshot | null>(
+    () => loadWorkflowRunHandle(workflowId),
+  );
+  useEffect(() => {
+    setStoredWorkflowRunHandle(loadWorkflowRunHandle(workflowId));
+  }, [
+    workflowId,
+    workflowRuntime?.activeJobId,
+    workflowRuntime?.activeJobProgress?.job_id,
+    workflowRuntime?.activeJobProgress?.status,
+    workflowRuntime?.activeJobStatus,
+    workflowRuntime?.activeJobUpdatedAt,
+    workflowRuntime?.queueId,
+  ]);
   const runtimeProgress = progressFromWorkflowRuntime(workflowRuntime);
-  const terminalRuntimeProgress = terminalProgressFromWorkflowRuntime(workflowRuntime);
+  const terminalRuntimeProgress = terminalProgressFromWorkflowRuntime(workflowRuntime)
+    ?? terminalProgressFromStoredRunHandle(storedWorkflowRunHandle);
   const remainingTrackedRunCount = trackedRuns.filter(isTrackedRunActive).length;
   const currentTrackedRun = selectCurrentTrackedRun(trackedRuns);
   // Shared runtime polling continues while this page is unmounted. A terminal
@@ -477,6 +494,7 @@ export function WorkflowRunPage({
     () => packageDataForWorkflow?.dashboard?.sections.flatMap((section) => section.controls) ?? [],
     [packageDataForWorkflow],
   );
+  const shouldWaitForRecoveredOutputPayload = !packageDataForWorkflow || allControls.some(isDashboardOutputControl);
   const allGroups = useMemo(
     () => packageDataForWorkflow?.dashboard?.sections.flatMap((section) => section.groups ?? []) ?? [],
     [packageDataForWorkflow],
@@ -866,14 +884,14 @@ export function WorkflowRunPage({
     if (!terminalRuntimeProgress) return undefined;
     if (remainingTrackedRunCount > 0) return undefined;
     const jobId = terminalRuntimeProgress.job_id;
-    if (state.result?.job_id === jobId) return undefined;
+    if (state.result?.job_id === jobId && isReusableRecoveredResult(state.result, shouldWaitForRecoveredOutputPayload)) return undefined;
     if (runtimeResultRecoveryInFlightRef.current === jobId) return undefined;
 
-    let stopped = false;
     runtimeResultRecoveryInFlightRef.current = jobId;
-    fetchJobResult(jobId)
-      .then((result) => {
-        if (stopped || activeWorkflowIdRef.current !== workflowId) return;
+    const recover = async () => {
+      for (let attempt = 0; attempt < runtimeResultRecoveryMaxAttempts; attempt += 1) {
+        const result = await fetchJobResult(jobId);
+        if (activeWorkflowIdRef.current !== workflowId) return;
         if (isEngineJob(result)) {
           if (isTrackableJob(result)) {
             setSubmittedJob(result);
@@ -909,10 +927,29 @@ export function WorkflowRunPage({
           }
           return;
         }
+        if (shouldRetryRecoveredResult(result, shouldWaitForRecoveredOutputPayload)) {
+          setState((current) => ({
+            ...current,
+            progress: terminalRuntimeProgress,
+            error: null,
+          }));
+          await wait(runtimeResultRecoveryRetryMs);
+          if (activeWorkflowIdRef.current !== workflowId) return;
+          continue;
+        }
         handleRecoveredRuntimeResult(result);
-      })
+        return;
+      }
+      if (activeWorkflowIdRef.current !== workflowId) return;
+      setState((current) => ({
+        ...current,
+        progress: terminalRuntimeProgress,
+        error: null,
+      }));
+    };
+    recover()
       .catch((error) => {
-        if (stopped || activeWorkflowIdRef.current !== workflowId) return;
+        if (activeWorkflowIdRef.current !== workflowId) return;
         setState((current) => ({
           ...current,
           error: error instanceof Error ? error.message : "Could not load the completed workflow result.",
@@ -923,11 +960,7 @@ export function WorkflowRunPage({
           runtimeResultRecoveryInFlightRef.current = null;
         }
       });
-
-    return () => {
-      stopped = true;
-    };
-  }, [remainingTrackedRunCount, state.result?.job_id, terminalRuntimeProgress?.job_id, terminalRuntimeProgress?.status, workflowId]);
+  }, [remainingTrackedRunCount, shouldWaitForRecoveredOutputPayload, state.result, terminalRuntimeProgress?.job_id, terminalRuntimeProgress?.status, workflowId]);
 
   function startRunPreparationStatusPolling() {
     let stopped = false;
@@ -1624,6 +1657,7 @@ export function WorkflowRunPage({
     const nextRun = trackedRunWithStatus(run, result.status, result.error);
     upsertTrackedRun(nextRun);
     if (result.status === "completed" || result.status === "failed") {
+      storeRunPageResultSnapshot(workflowId, result);
       setState((current) => cacheRunPageResult(workflowId, current, result));
     }
     if (result.status === "failed") {
@@ -1647,6 +1681,16 @@ export function WorkflowRunPage({
   }
 
   function handleRecoveredRuntimeResult(result: JobResult) {
+    if (!terminalStatuses.has(result.status)) {
+      handlePendingRecoveredRuntimeResult(result);
+      return;
+    }
+    storeRunPageResultSnapshot(workflowId, result, {
+      progress: null,
+      error: result.status === "failed"
+        ? cachedWorkflowRunPageState(workflowId, initialState).error
+        : null,
+    });
     setState((current) => cacheRunPageResult(workflowId, current, result, {
       progress: null,
       error: result.status === "failed" ? current.error : null,
@@ -1666,6 +1710,22 @@ export function WorkflowRunPage({
       );
     }
     recordWorkflowTerminalResult(result);
+  }
+
+  function handlePendingRecoveredRuntimeResult(result: JobResult) {
+    if (activeWorkflowProgressStatuses.has(result.status)) {
+      addTrackedRun(trackedRunFromResult(result));
+      setState((current) => ({
+        ...current,
+        progress: progressFromRecoveredResult(result),
+        error: null,
+      }));
+      return;
+    }
+    setState((current) => ({
+      ...current,
+      error: null,
+    }));
   }
 
   function pollNextTrackedRunAfterTerminal() {
@@ -1783,7 +1843,7 @@ export function WorkflowRunPage({
     workflowTabs?.setWorkflowRuntime(workflowId, {
       activeJobId: null,
       activeJobStatus: result.status,
-      activeJobProgress: null,
+      activeJobProgress: terminalProgressFromResult(result),
       activeJobUpdatedAt: Date.now(),
       handleSource: null,
       queueId: null,
@@ -3525,6 +3585,22 @@ function trackedRunFromProgress(run: TrackedRun, progress: JobProgress, lastPoll
   return { ...base, type: "job", jobId: progress.job_id, queueId };
 }
 
+function trackedRunFromResult(result: JobResult): TrackedRun {
+  const now = Date.now();
+  const base = {
+    clientId: `${result.queue_id ?? result.job_id}-${now}-${Math.random().toString(16).slice(2)}`,
+    status: result.status,
+    submittedAt: now,
+    updatedAt: now,
+    lastPolledAt: null,
+    message: result.user_message ?? result.error ?? null,
+  };
+  if (result.queue_id && result.queue_id === result.job_id) {
+    return { ...base, type: "queue", queueId: result.queue_id, jobId: null };
+  }
+  return { ...base, type: "job", jobId: result.job_id, queueId: result.queue_id ?? null };
+}
+
 function trackedRunWithStatus(run: TrackedRun, status: string, message: string | null | undefined): TrackedRun {
   return {
     ...run,
@@ -3571,6 +3647,19 @@ function terminalProgressFromWorkflowRuntime(runtime: WorkflowTabRuntimeState | 
     || (status !== "completed" && status !== "failed" && status !== "canceled")
   ) return null;
   return progress.status === status ? progress : { ...progress, status };
+}
+
+function terminalProgressFromStoredRunHandle(snapshot: WorkflowRunHandleSnapshot | null): JobProgress | null {
+  if (!snapshot || !terminalStatuses.has(snapshot.status)) return null;
+  return {
+    job_id: snapshot.jobId,
+    queue_id: snapshot.queueId,
+    status: snapshot.status as JobProgress["status"],
+    value: snapshot.status === "completed" ? 1 : null,
+    max: snapshot.status === "completed" ? 1 : null,
+    current_node: null,
+    message: snapshot.status === "completed" ? "Result saved by the local workflow." : null,
+  };
 }
 
 function optimisticProgress(): JobProgress {
@@ -4855,6 +4944,26 @@ function mediaOutputKind(item: unknown, bucketName: string): "image" | "audio" |
   return "image";
 }
 
+function isReusableRecoveredResult(result: JobResult, waitForOutputPayload: boolean) {
+  return terminalStatuses.has(result.status) && !shouldRetryRecoveredResult(result, waitForOutputPayload);
+}
+
+function shouldRetryRecoveredResult(result: JobResult, waitForOutputPayload: boolean) {
+  if (!terminalStatuses.has(result.status)) return true;
+  return result.status === "completed" && waitForOutputPayload && !jobResultHasDisplayableOutput(result);
+}
+
+function jobResultHasDisplayableOutput(result: JobResult) {
+  return (
+    extractImageUrls(result).length > 0 ||
+    extractAudioOutputs(result).length > 0 ||
+    extractVideoOutputs(result).length > 0 ||
+    extractFileOutputs(result).length > 0 ||
+    extractThreeDOutputs(result).length > 0 ||
+    Array.from(extractTextOutputsByNodeId(result).values()).some((items) => items.length > 0)
+  );
+}
+
 function normalizeVideoOutput(video: unknown): OutputVideoMedia | null {
   if (!video || typeof video !== "object") return null;
   const item = video as Record<string, unknown>;
@@ -5008,6 +5117,14 @@ function failedGallerySaveRequest(jobId: string, controlId: string, error: unkno
     item_ids: [],
     updated_at: new Date().toISOString(),
   };
+}
+
+function isDashboardOutputControl(control: DashboardControlDef) {
+  return Boolean(control.output_id) || control.type === "result_image" || control.type.startsWith("display_");
+}
+
+function wait(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 function extensionFromFilename(filename: string): string | null {
@@ -5417,6 +5534,57 @@ function cacheRunPageResult(
   const next = { ...current, ...update, result };
   storeWorkflowRunPageState(workflowId, next);
   return next;
+}
+
+function storeRunPageResultSnapshot(
+  workflowId: string,
+  result: JobResult,
+  update: Partial<RunPageState> = {},
+) {
+  return cacheRunPageResult(
+    workflowId,
+    cachedWorkflowRunPageState(workflowId, initialState),
+    result,
+    update,
+  );
+}
+
+function terminalProgressFromResult(result: JobResult): JobProgress {
+  return {
+    job_id: result.job_id,
+    queue_id: result.queue_id ?? null,
+    status: result.status,
+    value: null,
+    max: null,
+    current_node: null,
+    message: terminalResultProgressMessage(result),
+    error_code: result.error_code,
+    memory_requirement: result.memory_requirement,
+    developer_details: result.developer_details,
+  };
+}
+
+function progressFromRecoveredResult(result: JobResult): JobProgress {
+  return {
+    job_id: result.job_id,
+    queue_id: result.queue_id ?? null,
+    status: result.status,
+    value: null,
+    max: null,
+    current_node: null,
+    message: result.user_message ?? result.error ?? null,
+    error_code: result.error_code,
+    memory_requirement: result.memory_requirement,
+    developer_details: result.developer_details,
+  };
+}
+
+function terminalResultProgressMessage(result: JobResult): string | null {
+  if (result.user_message) return result.user_message;
+  if (result.error) return result.error;
+  if (result.status === "completed") return "Execution completed";
+  if (result.status === "canceled") return "Run canceled.";
+  return null;
 }
 
 function hiddenBuilderWidgetForInput(

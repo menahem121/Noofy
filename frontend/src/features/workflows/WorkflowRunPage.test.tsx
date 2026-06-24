@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { useEffect, useState, type ComponentProps, type ReactNode } from "react";
+import { StrictMode, useEffect, useState, type ComponentProps, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ResourceStatusProvider } from "../app/ResourceStatusProvider";
@@ -4750,6 +4750,348 @@ describe("WorkflowRunPage", () => {
     await waitFor(() => expect(document.querySelector(".widget-output-three-d .three-d-viewer")).toBeInTheDocument());
     expect(fetchMock).toHaveBeenCalledWith("/api/jobs/job-builder-finished/result", expect.anything());
     expect(screen.queryByRole("button", { name: "Preview 3D model" })).not.toBeInTheDocument();
+  });
+
+  it("keeps polling when recovered terminal progress has a non-terminal result payload", async () => {
+    let resultCalls = 0;
+    mockConfiguredDashboardFetch(fetchMock, readyRuntime, configuredPackageData, null, (url) => {
+      if (url.endsWith("/api/jobs/job-history-lag/progress")) {
+        return jsonResponse({
+          job_id: "job-history-lag",
+          status: "completed",
+          value: 1,
+          max: 1,
+          current_node: null,
+          message: "Execution completed",
+        });
+      }
+      if (url.endsWith("/api/jobs/job-history-lag/result")) {
+        resultCalls += 1;
+        if (resultCalls === 1) {
+          return jsonResponse({
+            job_id: "job-history-lag",
+            status: "running",
+            outputs: [],
+            error: null,
+          });
+        }
+        return jsonResponse({
+          job_id: "job-history-lag",
+          status: "completed",
+          outputs: [{
+            node_id: "9",
+            output: {
+              images: [{
+                view_url: "/api/jobs/job-history-lag/outputs/view?filename=history-lag.png&subfolder=&type=output",
+              }],
+            },
+          }],
+          error: null,
+        });
+      }
+      return undefined;
+    });
+
+    renderRunPageWithWorkflowRuntime({
+      activeJobId: null,
+      activeJobStatus: "completed",
+      activeJobProgress: {
+        job_id: "job-history-lag",
+        status: "completed",
+        value: 1,
+        max: 1,
+        current_node: null,
+        message: "Execution completed",
+      },
+      activeJobUpdatedAt: Date.now(),
+      handleSource: null,
+      queueId: null,
+    });
+
+    await waitFor(() => {
+      expect(screen.getByAltText("Generated workflow output")).toHaveAttribute(
+        "src",
+        "/api/jobs/job-history-lag/outputs/view?filename=history-lag.png&subfolder=&type=output",
+      );
+    }, { timeout: 3000 });
+    expect(resultCalls).toBeGreaterThan(1);
+  });
+
+  it("keeps polling when recovered completed result is still empty", async () => {
+    let resultCalls = 0;
+    mockConfiguredDashboardFetch(fetchMock, readyRuntime, configuredPackageData, null, (url) => {
+      if (url.endsWith("/api/jobs/job-empty-completed/progress")) {
+        return jsonResponse({
+          job_id: "job-empty-completed",
+          status: "completed",
+          value: 1,
+          max: 1,
+          current_node: null,
+          message: "Execution completed",
+        });
+      }
+      if (url.endsWith("/api/jobs/job-empty-completed/result")) {
+        resultCalls += 1;
+        if (resultCalls === 1) {
+          return jsonResponse({
+            job_id: "job-empty-completed",
+            status: "completed",
+            outputs: [],
+            error: null,
+          });
+        }
+        return jsonResponse({
+          job_id: "job-empty-completed",
+          status: "completed",
+          outputs: [{
+            node_id: "9",
+            output: {
+              images: [{
+                view_url: "/api/jobs/job-empty-completed/outputs/view?filename=empty-then-ready.png&subfolder=&type=output",
+              }],
+            },
+          }],
+          error: null,
+        });
+      }
+      return undefined;
+    });
+
+    renderRunPageWithWorkflowRuntime({
+      activeJobId: null,
+      activeJobStatus: "completed",
+      activeJobProgress: {
+        job_id: "job-empty-completed",
+        status: "completed",
+        value: 1,
+        max: 1,
+        current_node: null,
+        message: "Execution completed",
+      },
+      activeJobUpdatedAt: Date.now(),
+      handleSource: null,
+      queueId: null,
+    });
+
+    await waitFor(() => {
+      expect(screen.getByAltText("Generated workflow output")).toHaveAttribute(
+        "src",
+        "/api/jobs/job-empty-completed/outputs/view?filename=empty-then-ready.png&subfolder=&type=output",
+      );
+    }, { timeout: 3000 });
+    expect(resultCalls).toBeGreaterThan(1);
+  });
+
+  it("recovers a completed output from the stored workflow job handle after returning by tab", async () => {
+    const recoveredImagePackageData = {
+      ...configuredPackageData,
+      outputs: [{ id: "image", label: "Result", node_id: "46", type: "image", kind: "image" }],
+      dashboard: {
+        ...configuredPackageData.dashboard,
+        sections: [{
+          id: "main",
+          title: "Main",
+          controls: [
+            {
+              id: "prompt",
+              type: "textarea",
+              label: "Prompt",
+              input_id: "prompt",
+              layout: { x: 0, y: 0, w: 12, h: 6 },
+            },
+            {
+              id: "result-image",
+              type: "display_image",
+              label: "Result",
+              output_id: "image",
+              layout: { x: 12, y: 0, w: 20, h: 16 },
+            },
+          ],
+        }],
+      },
+    };
+    window.sessionStorage.setItem("noofy.workflowRunHandles.v1", JSON.stringify({
+      handles: {
+        text_to_image_v0: {
+          workflowId: "text_to_image_v0",
+          jobId: "job-stored-complete",
+          queueId: "workflow-run-queue-stored",
+          status: "completed",
+          updatedAt: Date.now(),
+        },
+      },
+    }));
+    let resultCalls = 0;
+    mockConfiguredDashboardFetch(fetchMock, readyRuntime, recoveredImagePackageData, null, (url) => {
+      if (url.endsWith("/api/jobs/job-stored-complete/result")) {
+        resultCalls += 1;
+        return jsonResponse({
+          job_id: "job-stored-complete",
+          queue_id: "workflow-run-queue-stored",
+          status: "completed",
+          outputs: [{
+            node_id: "46",
+            output: {
+              images: [{
+                filename: "Anima_00007_.png",
+                kind: "image",
+                type: "image",
+                mime_type: "image/png",
+                view_url: "/api/jobs/job-stored-complete/outputs/view?filename=Anima_00007_.png&subfolder=&type=output",
+              }],
+            },
+          }],
+          error: null,
+        });
+      }
+      return undefined;
+    });
+
+    renderRunPage();
+
+    expect(await screen.findByAltText("Generated workflow output")).toHaveAttribute(
+      "src",
+      "/api/jobs/job-stored-complete/outputs/view?filename=Anima_00007_.png&subfolder=&type=output",
+    );
+    expect(resultCalls).toBe(1);
+  });
+
+  it("does not drop a recovered result when React replays the recovery effect", async () => {
+    window.sessionStorage.setItem("noofy.workflowRunHandles.v1", JSON.stringify({
+      handles: {
+        text_to_image_v0: {
+          workflowId: "text_to_image_v0",
+          jobId: "job-strict-recovery",
+          queueId: "workflow-run-queue-strict",
+          status: "completed",
+          updatedAt: Date.now(),
+        },
+      },
+    }));
+    const resultRequest = deferred<Response>();
+    let resultCalls = 0;
+    mockConfiguredDashboardFetch(fetchMock, readyRuntime, configuredPackageData, null, (url) => {
+      if (url.endsWith("/api/jobs/job-strict-recovery/result")) {
+        resultCalls += 1;
+        return resultRequest.promise;
+      }
+      return undefined;
+    });
+
+    render(
+      <StrictMode>
+        <RuntimeStatusProvider initialRuntimeState={readyRuntimeState} skipInitialRefresh>
+          <ResourceStatusProvider initialSnapshot={resourceSnapshot} skipInitialRefresh>
+            <WorkflowRunPage
+              workflowId="text_to_image_v0"
+              onBack={vi.fn()}
+              onNavigate={vi.fn()}
+            />
+          </ResourceStatusProvider>
+        </RuntimeStatusProvider>
+      </StrictMode>,
+    );
+
+    await waitFor(() => expect(resultCalls).toBe(1));
+    await act(async () => {
+      resultRequest.resolve(jsonResponse({
+        job_id: "job-strict-recovery",
+        queue_id: "workflow-run-queue-strict",
+        status: "completed",
+        outputs: [{
+          node_id: "9",
+          output: {
+            images: [{
+              view_url: "/api/jobs/job-strict-recovery/outputs/view?filename=strict-recovery.png&subfolder=&type=output",
+            }],
+          },
+        }],
+        error: null,
+      }));
+    });
+
+    expect(await screen.findByAltText("Generated workflow output")).toHaveAttribute(
+      "src",
+      "/api/jobs/job-strict-recovery/outputs/view?filename=strict-recovery.png&subfolder=&type=output",
+    );
+  });
+
+  it("persists a completed result when the result fetch resolves after leaving the run page", async () => {
+    const resultRequest = deferred<Response>();
+    let resultRequested = false;
+    mockConfiguredDashboardFetch(
+      fetchMock,
+      readyRuntime,
+      configuredPackageData,
+      { job_id: "job-away-result", workflow_id: "text_to_image_v0", engine: "comfyui", status: "queued" },
+      (url) => {
+        if (url.endsWith("/api/jobs/job-away-result/progress")) {
+          return jsonResponse({
+            job_id: "job-away-result",
+            status: "completed",
+            value: 1,
+            max: 1,
+            current_node: null,
+            message: "Execution completed",
+          });
+        }
+        if (url.endsWith("/api/jobs/job-away-result/result")) {
+          resultRequested = true;
+          return resultRequest.promise;
+        }
+        return undefined;
+      },
+    );
+
+    function RouteHarness() {
+      const [route, setRoute] = useState<"workflow" | "models">("workflow");
+      return (
+        <RuntimeStatusProvider initialRuntimeState={readyRuntimeState} skipInitialRefresh>
+          <ResourceStatusProvider initialSnapshot={resourceSnapshot} skipInitialRefresh>
+            <WorkflowTabsProvider>
+              {route === "workflow" ? (
+                <WorkflowRunPage
+                  workflowId="text_to_image_v0"
+                  onBack={vi.fn()}
+                  onNavigate={() => setRoute("models")}
+                />
+              ) : (
+                <button type="button" onClick={() => setRoute("workflow")}>Return to workflow</button>
+              )}
+            </WorkflowTabsProvider>
+          </ResourceStatusProvider>
+        </RuntimeStatusProvider>
+      );
+    }
+
+    render(<RouteHarness />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /run workflow/i }));
+    await waitFor(() => expect(resultRequested).toBe(true));
+
+    fireEvent.click(screen.getByRole("button", { name: "Models" }));
+    await act(async () => {
+      resultRequest.resolve(jsonResponse({
+        job_id: "job-away-result",
+        status: "completed",
+        outputs: [{
+          node_id: "9",
+          output: {
+            images: [{
+              view_url: "/api/jobs/job-away-result/outputs/view?filename=route-return.png&subfolder=&type=output",
+            }],
+          },
+        }],
+        error: null,
+      }));
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Return to workflow" }));
+
+    expect(await screen.findByAltText("Generated workflow output")).toHaveAttribute(
+      "src",
+      "/api/jobs/job-away-result/outputs/view?filename=route-return.png&subfolder=&type=output",
+    );
   });
 
   it("routes unmatched 3D live previews into the single display_3d canvas widget", async () => {

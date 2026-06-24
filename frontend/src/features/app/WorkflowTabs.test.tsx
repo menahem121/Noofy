@@ -143,6 +143,35 @@ describe("WorkflowTabs", () => {
     expect(activeRuns).toContain("wf-1");
     expect(activeRuns).not.toContain("job-1");
     expect(activeRuns).not.toContain("lease-1");
+    const storedRunHandles = JSON.parse(window.sessionStorage.getItem("noofy.workflowRunHandles.v1") ?? "{}");
+    expect(storedRunHandles.handles["wf-1"]).toMatchObject({
+      workflowId: "wf-1",
+      jobId: "job-1",
+      queueId: null,
+      status: "running",
+    });
+    expect(JSON.stringify(storedRunHandles)).not.toContain("lease-1");
+  });
+
+  it("clears the stored workflow run handle when a tab closes", async () => {
+    render(
+      <WorkflowTabsProvider>
+        <Harness />
+      </WorkflowTabsProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open one" }));
+    fireEvent.click(screen.getByRole("button", { name: "Set runtime" }));
+
+    await waitFor(() => {
+      expect(window.sessionStorage.getItem("noofy.workflowRunHandles.v1")).toContain("job-1");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Close Very Long Workflow Name That Needs Truncation workspace tab" }));
+
+    await waitFor(() => {
+      expect(window.sessionStorage.getItem("noofy.workflowRunHandles.v1")).toBeNull();
+    });
   });
 
   it("retains the last numeric percentage when an active update has no estimate", () => {
