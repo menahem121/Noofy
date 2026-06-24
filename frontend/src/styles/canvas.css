@@ -1274,7 +1274,9 @@
 
 .canvas-widget-slider {
   display: grid;
-  gap: 7px;
+  align-self: stretch;
+  gap: 4px;
+  margin-top: -4px;
 }
 
 .canvas-widget-slider .dashboard-slider__control-row {
@@ -1288,7 +1290,8 @@
 }
 
 .canvas-widget-slider .dashboard-slider__range-labels {
-  font-size: 10px;
+  color: rgba(212, 205, 226, 0.82);
+  font-size: 11px;
 }
 
 .canvas-widget-toggle {
