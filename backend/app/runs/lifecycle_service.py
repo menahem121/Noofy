@@ -26,6 +26,7 @@ class RunLifecycleService:
 
     max_records_per_wake = 8
     response_flush_dispatch_delay_seconds = 0.001
+    managed_engine_retry_seconds = 1.0
     _response_flush_dispatch_reasons = frozenset({"workflow_run_accepted"})
 
     def __init__(
@@ -161,11 +162,21 @@ class RunLifecycleService:
                 )
                 return result
             if result.status == "queued_pending_memory":
+                wait_state = str(
+                    (result.memory_status or {}).get("state")
+                    or "waiting_for_memory"
+                )
+                waits_for_managed_engine = wait_state == "starting_engine"
                 return self._requeue(
                     record,
-                    reason=(result.memory_status or {}).get("state", "waiting_for_memory"),
+                    reason=wait_state,
                     transient=False,
-                    wait_for_state_change=True,
+                    wait_for_state_change=not waits_for_managed_engine,
+                    retry_after_seconds=(
+                        self.managed_engine_retry_seconds
+                        if waits_for_managed_engine
+                        else None
+                    ),
                     message=result.message,
                     memory_status=result.memory_status,
                     memory_requirement=result.memory_requirement,
@@ -201,6 +212,7 @@ class RunLifecycleService:
         reason: str,
         transient: bool,
         wait_for_state_change: bool = False,
+        retry_after_seconds: float | None = None,
         message: str | None = None,
         memory_status: dict[str, Any] | None = None,
         memory_requirement: dict[str, Any] | None = None,
@@ -211,6 +223,7 @@ class RunLifecycleService:
             reason=reason,
             transient=transient,
             wait_for_state_change=wait_for_state_change,
+            retry_after_seconds=retry_after_seconds,
             message=message,
             memory_status=memory_status,
             memory_requirement=memory_requirement,

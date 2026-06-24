@@ -253,6 +253,7 @@ class EngineService:
             queue_service=self.workflow_run_queue_service,
             log_store=self.log_store,
         )
+        self._chain_comfyui_endpoint_change_dispatch()
 
         self.run_result_service: RunResultService = run_result_service or RunResultService(
             job_service=self.run_job_service,
@@ -302,6 +303,7 @@ class EngineService:
                 if self.progress_estimator is not None
                 else None
             ),
+            managed_engine_start_wait_job=self._managed_engine_start_wait_job,
         )
         # Wire the retry callback now that RunOrchestrator exists.
         self.memory_service.run_workflow = self.run_orchestrator.run_workflow
@@ -1428,6 +1430,67 @@ class EngineService:
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
+
+    def _chain_comfyui_endpoint_change_dispatch(self) -> None:
+        previous_callback = self.comfyui_sidecar_service.on_endpoint_changed
+
+        def notify_endpoint_changed() -> None:
+            if previous_callback is not None:
+                previous_callback()
+            else:
+                self._reconfigure_core_runner_endpoint()
+            self.run_lifecycle_service.request_dispatch("comfyui_endpoint_changed")
+
+        self.comfyui_sidecar_service.on_endpoint_changed = notify_endpoint_changed
+
+    async def _managed_engine_start_wait_job(
+        self,
+        workflow_id: str,
+        queue_id: str | None,
+    ) -> EngineJob | None:
+        if queue_id is None:
+            return None
+        runtime_status = getattr(self.runtime_manager, "status", None)
+        if not callable(runtime_status):
+            return None
+        comfyui_status = await runtime_status()
+        if (
+            comfyui_status.mode != "managed"
+            or comfyui_status.reachable
+            or not comfyui_status.sidecar_starting
+        ):
+            return None
+
+        message = "Starting the local ComfyUI engine before this run."
+        memory_status = {
+            "state": "starting_engine",
+            "message": message,
+            "risk_level": "unknown",
+            "queue_id": queue_id,
+            "can_cancel": True,
+            "can_retry_after_cleanup": False,
+        }
+        self.log_store.add(
+            "info",
+            "Workflow run is waiting for managed ComfyUI startup",
+            "engine.service",
+            job_id=queue_id,
+            workflow_id=workflow_id,
+            details={
+                "runtime_mode": comfyui_status.mode,
+                "sidecar_starting": comfyui_status.sidecar_starting,
+                "managed_process_running": comfyui_status.managed_process_running,
+            },
+        )
+        return EngineJob(
+            job_id=queue_id,
+            queue_id=queue_id,
+            workflow_id=workflow_id,
+            engine="noofy",
+            status="queued_pending_memory",
+            message=message,
+            memory_status=memory_status,
+        )
 
     async def _validate_package(
         self,

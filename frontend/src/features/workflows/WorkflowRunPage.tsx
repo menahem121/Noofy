@@ -1906,7 +1906,7 @@ export function WorkflowRunPage({
   const engineKnownUnavailable =
     !isRunning &&
     runtimeStatus.backendStatus === "reachable" &&
-    (runtimeStatus.engineStatus === "offline" || runtimeStatus.engineStatus === "starting");
+    runtimeStatus.engineStatus === "offline";
   const memoryRefusesRun = Boolean(memoryStatus && isBlockingMemoryState(memoryStatus.state));
   const dashboardPackagePending = state.firstLoadedWorkflowId !== workflowId;
   const dashboardValuesReady = !dashboardPackagePending && userStateLoaded;
@@ -4020,6 +4020,7 @@ function isWarmReusableMemoryState(state: string) {
 // act on.
 function isSilentQueuedMemoryState(state: string) {
   return state === "preparing_run"
+    || state === "starting_engine"
     || state === "waiting_for_gpu"
     || state === "waiting_for_active_workflow"
     || state === "queued_behind_active_run"
@@ -4166,6 +4167,12 @@ function memoryStatusFallback(state: string): MemoryStatusDisplay {
     return {
       title: "Preparing run",
       message: "Noofy is preparing this workflow to run.",
+    };
+  }
+  if (state === "starting_engine") {
+    return {
+      title: "Starting engine",
+      message: "Noofy is starting the local ComfyUI engine before this run.",
     };
   }
   if (state === "queued_behind_active_run") {

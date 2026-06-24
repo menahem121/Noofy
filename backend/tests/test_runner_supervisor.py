@@ -11,6 +11,7 @@ import pytest
 from app.diagnostics import LogStore
 from app.engine.memory_observation import memory_input_profile_fingerprint
 from app.engine.models import (
+    ComfyUIRuntimeStatus,
     EngineJob,
     JobProgress,
     JobResult,
@@ -74,6 +75,29 @@ PACKAGE_DIR = Path(__file__).resolve().parents[1] / "app/workflows/packages"
 class StubRuntimeManager:
     base_url = "http://127.0.0.1:8188"
     ws_url = "ws://127.0.0.1:8188/ws"
+
+    async def status(self) -> ComfyUIRuntimeStatus:
+        return ComfyUIRuntimeStatus(
+            mode="external",
+            reachable=True,
+            base_url=self.base_url,
+            repo_dir="/tmp/comfyui",
+        )
+
+
+class StartingManagedRuntimeManager(StubRuntimeManager):
+    def __init__(self) -> None:
+        self.reachable = False
+
+    async def status(self) -> ComfyUIRuntimeStatus:
+        return ComfyUIRuntimeStatus(
+            mode="managed",
+            reachable=self.reachable,
+            base_url=self.base_url,
+            repo_dir="/tmp/comfyui",
+            managed_process_running=not self.reachable,
+            sidecar_starting=not self.reachable,
+        )
 
 
 class RecordingAdapter:
@@ -1056,6 +1080,7 @@ class FakeRunnerMemoryTelemetryReader:
 def _build_service(
     adapter: RecordingAdapter,
     *,
+    runtime_manager: Any | None = None,
     memory_learning_store: LocalMemoryLearningStore | None = None,
     memory_observer: StaticMemoryObserver | SequenceMemoryObserver | None = None,
     process_tree_memory_observer: FakeProcessTreeMemoryObserver | None = None,
@@ -1071,7 +1096,7 @@ def _build_service(
         workflow_loader=WorkflowPackageLoader(PACKAGE_DIR),
         workflow_validator=WorkflowPackageValidator(),
         runner_supervisor=supervisor,
-        runtime_manager=StubRuntimeManager(),
+        runtime_manager=runtime_manager or StubRuntimeManager(),
         log_store=LogStore(),
         runner_process_coordinator=runner_process_coordinator,
         memory_learning_store=memory_learning_store,
@@ -4113,6 +4138,57 @@ async def test_handoff_queued_workflow_run_submits_after_memory_is_safe() -> Non
     assert selected_adapter.run_calls == [("job-after-memory", {"prompt": "hello"})]
     assert supervisor.runner_for_job("job-after-memory").runner_id == "selected-runner"
     assert await service.handoff_queued_workflow_run(queued.queue_id) is None
+
+
+@pytest.mark.anyio
+async def test_handoff_queued_workflow_run_waits_for_managed_engine_startup() -> None:
+    runtime_manager = StartingManagedRuntimeManager()
+    adapter = RecordingAdapter(
+        models=[
+            ModelInfo(
+                folder="checkpoints",
+                filename="v1-5-pruned-emaonly-fp16.safetensors",
+            )
+        ],
+        next_job_id="job-after-engine-start",
+    )
+    service, supervisor = _build_service(
+        adapter,
+        runtime_manager=runtime_manager,
+    )
+    service.run_lifecycle_service.managed_engine_retry_seconds = 0.0
+    accepted = await service.run_orchestrator.enqueue_workflow_run(
+        "text_to_image_v0",
+        inputs={"prompt": "hello"},
+        options={},
+    )
+
+    waiting = await service.handoff_queued_workflow_run(accepted.queue_id)
+
+    assert waiting is not None
+    assert waiting.status is WorkflowRunQueueStatus.REQUEUED
+    assert waiting.memory_status is not None
+    assert waiting.memory_status["state"] == "starting_engine"
+    assert adapter.run_calls == []
+    queued = service.workflow_run_queue_service.get(accepted.queue_id)
+    assert queued is not None
+    assert queued.status is WorkflowRunQueueStatus.REQUEUED
+    assert queued.transient_failure_count == 0
+    assert queued.next_eligible_at is not None
+    progress = await service.get_progress(accepted.queue_id)
+    assert progress.status == "queued_pending_memory"
+    assert progress.memory_status is not None
+    assert progress.memory_status["state"] == "starting_engine"
+
+    runtime_manager.reachable = True
+    handed_off = await service.handoff_queued_workflow_run(accepted.queue_id)
+
+    assert isinstance(handed_off, EngineJob)
+    assert handed_off.status == "queued"
+    assert handed_off.job_id == "job-after-engine-start"
+    assert handed_off.queue_id == accepted.queue_id
+    assert adapter.run_calls == [("job-after-engine-start", {"prompt": "hello"})]
+    assert supervisor.runner_for_job("job-after-engine-start").runner_id == CORE_RUNNER_ID
 
 
 @pytest.mark.anyio

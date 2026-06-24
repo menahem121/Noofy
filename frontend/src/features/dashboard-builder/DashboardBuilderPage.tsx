@@ -127,7 +127,11 @@ function reconcileDashboardSchemaForWorkflow(schema: DashboardSchema, workflow: 
   const workflowValues = workflow.nodes.flatMap((node) => node.values);
   const reconcileWidgets = (widgets: DashboardWidget[]) => widgets.flatMap((widget) => {
     const currentValue = workflowValues.find((value) => value.id === widget.valueId);
-    if (currentValue) return widget;
+    if (currentValue) {
+      const nextWidget = withDiscoveredDropdownOptions(widget, currentValue);
+      if (nextWidget !== widget) changed = true;
+      return nextWidget;
+    }
 
     const boundValue = workflowValues.find((value) => {
       if (value.nodeId !== widget.binding.nodeId) return false;
@@ -141,16 +145,35 @@ function reconcileDashboardSchemaForWorkflow(schema: DashboardSchema, workflow: 
     }
 
     changed = true;
-    return [{
-      ...widget,
-      valueId: boundValue.id,
-      binding: { nodeId: boundValue.nodeId, inputName: boundValue.inputName },
-    }];
+    return [
+      withDiscoveredDropdownOptions(
+        {
+          ...widget,
+          valueId: boundValue.id,
+          binding: { nodeId: boundValue.nodeId, inputName: boundValue.inputName },
+        },
+        boundValue,
+      ),
+    ];
   });
   const widgets = reconcileWidgets(schema.widgets);
   const hiddenWidgets = reconcileWidgets(schema.hiddenWidgets ?? []);
 
   return changed ? normalizeDashboardSchema({ ...schema, widgets, hiddenWidgets }) : schema;
+}
+
+function withDiscoveredDropdownOptions(
+  widget: DashboardWidget,
+  value: WorkflowNodeValue,
+): DashboardWidget {
+  if (!isDropdownWidgetType(widget.widgetType) || widget.options !== undefined || !value.options?.length) {
+    return widget;
+  }
+  return { ...widget, options: [...value.options] };
+}
+
+function isDropdownWidgetType(widgetType: WidgetType): boolean {
+  return widgetType === "select" || widgetType === "lora_loader";
 }
 
 export function DashboardBuilderPage({
@@ -2038,7 +2061,7 @@ function WidgetBehaviorFields({
             } else if (widgetType === "load_file") {
               onPatch({ widgetType, acceptedExtensions: widget.acceptedExtensions ?? DEFAULT_FILE_ACCEPTED_EXTENSIONS });
             } else {
-              onPatch({ widgetType });
+              onPatch(widgetTypeChangePatch(widgetType, widget, value));
             }
           }}
         >
@@ -2190,6 +2213,17 @@ function WidgetBehaviorFields({
       ) : null}
     </>
   );
+}
+
+function widgetTypeChangePatch(
+  widgetType: WidgetType,
+  widget: DashboardWidget,
+  value: WorkflowNodeValue,
+): Partial<DashboardWidget> {
+  if (!isDropdownWidgetType(widgetType) || widget.options !== undefined || !value.options?.length) {
+    return { widgetType };
+  }
+  return { widgetType, options: [...value.options] };
 }
 
 function WidgetBinding({ widget }: { widget: DashboardWidget }) {

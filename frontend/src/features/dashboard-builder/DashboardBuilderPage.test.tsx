@@ -50,6 +50,36 @@ const selectSchema: DashboardSchema = {
   ],
 };
 
+const samplerStringFieldSchema: DashboardSchema = {
+  version: 1,
+  workflowId: "imported_text_to_image_demo",
+  workflowName: "Text to Image Demo",
+  layout: { gridColumns: 32, rowHeight: 32, gridGap: 14, responsive: true },
+  groups: [],
+  widgets: [
+    {
+      id: "ctrl-node-3-sampler_name",
+      valueId: "node-3-sampler_name",
+      binding: { nodeId: "3", inputName: "sampler_name" },
+      widgetType: "string_field",
+      title: "Sampler",
+      description: "",
+      defaultValue: "euler",
+      layout: { x: 0, y: 0, w: 10, h: 3 },
+    },
+  ],
+};
+
+const samplerDropdownWithoutOptionsSchema: DashboardSchema = {
+  ...samplerStringFieldSchema,
+  widgets: [
+    {
+      ...samplerStringFieldSchema.widgets[0],
+      widgetType: "select",
+    },
+  ],
+};
+
 const invalidSliderSchema: DashboardSchema = {
   version: 1,
   workflowId: "imported_text_to_image_demo",
@@ -1216,6 +1246,61 @@ describe("DashboardBuilderPage", () => {
         ]),
       }),
     );
+  });
+
+  it("persists discovered engine options when changing a widget to dropdown mode", async () => {
+    const onContinue = vi.fn();
+
+    render(
+      <DashboardBuilderPage
+        initialSchema={samplerStringFieldSchema}
+        onBack={vi.fn()}
+        onContinue={onContinue}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(await screen.findByLabelText(/widget type/i), { target: { value: "select" } });
+    expect(await screen.findByRole("textbox", { name: /dropdown option 1/i })).toHaveValue("euler");
+
+    fireEvent.click(screen.getByRole("button", { name: /^continue$/i }));
+
+    const payload = toBackendPayload(onContinue.mock.calls[0][0] as DashboardSchema);
+    const samplerInput = payload.inputs.find((input) => input.binding.node_id === "3" && input.binding.input_name === "sampler_name");
+    expect(samplerInput?.validation.options).toEqual([
+      "euler",
+      "euler_ancestral",
+      "heun",
+      "dpm_2",
+      "dpmpp_2m",
+    ]);
+  });
+
+  it("self-heals saved dropdown widgets that are missing discovered options", async () => {
+    const onContinue = vi.fn();
+
+    render(
+      <DashboardBuilderPage
+        initialSchema={samplerDropdownWithoutOptionsSchema}
+        onBack={vi.fn()}
+        onContinue={onContinue}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByRole("textbox", { name: /dropdown option 1/i })).toHaveValue("euler");
+
+    fireEvent.click(screen.getByRole("button", { name: /^continue$/i }));
+
+    const payload = toBackendPayload(onContinue.mock.calls[0][0] as DashboardSchema);
+    const samplerInput = payload.inputs.find((input) => input.binding.node_id === "3" && input.binding.input_name === "sampler_name");
+    expect(samplerInput?.validation.options).toEqual([
+      "euler",
+      "euler_ancestral",
+      "heun",
+      "dpm_2",
+      "dpmpp_2m",
+    ]);
   });
 
   it("adds and edits a dashboard-only note without a workflow binding", async () => {

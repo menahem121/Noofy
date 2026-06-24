@@ -202,6 +202,7 @@ class WorkflowRunQueueService:
         reason: str,
         transient: bool,
         wait_for_state_change: bool = False,
+        retry_after_seconds: float | None = None,
         message: str | None = None,
         memory_status: dict[str, Any] | None = None,
         memory_requirement: dict[str, Any] | None = None,
@@ -229,6 +230,11 @@ class WorkflowRunQueueService:
                     self.initial_backoff_seconds * (2 ** max(0, failure_count - 1)),
                 )
                 backoff = _iso(datetime.now(UTC) + timedelta(seconds=seconds))
+            elif retry_after_seconds is not None and not wait_for_state_change:
+                backoff = _iso(
+                    datetime.now(UTC)
+                    + timedelta(seconds=max(0.0, retry_after_seconds))
+                )
             updated = record.model_copy(
                 update={
                     "status": WorkflowRunQueueStatus.REQUEUED,
@@ -528,6 +534,8 @@ def _queued_wait_message(reason: str | None) -> str:
         return "Noofy will start this workflow after the active run finishes."
     if reason == "starting":
         return "This run will start when the workflow's runner is ready."
+    if reason == "starting_engine":
+        return "Starting the local ComfyUI engine before this run."
     if reason == "preparing_run":
         return "Preparing this workflow to run."
     if reason == "unloading_previous_workflow":

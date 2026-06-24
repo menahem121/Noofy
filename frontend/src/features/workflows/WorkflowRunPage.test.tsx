@@ -2546,7 +2546,7 @@ describe("WorkflowRunPage", () => {
     expect(screen.getByRole("button", { name: /run workflow/i })).toBeDisabled();
   });
 
-  it("updates engine status and run gating while the workflow page stays open", async () => {
+  it("keeps Run available while the managed engine is starting", async () => {
     vi.useFakeTimers();
     let runtimeCalls = 0;
     mockConfiguredDashboardFetch(fetchMock, () => {
@@ -2568,7 +2568,8 @@ describe("WorkflowRunPage", () => {
     });
     expect(screen.getAllByText("Starting").length).toBeGreaterThan(0);
     const runButton = screen.getByRole("button", { name: /run workflow/i });
-    expect(runButton).toBeDisabled();
+    expect(runButton).toBeEnabled();
+    expect(screen.queryByText("Starting ComfyUI")).not.toBeInTheDocument();
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2_000);
@@ -3063,6 +3064,66 @@ describe("WorkflowRunPage", () => {
       expect(screen.getByRole("progressbar", { name: /workflow progress/i })).toBeInTheDocument();
     },
   );
+
+  it("keeps managed engine startup quiet after Run is pressed", async () => {
+    mockConfiguredDashboardFetch(
+      fetchMock,
+      engineStartingRuntimeState.runtime,
+      configuredPackageData,
+      {
+        job_id: "workflow-run-queue-starting-engine",
+        queue_id: "workflow-run-queue-starting-engine",
+        workflow_id: "text_to_image_v0",
+        engine: "noofy",
+        status: "queued_pending_memory",
+        message: "Starting the local ComfyUI engine before this run.",
+        memory_status: {
+          state: "starting_engine",
+          message: "Starting the local ComfyUI engine before this run.",
+          risk_level: "unknown",
+          queue_id: "workflow-run-queue-starting-engine",
+          can_cancel: true,
+          can_retry_after_cleanup: false,
+        },
+      },
+      (url) => {
+        if (!url.endsWith("/api/jobs/workflow-run-queue-starting-engine/progress")) return undefined;
+        return jsonResponse({
+          job_id: "workflow-run-queue-starting-engine",
+          queue_id: "workflow-run-queue-starting-engine",
+          status: "queued_pending_memory",
+          value: null,
+          max: null,
+          current_node: null,
+          message: "Starting the local ComfyUI engine before this run.",
+          memory_status: {
+            state: "starting_engine",
+            message: "Starting the local ComfyUI engine before this run.",
+            risk_level: "unknown",
+            queue_id: "workflow-run-queue-starting-engine",
+            can_cancel: true,
+            can_retry_after_cleanup: false,
+          },
+        });
+      },
+    );
+
+    renderRunPage({}, engineStartingRuntimeState);
+
+    const runButton = await screen.findByRole("button", { name: /run workflow/i });
+    await waitFor(() => expect(runButton).toBeEnabled());
+    fireEvent.click(runButton);
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([input]) =>
+        String(input).endsWith("/api/jobs/workflow-run-queue-starting-engine/progress"),
+      )).toBe(true);
+    });
+    expect(screen.queryByText("Starting engine")).not.toBeInTheDocument();
+    expect(screen.queryByText("Starting ComfyUI")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel run" })).toBeEnabled();
+    expect(screen.getByRole("progressbar", { name: /workflow progress/i })).toBeInTheDocument();
+  });
 
   it("shows a queued capacity failure with its memory evidence", async () => {
     mockConfiguredDashboardFetch(

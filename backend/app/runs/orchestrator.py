@@ -65,6 +65,7 @@ RecordMemoryMetric = Callable[[str], None]
 StartMemorySampling = Callable[..., None]
 ApiNodesUnavailableReason = Callable[[WorkflowPackage, EngineAdapter], Awaitable[str | None]]
 RegisterProgressTiming = Callable[..., None]
+ManagedEngineStartWaitJob = Callable[[str, str | None], Awaitable[EngineJob | None]]
 
 
 class RunOrchestrator:
@@ -105,6 +106,7 @@ class RunOrchestrator:
         request_run_dispatch: Callable[[str], None] | None = None,
         submitted_job_callback: Callable[[str], None] | None = None,
         register_progress_timing: RegisterProgressTiming | None = None,
+        managed_engine_start_wait_job: ManagedEngineStartWaitJob | None = None,
     ) -> None:
         self.workflow_loader = workflow_loader
         self.runner_supervisor = runner_supervisor
@@ -134,6 +136,7 @@ class RunOrchestrator:
         self.request_run_dispatch = request_run_dispatch
         self.submitted_job_callback = submitted_job_callback
         self.register_progress_timing = register_progress_timing
+        self.managed_engine_start_wait_job = managed_engine_start_wait_job
 
     async def validate_workflow(self, workflow_id: str) -> WorkflowValidationResult:
         package = self.workflow_loader.get_package(workflow_id)
@@ -337,6 +340,13 @@ class RunOrchestrator:
                 memory_status=memory_status,
             )
         runtime_package = package_for_input_bindings(package, runtime_inputs)
+        if self.managed_engine_start_wait_job is not None:
+            engine_wait_job = await self.managed_engine_start_wait_job(
+                workflow_id,
+                queue_id,
+            )
+            if engine_wait_job is not None:
+                return engine_wait_job
         if self.ensure_workflow_runner is not None:
             runner_unavailable = await self.ensure_workflow_runner(package, queue_id)
             if isinstance(runner_unavailable, WorkflowValidationResult):
