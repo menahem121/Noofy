@@ -290,7 +290,7 @@ def _local_evidence(
             continue
         if machine_snapshot is not None and not _summary_matches_machine(summary, machine_snapshot):
             continue
-        if summary.input_profile_fingerprint == input_profile_fingerprint:
+        if input_profile_fingerprint is None or summary.input_profile_fingerprint == input_profile_fingerprint:
             matching.append(summary)
         else:
             related.append(summary)

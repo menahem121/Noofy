@@ -931,7 +931,7 @@ def test_matching_local_success_suppresses_creator_only_hardware_warning(tmp_pat
     assert warning is None
 
 
-def test_mismatched_local_success_does_not_suppress_creator_warning(tmp_path: Path) -> None:
+def test_library_card_local_success_suppresses_creator_warning_without_active_settings(tmp_path: Path) -> None:
     learning = LocalMemoryLearningStore(tmp_path / "learning")
     learning.record(
         LocalMemoryObservation(
@@ -952,11 +952,42 @@ def test_mismatched_local_success_does_not_suppress_creator_warning(tmp_path: Pa
 
     warning = next(item for item in service.list_workflows() if item["id"] == workflow_id)["hardware_warning"]
 
-    assert warning["severity"] == "medium"
-    assert warning["evidence"]["local_input_profile_match"] == "mismatched"
-    assert HardwareWarningReasonCode.LOCAL_SUCCESS_SETTINGS_MISMATCH.value in warning["reason_codes"]
-    assert HardwareWarningReasonCode.CREATOR_OBSERVED_MEMORY_HINT.value in warning["reason_codes"]
-    assert set(warning["reason_codes"]).issubset({code.value for code in HardwareWarningReasonCode})
+    assert warning is None
+
+
+def test_explicit_mismatched_local_success_does_not_suppress_creator_warning(tmp_path: Path) -> None:
+    learning = LocalMemoryLearningStore(tmp_path / "learning")
+    learning.record(
+        LocalMemoryObservation(
+            workflow_id="hardware_warning_wf",
+            machine_profile_id="machine-a",
+            backend=MemoryBackend.CUDA,
+            input_profile_fingerprint="settings-a",
+            outcome=MemoryObservationOutcome.SUCCESS,
+            peak_vram_mb=1_200,
+        )
+    )
+    service, workflow_id, _ = _hardware_warning_service(
+        tmp_path,
+        observed_hardware={"observed_peak_vram_mb": 12_000},
+        memory_snapshot=_cuda_snapshot(total_vram_mb=8_000, free_vram_mb=7_000),
+        memory_learning_store=learning,
+    )
+
+    package = service.workflow_loader.get_package(workflow_id)
+    warning = evaluate_workflow_hardware_warning(
+        package,
+        memory_learning_store=learning,
+        machine_snapshot=_cuda_snapshot(total_vram_mb=8_000, free_vram_mb=7_000),
+        input_profile_fingerprint="settings-b",
+    )
+
+    assert warning is not None
+    assert warning.severity == "medium"
+    assert warning.evidence.local_input_profile_match == "mismatched"
+    assert HardwareWarningReasonCode.LOCAL_SUCCESS_SETTINGS_MISMATCH in warning.reason_codes
+    assert HardwareWarningReasonCode.CREATOR_OBSERVED_MEMORY_HINT in warning.reason_codes
+    assert set(warning.reason_codes).issubset(set(HardwareWarningReasonCode))
 
 
 def test_profiled_local_memory_failure_still_produces_advisory_warning_for_card(tmp_path: Path) -> None:
@@ -979,11 +1010,11 @@ def test_profiled_local_memory_failure_still_produces_advisory_warning_for_card(
 
     warning = next(item for item in service.list_workflows() if item["id"] == workflow_id)["hardware_warning"]
 
-    assert warning["severity"] == "medium"
-    assert warning["confidence"] == "low"
+    assert warning["severity"] == "high"
+    assert warning["confidence"] == "high"
     assert warning["evidence"]["local_memory_error_runs"] == 1
-    assert warning["evidence"]["local_input_profile_match"] == "mismatched"
-    assert warning["reason_codes"] == [HardwareWarningReasonCode.LOCAL_MEMORY_ERROR_SETTINGS_MISMATCH.value]
+    assert warning["evidence"]["local_input_profile_match"] == "matching"
+    assert warning["reason_codes"] == [HardwareWarningReasonCode.LOCAL_MEMORY_ERROR.value]
 
 
 def test_stale_local_memory_failure_does_not_warn(tmp_path: Path) -> None:
