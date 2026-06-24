@@ -751,11 +751,6 @@ class WorkflowImportOrchestrator:
             )
         started_at = datetime.now(UTC)
         self._pending_workflow_imports.pop(import_session_id, None)
-        model_summary = self.workflow_library_service.model_availability_summary_for_package(
-            pending.package,
-            fast=True,
-            verify_hashes=True,
-        )
         try:
             committed = self._persist_prepared_workflow_import(
                 pending.data,
@@ -783,7 +778,7 @@ class WorkflowImportOrchestrator:
         )
         return StagedWorkflowImportResponse(
             import_session_id=None,
-            model_summary=model_summary,
+            model_summary=None,
             **committed,
         )
 

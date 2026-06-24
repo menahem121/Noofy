@@ -702,6 +702,8 @@ class NoofyCheckout:
             backend_port=backend_port,
             include_frontend_dev_proxy=True,
         )
+        if sys.platform.startswith("linux"):
+            frontend_env.setdefault("NOOFY_FRONTEND_WATCH_POLLING", "1")
         backend_api = f"http://{host}:{backend_port}/api"
         frontend_url = "http://127.0.0.1:5173"
 

@@ -211,6 +211,138 @@ describe("HomePage", () => {
     });
   }
 
+  function checkingImportModel(filename: string, overrides: Record<string, unknown> = {}) {
+    return {
+      requirement_id: "checkpoint",
+      node_id: "1",
+      node_type: "CheckpointLoaderSimple",
+      input_name: "ckpt_name",
+      filename,
+      model_type: "Checkpoint",
+      folder: "checkpoints",
+      verification_level: "sha256_size",
+      size_bytes: 1024,
+      source_urls: [],
+      source_availability: "known",
+      status: "checking",
+      status_label: "Checking",
+      asset_ownership: "external_reference",
+      source_path: null,
+      matched_root: null,
+      matched_sha256: null,
+      matched_size_bytes: null,
+      message: "Noofy is checking whether this model is already available locally.",
+      ...overrides,
+    };
+  }
+
+  function silentImportPreview({
+    sessionId,
+    workflowId,
+    workflowName,
+    model,
+  }: {
+    sessionId: string;
+    workflowId: string;
+    workflowName: string;
+    model: ReturnType<typeof checkingImportModel>;
+  }) {
+    return {
+      import_session_id: sessionId,
+      workflow_id: workflowId,
+      status: "imported",
+      user_facing_message: "Ready to import",
+      workflow: {
+        id: workflowId,
+        name: workflowName,
+        version: "0.1.0",
+        description: "",
+        trust_level: "noofy_verified",
+      },
+      required_model_count: 1,
+      custom_node_count: 0,
+      unresolved_input_count: 0,
+      model_summary: {
+        workflow_id: workflowId,
+        total_count: 1,
+        available_count: 0,
+        possible_match_count: 0,
+        missing_count: 0,
+        needs_manual_download_count: 0,
+        ready_to_run: false,
+        models: [model],
+      },
+    };
+  }
+
+  function mockSilentVerificationImport({
+    filename,
+    importResult,
+    workflowSummaryOverrides = {},
+  }: {
+    filename: string;
+    importResult: ReturnType<typeof silentImportPreview>;
+    workflowSummaryOverrides?: Record<string, unknown>;
+  }) {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
+      if (url.endsWith("/api/workflows")) {
+        return Promise.resolve(
+          jsonResponse([
+            {
+              id: importResult.workflow.id,
+              name: importResult.workflow.name,
+              version: importResult.workflow.version,
+              description: "",
+              trust_level: "noofy_verified",
+              status: "imported",
+              status_label: "Imported",
+              ...workflowSummaryOverrides,
+            },
+          ]),
+        );
+      }
+      if (
+        url.endsWith(
+          `/api/workflows/import/preview?filename=${filename}&allow_unverified_community_preparation=true`,
+        ) &&
+        init?.method === "POST"
+      ) {
+        return Promise.resolve(jsonResponse(importResult));
+      }
+      if (
+        url.endsWith(`/api/workflows/import/${importResult.import_session_id}/commit`) &&
+        init?.method === "POST"
+      ) {
+        return Promise.resolve(jsonResponse({ ...importResult, user_facing_message: "Imported", model_summary: null }));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+  }
+
+  async function chooseWorkflowFile(filename: string) {
+    await screen.findByText("Choose File");
+    const file = new File(["archive"], filename);
+    const fileInput = document.querySelector('input[type="file"][accept=".noofy,.json"]') as HTMLInputElement;
+    fireEvent.change(fileInput, { target: { files: [file] } });
+  }
+
+  function expectImportCommitted(sessionId: string) {
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/workflows/import/${sessionId}/commit`,
+      {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: undefined,
+      },
+    );
+  }
+
   it("uses Reddit orange accents for the community action", () => {
     mockSearchableHome();
 
@@ -1876,174 +2008,36 @@ describe("HomePage", () => {
     expect(onNavigate).toHaveBeenCalledWith("models");
   });
 
-  it("opens the model popup while verification runs before allowing a ready import", async () => {
-    const checkingModel = {
-      requirement_id: "checkpoint",
-      node_id: "1",
-      node_type: "CheckpointLoaderSimple",
-      input_name: "ckpt_name",
-      filename: "ready.safetensors",
-      model_type: "Checkpoint",
-      folder: "checkpoints",
-      verification_level: "sha256_size",
-      size_bytes: 1024,
-      source_urls: [],
-      source_availability: "known",
-      status: "checking",
-      status_label: "Checking",
-      asset_ownership: "external_reference",
-      source_path: null,
-      matched_root: null,
-      matched_sha256: null,
-      matched_size_bytes: null,
-      message: "Noofy is checking whether this model is already available locally.",
-    };
-    const availableModel = {
-      ...checkingModel,
-      status: "available",
-      status_label: "Available",
-      asset_ownership: "noofy_downloaded",
-      source_path: "/models/checkpoints/ready.safetensors",
-      matched_root: "/models",
-      matched_sha256: "abc",
-      matched_size_bytes: 1024,
-      message: null,
-    };
-    const readyImport = {
-      import_session_id: "import-session-ready",
-      workflow_id: "ready_workflow",
-      status: "imported",
-      user_facing_message: "Ready to import",
-      workflow: {
-        id: "ready_workflow",
-        name: "Ready Workflow",
-        version: "0.1.0",
-        description: "",
-        trust_level: "noofy_verified",
-      },
-      required_model_count: 1,
-      custom_node_count: 0,
-      unresolved_input_count: 0,
-      model_summary: {
-        workflow_id: "ready_workflow",
-        total_count: 1,
-        available_count: 0,
-        possible_match_count: 0,
-        missing_count: 0,
-        needs_manual_download_count: 0,
-        ready_to_run: false,
-        models: [checkingModel],
-      },
-    };
-    const readySummary = {
-      ...readyImport.model_summary,
-      available_count: 1,
-      ready_to_run: true,
-      models: [availableModel],
-    };
-    let resolveVerification!: (response: Response) => void;
-    const verificationPromise = new Promise<Response>((resolve) => {
-      resolveVerification = resolve;
+  it("silently imports immediately while required models are still being verified locally", async () => {
+    const checkingModel = checkingImportModel("ready.safetensors");
+    const readyImport = silentImportPreview({
+      sessionId: "import-session-ready",
+      workflowId: "ready_workflow",
+      workflowName: "Ready Workflow",
+      model: checkingModel,
     });
-
-    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-
-      if (url.endsWith("/api/runtime")) {
-        return Promise.resolve(jsonResponse(readyRuntime));
-      }
-
-      if (url.endsWith("/api/resources")) {
-        return Promise.resolve(jsonResponse(resourceSnapshot));
-      }
-
-      if (url.endsWith("/api/workflows")) {
-        return Promise.resolve(
-          jsonResponse([
-            {
-              id: "ready_workflow",
-              name: "Ready Workflow",
-              version: "0.1.0",
-              description: "",
-              trust_level: "noofy_verified",
-              status: "imported",
-              status_label: "Imported",
-            },
-          ]),
-        );
-      }
-
-      if (
-        url.endsWith(
-          "/api/workflows/import/preview?filename=ready.noofy&allow_unverified_community_preparation=true",
-        ) &&
-        init?.method === "POST"
-      ) {
-        return Promise.resolve(jsonResponse(readyImport));
-      }
-
-      if (url.endsWith("/api/workflows/import/import-session-ready/model-verification")) {
-        return verificationPromise;
-      }
-
-      if (url.endsWith("/api/workflows/import/import-session-ready/commit") && init?.method === "POST") {
-        return Promise.resolve(
-          jsonResponse({
-            ...readyImport,
-            user_facing_message: "Imported",
-            model_summary: null,
-          }),
-        );
-      }
-
-      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    mockSilentVerificationImport({
+      filename: "ready.noofy",
+      importResult: readyImport,
     });
 
     renderHomePage();
 
-    await screen.findByText("Choose File");
-    const file = new File(["archive"], "ready.noofy");
-    const fileInput = document.querySelector('input[type="file"][accept=".noofy,.json"]') as HTMLInputElement;
-    fireEvent.change(fileInput, { target: { files: [file] } });
+    await chooseWorkflowFile("ready.noofy");
 
-    expect(await screen.findByRole("dialog", { name: "Ready Workflow" })).toBeInTheDocument();
-    expect(await screen.findByRole("progressbar", { name: "Model verification progress" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Download Missing Models" })).toBeDisabled();
-
-    resolveVerification(
-      jsonResponse({
-        job_id: "model-verification-ready",
-        import_session_id: "import-session-ready",
-        workflow_id: "ready_workflow",
-        status: "completed",
-        user_facing_message: "Model verification finished.",
-        current_model_filename: null,
-        current_model_index: null,
-        total_models: 1,
-        verified_models: 1,
-        percent: 100,
-        models: [availableModel],
-        model_summary: readySummary,
-      }),
-    );
-    const readyButton = await screen.findByRole("button", { name: "Open Workflow" });
+    await waitFor(() => expectImportCommitted("import-session-ready"));
+    expect(screen.queryByRole("dialog", { name: "Ready Workflow" })).not.toBeInTheDocument();
     expect(screen.queryByRole("progressbar", { name: "Model verification progress" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Download Missing Models" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Continue Without Downloading" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Cancel Import" })).not.toBeInTheDocument();
-    fireEvent.click(readyButton);
-
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/workflows/import/import-session-ready/commit", {
-        method: "POST",
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/json",
-        },
-        body: undefined,
-      }));
-    expect(screen.queryByRole("dialog", { name: "Ready Workflow" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "Ready Workflow" })).not.toBeInTheDocument();
-    expect(onOpenWorkflow).toHaveBeenCalledWith("ready_workflow");
+    expect(await screen.findByText("Ready Workflow was added to your local workflows.")).toBeInTheDocument();
+    expect(onOpenWorkflow).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Open" }));
+    expect(onOpenWorkflow).toHaveBeenCalledWith("ready_workflow", "Ready Workflow");
+    expect(
+      fetchMock.mock.calls.some(([input]) =>
+        String(input).endsWith("/api/workflows/import/import-session-ready/model-verification"),
+      ),
+    ).toBe(false);
   });
 
   it("starts the staged import flow for a workflow file opened by the operating system", async () => {

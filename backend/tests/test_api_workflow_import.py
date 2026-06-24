@@ -63,10 +63,14 @@ class FakePackageStore:
 
 
 class FakeAvailabilityService:
+    def __init__(self) -> None:
+        self.summarize_calls: list[dict[str, object]] = []
+
     def cleanup_interrupted_downloads(self) -> int:
         return 0
 
-    def summarize(self, package: WorkflowPackage) -> RequiredModelSummary:
+    def summarize(self, package: WorkflowPackage, **kwargs) -> RequiredModelSummary:
+        self.summarize_calls.append(dict(kwargs))
         return RequiredModelSummary(
             workflow_id=package.metadata.id,
             total_count=1,
@@ -1026,9 +1030,10 @@ def test_pending_import_session_expires_after_ttl(tmp_path) -> None:
     assert session_id not in service._pending_workflow_imports
 
 
-def test_staged_import_commit_reuses_previewed_package_for_model_summary(tmp_path) -> None:
+def test_staged_import_commit_reuses_previewed_package_without_blocking_on_model_verification(tmp_path) -> None:
     service = _staged_import_engine_service(tmp_path)
     package_store = service.workflow_import_orchestrator.imported_package_store
+    availability_service = service.model_availability_service
     preview = service.preview_workflow_import(b"archive")
     session_id = preview.import_session_id
     assert session_id is not None
@@ -1039,6 +1044,7 @@ def test_staged_import_commit_reuses_previewed_package_for_model_summary(tmp_pat
     assert package_store.import_count == 0
     assert package_store.prepared_import_count == 1
     assert package_store.prepared_package is package_store.package
+    assert not any(call.get("verify_hashes") is True for call in availability_service.summarize_calls)
 
 
 @pytest.mark.anyio

@@ -12,6 +12,7 @@ const tauriDevHost = process.env.TAURI_DEV_HOST;
 const tauriPlatform = process.env.TAURI_ENV_PLATFORM;
 const tauriDebug = process.env.TAURI_ENV_DEBUG;
 const devBackendPort = process.env.VITE_DEV_BACKEND_PORT ?? "8765";
+const usePollingWatch = process.env.NOOFY_FRONTEND_WATCH_POLLING === "1";
 
 export default defineConfig({
   clearScreen: false,
@@ -23,6 +24,8 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     watch: {
+      usePolling: usePollingWatch || undefined,
+      interval: usePollingWatch ? 300 : undefined,
       ignored: [
         "**/coverage/**",
         "**/src-tauri/resources/noofy-runtime/**",

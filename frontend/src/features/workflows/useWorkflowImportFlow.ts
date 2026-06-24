@@ -95,6 +95,15 @@ function rememberImportedSetup(importResult: WorkflowImportResponse) {
   );
 }
 
+function shouldCommitDuringLocalModelVerification(importResult: WorkflowImportResponse) {
+  return Boolean(
+    importResult.import_session_id &&
+    !importResult.duplicate_identity &&
+    !importNeedsCustomNodeResolution(importResult) &&
+    importResult.model_summary?.models.some((model) => model.status === "checking"),
+  );
+}
+
 export function importNeedsCustomNodeResolution(importResult: WorkflowImportResponse) {
   const resolution = importResult.custom_node_resolution;
   if (!resolution) return false;
@@ -139,6 +148,47 @@ export function useWorkflowImportFlow({
     }));
   }, []);
 
+  const finishImport = useCallback(async (importResult: WorkflowImportResponse, openAfterImport: boolean) => {
+    const workflows = await fetchWorkflows();
+    workflowLibrary.setWorkflowsFromResponse(workflows);
+    rememberImportedSetup(importResult);
+    setState((current) => ({
+      ...current,
+      importing: false,
+      downloadingModels: false,
+      pendingImport: null,
+      downloadJob: null,
+      verificationJob: null,
+      importResult,
+      importError: null,
+    }));
+    if (openAfterImport) {
+      if (importNeedsConfiguration(importResult) && onConfigureDashboard) {
+        onConfigureDashboard(importResult.workflow.id, workflowDisplayName(importResult.workflow));
+        return;
+      }
+      onOpenWorkflow(importResult.workflow.id);
+    }
+  }, [onConfigureDashboard, onOpenWorkflow, workflowLibrary.setWorkflowsFromResponse]);
+
+  const commitDuringLocalModelVerification = useCallback(async (importResult: WorkflowImportResponse) => {
+    const sessionId = importResult.import_session_id;
+    if (!sessionId || !shouldCommitDuringLocalModelVerification(importResult)) return false;
+    setState((current) => ({
+      ...current,
+      importing: true,
+      downloadingModels: false,
+      pendingImport: null,
+      downloadJob: null,
+      verificationJob: null,
+      importResult: null,
+      importError: null,
+    }));
+    const committed = await commitWorkflowImport(sessionId);
+    await finishImport(committed, false);
+    return true;
+  }, [finishImport]);
+
   const startWorkflowImport = useCallback(async (file: File) => {
     if (!isSupportedWorkflowImportFile(file)) {
       failImport(unsupportedWorkflowImportMessage(file.name));
@@ -158,6 +208,7 @@ export function useWorkflowImportFlow({
 
     try {
       const importResult = await previewWorkflowPackageImport(file, allowUnverifiedCommunityPreparation);
+      if (await commitDuringLocalModelVerification(importResult)) return;
       if (
         importResult.import_session_id &&
         (
@@ -197,7 +248,12 @@ export function useWorkflowImportFlow({
         importError: error instanceof Error ? error.message : String(error),
       }));
     }
-  }, [allowUnverifiedCommunityPreparation, failImport, workflowLibrary.setWorkflowsFromResponse]);
+  }, [
+    allowUnverifiedCommunityPreparation,
+    commitDuringLocalModelVerification,
+    failImport,
+    workflowLibrary.setWorkflowsFromResponse,
+  ]);
 
   const downloadMissingModels = useCallback(async () => {
     const sessionId = state.pendingImport?.import_session_id;
@@ -251,29 +307,6 @@ export function useWorkflowImportFlow({
     }
   }, [state.downloadJob?.job_id, state.pendingImport?.import_session_id]);
 
-  const finishImport = useCallback(async (importResult: WorkflowImportResponse, openAfterImport: boolean) => {
-    const workflows = await fetchWorkflows();
-    workflowLibrary.setWorkflowsFromResponse(workflows);
-    rememberImportedSetup(importResult);
-    setState((current) => ({
-      ...current,
-      importing: false,
-      downloadingModels: false,
-      pendingImport: null,
-      downloadJob: null,
-      verificationJob: null,
-      importResult,
-      importError: null,
-    }));
-    if (openAfterImport) {
-      if (importNeedsConfiguration(importResult) && onConfigureDashboard) {
-        onConfigureDashboard(importResult.workflow.id, workflowDisplayName(importResult.workflow));
-        return;
-      }
-      onOpenWorkflow(importResult.workflow.id);
-    }
-  }, [onConfigureDashboard, onOpenWorkflow, workflowLibrary.setWorkflowsFromResponse]);
-
   const continueImport = useCallback(async () => {
     const sessionId = state.pendingImport?.import_session_id;
     if (!sessionId) return;
@@ -315,6 +348,7 @@ export function useWorkflowImportFlow({
     setState((current) => ({ ...current, importing: true, importError: null }));
     try {
       const importResult = await resolveImportCustomNodesFromUrls(sessionId, urlsByNodeType);
+      if (await commitDuringLocalModelVerification(importResult)) return;
       if (
         importResult.import_session_id &&
         (
@@ -340,7 +374,7 @@ export function useWorkflowImportFlow({
         importError: error instanceof Error ? error.message : String(error),
       }));
     }
-  }, [finishImport, state.pendingImport?.import_session_id]);
+  }, [commitDuringLocalModelVerification, finishImport, state.pendingImport?.import_session_id]);
 
   const approveCustomNodeCandidate = useCallback(async (candidateId: string) => {
     const sessionId = state.pendingImport?.import_session_id;
@@ -348,6 +382,7 @@ export function useWorkflowImportFlow({
     setState((current) => ({ ...current, importing: true, importError: null }));
     try {
       const importResult = await approveImportCustomNodeCandidate(sessionId, candidateId);
+      if (await commitDuringLocalModelVerification(importResult)) return;
       if (
         importResult.import_session_id &&
         (
@@ -373,7 +408,7 @@ export function useWorkflowImportFlow({
         importError: error instanceof Error ? error.message : String(error),
       }));
     }
-  }, [finishImport, state.pendingImport?.import_session_id]);
+  }, [commitDuringLocalModelVerification, finishImport, state.pendingImport?.import_session_id]);
 
   const markWorkflowHasNoCustomNodes = useCallback(async () => {
     const sessionId = state.pendingImport?.import_session_id;
@@ -381,12 +416,25 @@ export function useWorkflowImportFlow({
     setState((current) => ({ ...current, importing: true, importError: null }));
     try {
       const importResult = await markImportHasNoCustomNodes(sessionId);
-      setState((current) => ({
-        ...current,
-        importing: false,
-        pendingImport: importResult,
-        importError: null,
-      }));
+      if (await commitDuringLocalModelVerification(importResult)) return;
+      if (
+        importResult.import_session_id &&
+        (
+          importResult.duplicate_identity ||
+          importNeedsCustomNodeResolution(importResult) ||
+          (importResult.model_summary && importResult.model_summary.total_count > 0)
+        )
+      ) {
+        setState((current) => ({
+          ...current,
+          importing: false,
+          pendingImport: importResult,
+          importError: null,
+        }));
+        return;
+      }
+      const committed = await commitWorkflowImport(sessionId);
+      await finishImport(committed, false);
     } catch (error) {
       setState((current) => ({
         ...current,
@@ -394,7 +442,7 @@ export function useWorkflowImportFlow({
         importError: error instanceof Error ? error.message : String(error),
       }));
     }
-  }, [state.pendingImport?.import_session_id]);
+  }, [commitDuringLocalModelVerification, finishImport, state.pendingImport?.import_session_id]);
 
   const readyImportAction = useCallback(async () => {
     const sessionId = state.pendingImport?.import_session_id;
@@ -442,10 +490,15 @@ export function useWorkflowImportFlow({
 
   useEffect(() => {
     const sessionId = state.pendingImport?.import_session_id;
+    const terminalVerification =
+      state.verificationJob?.status === "completed" || state.verificationJob?.status === "failed";
     const verifying =
-      state.verificationJob?.status === "queued" ||
-      state.verificationJob?.status === "running" ||
-      state.pendingImport?.model_summary?.models.some((model) => model.status === "checking");
+      !terminalVerification &&
+      (
+        state.verificationJob?.status === "queued" ||
+        state.verificationJob?.status === "running" ||
+        state.pendingImport?.model_summary?.models.some((model) => model.status === "checking")
+      );
     if (!sessionId || !verifying) return;
 
     let stopped = false;
