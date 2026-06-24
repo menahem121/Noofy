@@ -383,6 +383,7 @@ class FailingStopAllRunnerCoordinator(RecordingRunnerCoordinator):
 class RecordingSidecarService:
     def __init__(self) -> None:
         self.shutdown_called = False
+        self.on_endpoint_changed = None
 
     async def shutdown(self) -> None:
         self.shutdown_called = True
