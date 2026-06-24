@@ -26,6 +26,7 @@ export function useWorkflowRunnerLease({
   runner: Record<string, unknown> | null | undefined;
 }) {
   const runnerLeaseRequestRef = useRef<string | null>(null);
+  const noRunnerLeaseProbeKeyRef = useRef<string | null>(null);
   const tabRuntime = workflowTabs?.runtimeByWorkflowId[workflowId];
   const heldRunnerLeaseId = tabRuntime?.runnerLeaseId ?? null;
   const boundRunnerId = runnerIdFromLease(runner ?? null);
@@ -33,11 +34,17 @@ export function useWorkflowRunnerLease({
     heldRunnerLeaseId && boundRunnerId && tabRuntime?.runnerId && tabRuntime.runnerId !== boundRunnerId,
   );
   const trackedRunHandleForLease = tabRuntime?.activeJobId ?? tabRuntime?.queueId ?? null;
+  const noRunnerLeaseProbeKey = [
+    workflowId,
+    boundRunnerId ?? "no-bound-runner",
+    trackedRunHandleForLease ?? "no-active-run",
+  ].join(":");
 
   useEffect(() => {
     if (!workflowTabs || !packageReady || dashboardSetupRequired) return;
     if (heldRunnerLeaseId && !staleRunnerLease) return;
     if (runnerLeaseRequestRef.current === workflowId) return;
+    if (!staleRunnerLease && noRunnerLeaseProbeKeyRef.current === noRunnerLeaseProbeKey) return;
     let canceled = false;
     runnerLeaseRequestRef.current = workflowId;
     const staleLeaseId = staleRunnerLease ? heldRunnerLeaseId : null;
@@ -53,11 +60,13 @@ export function useWorkflowRunnerLease({
           return;
         }
         if (!response.lease_id) {
+          noRunnerLeaseProbeKeyRef.current = noRunnerLeaseProbeKey;
           if (staleLeaseId) {
             workflowTabs.setWorkflowRuntime(workflowId, { runnerLeaseId: null, runnerId: null });
           }
           return;
         }
+        noRunnerLeaseProbeKeyRef.current = null;
         workflowTabs.setWorkflowRuntime(workflowId, {
           runnerLeaseId: response.lease_id,
           runnerId: runnerIdFromLease(response.runner),
@@ -82,5 +91,6 @@ export function useWorkflowRunnerLease({
     staleRunnerLease,
     boundRunnerId,
     trackedRunHandleForLease,
+    noRunnerLeaseProbeKey,
   ]);
 }

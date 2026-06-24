@@ -1698,6 +1698,11 @@ def test_engine_service_runner_lease_reports_no_bound_runner() -> None:
         "lease_id": None,
         "runner": None,
     }
+    assert [
+        event
+        for event in service.log_store.list_events().events
+        if "Workflow runner lease" in event.message
+    ] == []
 
 
 def test_engine_service_uses_constructor_dashboard_dependencies(monkeypatch) -> None:

@@ -1038,6 +1038,49 @@ describe("WorkflowRunPage", () => {
     expect(leaseOpenCount).toBe(2);
   });
 
+  it("does not repeat no-runner lease probes while the same unbound run is tracked", async () => {
+    let leaseOpenCount = 0;
+    mockConfiguredDashboardFetch(fetchMock, readyRuntime, configuredPackageData, null, (url, init) => {
+      if (url.endsWith("/api/workflows/text_to_image_v0/runner/leases") && init?.method === "POST") {
+        leaseOpenCount += 1;
+        return jsonResponse({ workflow_id: "text_to_image_v0", status: "no_runner", lease_id: null, runner: null });
+      }
+      if (url.endsWith("/api/jobs/job-unbound/progress")) {
+        return jsonResponse({ job_id: "job-unbound", status: "running", value: 1, max: 10, current_node: null, message: null });
+      }
+      return undefined;
+    });
+
+    function Harness({ runtime }: { runtime: Partial<WorkflowTabRuntimeState> }) {
+      return (
+        <RuntimeStatusProvider initialRuntimeState={readyRuntimeState} skipInitialRefresh>
+          <WorkflowTabsProvider>
+            <WorkflowRuntimeSeeder workflowRuntime={runtime}>
+              <WorkflowRunPage workflowId="text_to_image_v0" onBack={vi.fn()} onNavigate={vi.fn()} />
+            </WorkflowRuntimeSeeder>
+          </WorkflowTabsProvider>
+        </RuntimeStatusProvider>
+      );
+    }
+
+    const runningRuntime: Partial<WorkflowTabRuntimeState> = {
+      activeJobId: "job-unbound",
+      activeJobStatus: "running",
+      handleSource: "job",
+      queueId: null,
+    };
+    const view = render(<Harness runtime={{}} />);
+    await waitForReadyStatus();
+    await waitFor(() => expect(leaseOpenCount).toBe(1));
+
+    view.rerender(<Harness runtime={runningRuntime} />);
+    await waitFor(() => expect(leaseOpenCount).toBe(2));
+
+    view.rerender(<Harness runtime={{ ...runningRuntime }} />);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(leaseOpenCount).toBe(2);
+  });
+
   it("splits diagnostics into ComfyUI engine logs and Noofy logs from existing sources", () => {
     const { comfyuiLogs, noofyLogs } = splitDiagnosticLogs([
       diagnosticEvent("comfyui.adapter", "ComfyUI execution failed"),

@@ -49,7 +49,6 @@ from app.runtime.runners.runner_process import RunnerLaunchSpec
 from app.runtime.python_abi import detect_python_major_minor
 from app.runtime.smoke_test import SmokeExecutionFixture
 from app.runtime.runners.supervisor import (
-    CORE_RUNNER_ID,
     QueuedRunnerStartKind,
     RunnerDescriptor,
     RunnerKind,
@@ -233,17 +232,6 @@ class WorkflowRunnerLifecycleService:
         self.workflow_loader.get_package(workflow_id)
         runner = self.runner_supervisor.runner_for_workflow(workflow_id)
         if runner is None:
-            self.log_store.add(
-                "info",
-                "Workflow runner lease opened without a bound isolated runner; "
-                "runs will use the core runner fallback",
-                "runtime.runners.lifecycle_service",
-                workflow_id=workflow_id,
-                details={
-                    "bound_isolated_runner_id": None,
-                    "selected_runner_id": CORE_RUNNER_ID,
-                },
-            )
             return {
                 "workflow_id": workflow_id,
                 "status": "no_runner",
