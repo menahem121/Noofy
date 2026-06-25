@@ -84,6 +84,7 @@ export function RuntimeStatusProvider({
   const stateRef = useRef(state);
   const backendSessionIdRef = useRef<string | null>(null);
   const backendSessionRecoverySeqRef = useRef(0);
+  const backendSessionRecoveryRef = useRef<BackendSessionRecoveryState | null>(null);
   const refreshPage = useCallback(() => reloadPage(), [reloadPage]);
 
   useEffect(() => {
@@ -105,23 +106,24 @@ export function RuntimeStatusProvider({
     backendSessionIdRef.current = backendSessionId;
     const sequence = backendSessionRecoverySeqRef.current + 1;
     backendSessionRecoverySeqRef.current = sequence;
-    setPageRefreshRequired(true);
-    setBackendSessionRecovery({
+    const recovery = {
       sequence,
       previousBackendSessionId: previous,
       backendSessionId,
       detectedAt: Date.now(),
-    });
+    };
+    backendSessionRecoveryRef.current = recovery;
+    setPageRefreshRequired(true);
+    setBackendSessionRecovery(recovery);
     recordBackendSessionRestart(backendSessionId);
   }, []);
 
   const acknowledgeBackendSessionRecovery = useCallback((sequence?: number) => {
+    const current = backendSessionRecoveryRef.current;
+    if (sequence !== undefined && current?.sequence !== sequence) return;
+    backendSessionRecoveryRef.current = null;
     setPageRefreshRequired(false);
-    setBackendSessionRecovery((current) => {
-      if (!current) return current;
-      if (sequence !== undefined && current.sequence !== sequence) return current;
-      return null;
-    });
+    setBackendSessionRecovery(null);
   }, []);
 
   const setRuntimeFromResponse = useCallback((runtime: RuntimeStatus | null) => {

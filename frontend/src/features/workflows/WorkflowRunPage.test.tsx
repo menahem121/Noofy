@@ -895,6 +895,52 @@ function BackendRestartRunPageHarness() {
   );
 }
 
+function EarlyPreparationRestartHarness({
+  onBackendRestart,
+}: {
+  onBackendRestart: () => void;
+}) {
+  const runtimeStatus = useRuntimeStatus();
+  const workflowTabs = useWorkflowTabs();
+  const [showRunPage, setShowRunPage] = useState(true);
+  const seededRef = useRef(false);
+  useEffect(() => {
+    if (seededRef.current) return;
+    seededRef.current = true;
+    runtimeStatus.setRuntimeFromResponse({ ...readyRuntime, backend_session_id: "bs-old" } as RuntimeHealthState["runtime"]);
+    workflowTabs.openWorkflowTab("text_to_image_v0", "Text to Image");
+  }, [runtimeStatus, workflowTabs]);
+
+  return (
+    <>
+      <button type="button" onClick={() => setShowRunPage(false)}>
+        Hide run page
+      </button>
+      <button type="button" onClick={() => setShowRunPage(true)}>
+        Show run page
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          onBackendRestart();
+          runtimeStatus.setRuntimeFromResponse({ ...readyRuntime, backend_session_id: "bs-new" } as RuntimeHealthState["runtime"]);
+        }}
+      >
+        Simulate backend restart
+      </button>
+      {showRunPage ? (
+        <WorkflowRunPage
+          workflowId="text_to_image_v0"
+          onBack={vi.fn()}
+          onNavigate={vi.fn()}
+        />
+      ) : (
+        <span>Run page hidden</span>
+      )}
+    </>
+  );
+}
+
 function WorkflowTabSwitchRunHarness() {
   const [activeWorkflowId, setActiveWorkflowId] = useState("first-workflow");
   return (
@@ -1352,6 +1398,90 @@ describe("WorkflowRunPage", () => {
     expect(screen.queryByText("Preparing old workflow...")).not.toBeInTheDocument();
     expect(window.sessionStorage.getItem("noofy.workflowRunHandles.v1")).toBeNull();
     expect(window.sessionStorage.getItem("noofy.activeRunWorkflows.v1")).toBeNull();
+    await waitFor(() => {
+      expect(statusCalls).toBeGreaterThan(1);
+      expect(packageCalls).toBeGreaterThan(1);
+    });
+  });
+
+  it("recovers after backend restart during early preparation before a job handle exists", async () => {
+    const runRequest = deferred<Response>();
+    let backendRestarted = false;
+    let statusCalls = 0;
+    let packageCalls = 0;
+    const preparingStatus = {
+      ...workflowStatus,
+      workflow: { ...workflowStatus.workflow, custom_node_count: 1 },
+      install: {
+        status: "resolving_dependencies",
+        user_facing_message: "Resolving custom-node dependencies.",
+        requires_preparation: true,
+      },
+    };
+    const readyStatus = {
+      ...workflowStatus,
+      install: {
+        status: "ready",
+        user_facing_message: "Ready to run.",
+        requires_preparation: true,
+      },
+    };
+    mockConfiguredDashboardFetch(fetchMock, readyRuntime, configuredPackageData, null, (url, init) => {
+      if (url.endsWith("/api/workflows/text_to_image_v0/status")) {
+        statusCalls += 1;
+        return jsonResponse(backendRestarted ? readyStatus : preparingStatus);
+      }
+      if (url.endsWith("/api/workflows/text_to_image_v0/package")) {
+        packageCalls += 1;
+        return undefined;
+      }
+      if (url.endsWith("/api/workflows/text_to_image_v0/run") && init?.method === "POST") {
+        return runRequest.promise;
+      }
+      return undefined;
+    });
+
+    render(
+      <RuntimeStatusProvider initialRuntimeState={readyRuntimeState} skipInitialRefresh>
+        <ResourceStatusProvider initialSnapshot={resourceSnapshot} skipInitialRefresh>
+          <WorkflowTabsProvider>
+            <EarlyPreparationRestartHarness onBackendRestart={() => {
+              backendRestarted = true;
+            }} />
+          </WorkflowTabsProvider>
+        </ResourceStatusProvider>
+      </RuntimeStatusProvider>,
+    );
+
+    expect(await screen.findByRole("main", { name: /workflow dashboard canvas/i })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: /run workflow/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
+
+    expect(await screen.findByRole("progressbar", { name: /workflow progress/i })).toHaveAttribute("aria-valuenow", "0");
+    expect(await screen.findByRole("dialog", { name: "Setting up workflow" })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(window.sessionStorage.getItem("noofy.pendingRunWorkflows.v1")).toContain("text_to_image_v0");
+    });
+    expect(window.sessionStorage.getItem("noofy.workflowRunHandles.v1")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Hide run page" }));
+    expect(await screen.findByText("Run page hidden")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Simulate backend restart" }));
+    await waitFor(() => {
+      expect(window.sessionStorage.getItem("noofy.pendingRunWorkflows.v1")).toBeNull();
+    });
+    expect(window.sessionStorage.getItem("noofy.sessionRestart.v1")).toBeNull();
+    expect(window.sessionStorage.getItem("noofy.workflowRunHandles.v1")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Show run page" }));
+
+    expect(await screen.findByRole("main", { name: /workflow dashboard canvas/i })).toBeInTheDocument();
+    expect(await screen.findByText("The app restarted. Run this workflow again when ready.")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Reload this workflow" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Setting up workflow" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("progressbar", { name: /workflow progress/i })).not.toBeInTheDocument();
+    expect(screen.queryByText("Starting this workflow...")).not.toBeInTheDocument();
     await waitFor(() => {
       expect(statusCalls).toBeGreaterThan(1);
       expect(packageCalls).toBeGreaterThan(1);

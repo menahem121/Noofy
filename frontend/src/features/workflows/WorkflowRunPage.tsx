@@ -67,8 +67,10 @@ import { AppLayout, type AppRouteId } from "../app/AppLayout";
 import { useRuntimeStatus } from "../app/RuntimeStatusProvider";
 import { useOptionalWorkflowTabs } from "../app/WorkflowTabs";
 import {
+  clearPendingRunWorkflow,
   clearWorkflowRunHandle,
   loadWorkflowRunHandle,
+  markPendingRunWorkflow,
   vanishedRunRecoveryMessage,
   type WorkflowRunHandleSnapshot,
 } from "../app/sessionRestore";
@@ -895,13 +897,18 @@ export function WorkflowRunPage({
   }
 
   function finishRunSubmission() {
-    runSubmissionInFlightCountRef.current = Math.max(0, runSubmissionInFlightCountRef.current - 1);
-    setIsSubmittingRun(runSubmissionInFlightCountRef.current > 0);
+    const nextCount = Math.max(0, runSubmissionInFlightCountRef.current - 1);
+    runSubmissionInFlightCountRef.current = nextCount;
+    setIsSubmittingRun(nextCount > 0);
+    if (nextCount === 0) {
+      clearPendingRunWorkflow(workflowId);
+    }
   }
 
   function cancelRunSubmissions() {
     runSubmissionInFlightCountRef.current = 0;
     setIsSubmittingRun(false);
+    clearPendingRunWorkflow(workflowId);
   }
 
   function clearLivePreview() {
@@ -948,6 +955,7 @@ export function WorkflowRunPage({
     const queueingBehindActiveRun =
       trackedRunsRef.current.some(isTrackedRunActive) || isActiveWorkflowProgress(displayedProgress);
     beginRunSubmission();
+    markPendingRunWorkflow(workflowId);
     const runGeneration = runSessionGenerationRef.current;
     const runStillCurrent = () =>
       activeWorkflowIdRef.current === workflowId && runSessionGenerationRef.current === runGeneration;

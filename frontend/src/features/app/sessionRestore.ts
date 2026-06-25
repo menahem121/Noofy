@@ -1,6 +1,7 @@
 const SESSION_RESTART_STORAGE_KEY = "noofy.sessionRestart.v1";
 const ACTIVE_RUN_WORKFLOWS_STORAGE_KEY = "noofy.activeRunWorkflows.v1";
 const WORKFLOW_RUN_HANDLES_STORAGE_KEY = "noofy.workflowRunHandles.v1";
+const PENDING_RUN_WORKFLOWS_STORAGE_KEY = "noofy.pendingRunWorkflows.v1";
 const RESTART_MARKER_MAX_AGE_MS = 10 * 60 * 1000;
 const RUN_HANDLE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
@@ -13,6 +14,11 @@ interface SessionRestartMarker {
 }
 
 interface ActiveRunWorkflowsMarker {
+  workflowIds: string[];
+  updatedAt: number;
+}
+
+interface PendingRunWorkflowsMarker {
   workflowIds: string[];
   updatedAt: number;
 }
@@ -33,6 +39,9 @@ export function loadRestartRecoveryWorkflowIds(): string[] {
   if (!hasRecentBackendSessionRestart()) return [];
   const workflowIds = new Set<string>();
   for (const workflowId of loadActiveRunWorkflowIds()) {
+    workflowIds.add(workflowId);
+  }
+  for (const workflowId of loadPendingRunWorkflowIds()) {
     workflowIds.add(workflowId);
   }
   for (const workflowId of loadWorkflowRunHandleWorkflowIds()) {
@@ -89,6 +98,39 @@ export function storeWorkflowRunHandle(
   }
 }
 
+export function markPendingRunWorkflow(workflowId: string) {
+  const normalizedWorkflowId = workflowId.trim();
+  if (!normalizedWorkflowId) return;
+  try {
+    const workflowIds = new Set(loadPendingRunWorkflowIds());
+    workflowIds.add(normalizedWorkflowId);
+    window.sessionStorage.setItem(
+      PENDING_RUN_WORKFLOWS_STORAGE_KEY,
+      JSON.stringify({ workflowIds: [...workflowIds], updatedAt: Date.now() } satisfies PendingRunWorkflowsMarker),
+    );
+  } catch {
+    // Pending-run recovery is best effort; runtime truth remains backend-owned.
+  }
+}
+
+export function clearPendingRunWorkflow(workflowId: string) {
+  const normalizedWorkflowId = workflowId.trim();
+  if (!normalizedWorkflowId) return;
+  try {
+    const workflowIds = loadPendingRunWorkflowIds().filter((candidate) => candidate !== normalizedWorkflowId);
+    if (workflowIds.length === 0) {
+      window.sessionStorage.removeItem(PENDING_RUN_WORKFLOWS_STORAGE_KEY);
+      return;
+    }
+    window.sessionStorage.setItem(
+      PENDING_RUN_WORKFLOWS_STORAGE_KEY,
+      JSON.stringify({ workflowIds, updatedAt: Date.now() } satisfies PendingRunWorkflowsMarker),
+    );
+  } catch {
+    // Storage cleanup should not affect workflow navigation.
+  }
+}
+
 export function loadWorkflowRunHandle(workflowId: string): WorkflowRunHandleSnapshot | null {
   try {
     const marker = loadWorkflowRunHandlesMarker();
@@ -123,6 +165,14 @@ export function clearAllWorkflowRunHandles() {
   }
 }
 
+export function clearAllPendingRunWorkflows() {
+  try {
+    window.sessionStorage.removeItem(PENDING_RUN_WORKFLOWS_STORAGE_KEY);
+  } catch {
+    // Storage cleanup should not affect workflow navigation.
+  }
+}
+
 export function loadRestartRecoveryNotices(): Record<string, string> {
   return recoveryNoticesForWorkflowIds(loadRestartRecoveryWorkflowIds());
 }
@@ -142,6 +192,7 @@ export function clearBackendSessionRestartMarker() {
 export function clearBackendSessionRecoveryStorage() {
   clearBackendSessionRestartMarker();
   clearActiveRunWorkflowIds();
+  clearAllPendingRunWorkflows();
   clearAllWorkflowRunHandles();
 }
 
@@ -174,6 +225,26 @@ function loadActiveRunWorkflowIds(): string[] {
     const raw = window.sessionStorage.getItem(ACTIVE_RUN_WORKFLOWS_STORAGE_KEY);
     if (!raw) return [];
     const marker = JSON.parse(raw) as Partial<ActiveRunWorkflowsMarker>;
+    if (
+      !Array.isArray(marker.workflowIds)
+      || typeof marker.updatedAt !== "number"
+      || Date.now() - marker.updatedAt > RESTART_MARKER_MAX_AGE_MS
+    ) {
+      return [];
+    }
+    return marker.workflowIds.filter((workflowId): workflowId is string =>
+      typeof workflowId === "string" && Boolean(workflowId.trim()),
+    );
+  } catch {
+    return [];
+  }
+}
+
+function loadPendingRunWorkflowIds(): string[] {
+  try {
+    const raw = window.sessionStorage.getItem(PENDING_RUN_WORKFLOWS_STORAGE_KEY);
+    if (!raw) return [];
+    const marker = JSON.parse(raw) as Partial<PendingRunWorkflowsMarker>;
     if (
       !Array.isArray(marker.workflowIds)
       || typeof marker.updatedAt !== "number"

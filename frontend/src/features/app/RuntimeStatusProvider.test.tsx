@@ -309,6 +309,49 @@ describe("RuntimeStatusProvider", () => {
     expect(result.current.backendSessionRecovery).toBeNull();
   });
 
+  it("does not let a stale recovery acknowledgement clear a newer backend session change", () => {
+    const reloadPage = vi.fn();
+    const { result } = renderHook(() => useRuntimeStatus(), {
+      wrapper: ({ children }) => (
+        <RuntimeStatusProvider skipInitialRefresh reloadPage={reloadPage}>
+          {children}
+        </RuntimeStatusProvider>
+      ),
+    });
+
+    act(() => {
+      result.current.setRuntimeFromResponse({ ...readyRuntime, backend_session_id: "bs-first" } as RuntimeHealthState["runtime"]);
+      result.current.setRuntimeFromResponse({ ...readyRuntime, backend_session_id: "bs-second" } as RuntimeHealthState["runtime"]);
+    });
+    const staleSequence = result.current.backendSessionRecovery?.sequence;
+    expect(staleSequence).toEqual(expect.any(Number));
+
+    act(() => {
+      result.current.setRuntimeFromResponse({ ...readyRuntime, backend_session_id: "bs-third" } as RuntimeHealthState["runtime"]);
+    });
+    expect(result.current.pageRefreshRequired).toBe(true);
+    expect(result.current.backendSessionRecovery).toMatchObject({
+      backendSessionId: "bs-third",
+    });
+
+    act(() => {
+      result.current.acknowledgeBackendSessionRecovery(staleSequence);
+    });
+
+    expect(result.current.pageRefreshRequired).toBe(true);
+    expect(result.current.backendSessionRecovery).toMatchObject({
+      backendSessionId: "bs-third",
+    });
+
+    act(() => {
+      result.current.acknowledgeBackendSessionRecovery();
+    });
+
+    expect(result.current.pageRefreshRequired).toBe(false);
+    expect(result.current.backendSessionRecovery).toBeNull();
+    expect(reloadPage).not.toHaveBeenCalled();
+  });
+
   it("adopts the first runtime session without marking a freshly loaded page stale", async () => {
     const reloadPage = vi.fn();
     window.localStorage.setItem("noofy.backendSession.v1", "bs-current-in-another-tab");

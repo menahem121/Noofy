@@ -84,6 +84,10 @@ export function WorkflowTabsProvider({ children }: { children: ReactNode }) {
     initialRestartRecoveryWorkflowIdsRef.current = loadRestartRecoveryWorkflowIds();
   }
   const [tabs, setTabs] = useState<WorkflowTab[]>(() => loadStoredTabs());
+  const initialOpenWorkflowIdsRef = useRef<string[] | null>(null);
+  if (initialOpenWorkflowIdsRef.current === null) {
+    initialOpenWorkflowIdsRef.current = tabs.map((tab) => tab.workflowId);
+  }
   const [runtimeByWorkflowId, setRuntimeByWorkflowId] = useState<Record<string, WorkflowTabRuntimeState>>({});
   const [recoveryNoticeByWorkflowId, setRecoveryNoticeByWorkflowId] = useState<Record<string, string>>(
     () => recoveryNoticesForWorkflowIds(initialRestartRecoveryWorkflowIdsRef.current ?? []),
@@ -118,7 +122,11 @@ export function WorkflowTabsProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const recoveredWorkflowIds = initialRestartRecoveryWorkflowIdsRef.current ?? [];
     if (recoveredWorkflowIds.length > 0 || hasRecentBackendSessionRestart()) {
-      for (const workflowId of recoveredWorkflowIds) {
+      const cacheWorkflowIds = uniqueWorkflowIds([
+        ...(initialOpenWorkflowIdsRef.current ?? []),
+        ...recoveredWorkflowIds,
+      ]);
+      for (const workflowId of cacheWorkflowIds) {
         invalidateWorkflowRunPageCache(workflowId);
       }
       clearBackendSessionRecoveryStorage();
@@ -134,13 +142,18 @@ export function WorkflowTabsProvider({ children }: { children: ReactNode }) {
       ...loadRestartRecoveryWorkflowIds(),
       ...sessionOwnedWorkflowRuntimeIds(runtimeByWorkflowIdRef.current),
     ]);
+    const cacheWorkflowIds = uniqueWorkflowIds([
+      ...tabs.map((tab) => tab.workflowId),
+      ...affectedWorkflowIds,
+    ]);
     clearBackendSessionRecoveryStorage();
 
+    for (const workflowId of cacheWorkflowIds) {
+      invalidateWorkflowRunPageCache(workflowId);
+    }
+    setRuntimeByWorkflowId((current) => removeRuntimeStateForWorkflows(current, cacheWorkflowIds));
+
     if (affectedWorkflowIds.length > 0) {
-      for (const workflowId of affectedWorkflowIds) {
-        invalidateWorkflowRunPageCache(workflowId);
-      }
-      setRuntimeByWorkflowId((current) => removeRuntimeStateForWorkflows(current, affectedWorkflowIds));
       setRecoveryNoticeByWorkflowId((current) => ({
         ...current,
         ...recoveryNoticesForWorkflowIds(affectedWorkflowIds),
@@ -148,7 +161,7 @@ export function WorkflowTabsProvider({ children }: { children: ReactNode }) {
     }
 
     runtimeStatus.acknowledgeBackendSessionRecovery(recovery.sequence);
-  }, [runtimeStatus?.backendSessionRecovery, runtimeStatus?.acknowledgeBackendSessionRecovery]);
+  }, [runtimeStatus?.backendSessionRecovery, runtimeStatus?.acknowledgeBackendSessionRecovery, tabs]);
 
   const openWorkflowTab = useCallback((workflowId: string, workflowName?: string) => {
     const now = Date.now();

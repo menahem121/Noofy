@@ -281,6 +281,31 @@ describe("WorkflowTabs", () => {
     expect(window.sessionStorage.getItem("noofy.workflowRunHandles.v1")).toBeNull();
   });
 
+  it("restores a recovery notice from a pending run before any job handle exists", () => {
+    window.sessionStorage.setItem(
+      "noofy.sessionRestart.v1",
+      JSON.stringify({ backendSessionId: "bs-new", detectedAt: Date.now() }),
+    );
+    window.sessionStorage.setItem(
+      "noofy.pendingRunWorkflows.v1",
+      JSON.stringify({ workflowIds: ["wf-1"], updatedAt: Date.now() }),
+    );
+
+    render(
+      <WorkflowTabsProvider>
+        <Harness />
+      </WorkflowTabsProvider>,
+    );
+
+    expect(screen.getByTestId("recovery-notice")).toHaveTextContent(
+      "The app restarted. Run this workflow again when ready.",
+    );
+    expect(window.sessionStorage.getItem("noofy.pendingRunWorkflows.v1")).toBeNull();
+    expect(window.sessionStorage.getItem("noofy.activeRunWorkflows.v1")).toBeNull();
+    expect(window.sessionStorage.getItem("noofy.sessionRestart.v1")).toBeNull();
+    expect(window.sessionStorage.getItem("noofy.workflowRunHandles.v1")).toBeNull();
+  });
+
   it("clears live run handles and acknowledges recovery when the backend session changes", async () => {
     render(
       <RuntimeStatusProvider skipInitialRefresh>
