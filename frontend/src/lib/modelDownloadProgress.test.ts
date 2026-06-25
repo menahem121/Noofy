@@ -15,6 +15,7 @@ function failedJob(): ModelDownloadJobStatus {
     total_bytes: null,
     percent: null,
     speed_bytes_per_second: null,
+    model_summary: null,
     models: [
       {
         requirement_id: "rate-limited",

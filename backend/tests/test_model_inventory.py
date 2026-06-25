@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from app.api.routes.models import list_models
 from app.diagnostics import LogStore
-from app.engine.models import ModelInfo
+from app.engine.models import ModelInfo, RequiredModelAvailability, RequiredModelSummary
 from app.main import create_app
 from app.models.inventory import (
     ModelDownloadStartRequest,
@@ -827,6 +827,45 @@ class FakeDownloadAvailabilityService:
             status="completed",
         )
 
+    def summarize(self, package):
+        models = []
+        for model in package.required_models:
+            target = self.noofy_root / model.folder / model.filename
+            available = target.is_file()
+            models.append(
+                RequiredModelAvailability(
+                    requirement_id=f"{model.node_id}:{model.input_name}:{model.folder}/{model.filename}",
+                    node_id=model.node_id,
+                    node_type=model.node_type,
+                    input_name=model.input_name,
+                    filename=model.filename,
+                    model_type=model.model_type,
+                    folder=model.folder,
+                    verification_level=model.verification_level,
+                    size_bytes=model.size_bytes,
+                    source_urls=list(model.source_urls),
+                    source_availability="known" if (model.source_url or model.source_urls) else "unknown",
+                    status="available" if available else "missing",
+                    status_label="Available" if available else "Missing",
+                    asset_ownership="noofy_downloaded" if available else "community",
+                    source_path=str(target) if available else None,
+                    matched_root=str(self.noofy_root) if available else None,
+                    matched_size_bytes=target.stat().st_size if available else None,
+                    message=None if available else "Model is missing.",
+                )
+            )
+        available_count = sum(model.status == "available" for model in models)
+        return RequiredModelSummary(
+            workflow_id=package.metadata.id,
+            total_count=len(models),
+            available_count=available_count,
+            possible_match_count=0,
+            missing_count=sum(model.status == "missing" for model in models),
+            needs_manual_download_count=0,
+            ready_to_run=len(models) == available_count,
+            models=models,
+        )
+
 
 class SparseFailureDownloadAvailabilityService:
     async def download_missing(self, package, *, progress_callback=None, cancel_event=None):
@@ -899,6 +938,9 @@ async def _assert_download_job_tracks_active_job_and_downloaded_ownership(tmp_pa
     status = service.status(started.job_id)
     assert status.status == "completed"
     assert status.percent == 100
+    assert status.model_summary is not None
+    assert status.model_summary.ready_to_run is True
+    assert status.model_summary.models[0].status == "available"
     assert ownership_store.origin_for_model("checkpoints/downloaded.safetensors") == "downloaded"
     assert persisted_packages == [package]
 

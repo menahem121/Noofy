@@ -184,6 +184,21 @@ const missingModelSummary = {
   ],
 };
 
+const downloadedModelSummary = {
+  ...missingModelSummary,
+  available_count: 1,
+  missing_count: 0,
+  ready_to_run: true,
+  models: missingModelSummary.models.map((model) => ({
+    ...model,
+    status: "available",
+    status_label: "Available",
+    source_path: "/models/checkpoints/v1-5-pruned-emaonly-fp16.safetensors",
+    matched_root: "/models",
+    message: null,
+  })),
+};
+
 const workflowStatus = {
   workflow_id: "text_to_image_v0",
   workflow: {
@@ -2590,6 +2605,100 @@ describe("WorkflowRunPage", () => {
 
     expect(await screen.findByRole("dialog", { name: "Missing Models" })).toBeInTheDocument();
     expect(screen.getAllByText(/v1-5-pruned-emaonly-fp16\.safetensors/).length).toBeGreaterThan(0);
+  });
+
+  it("uses the completed model download summary to clear stale run-page missing model state", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/runtime")) {
+        return Promise.resolve(jsonResponse(readyRuntime));
+      }
+
+      if (url.endsWith("/api/workflows/text_to_image_v0/status")) {
+        return Promise.resolve(jsonResponse(workflowStatus));
+      }
+
+      if (url.endsWith("/api/workflows/text_to_image_v0/model-summary")) {
+        return Promise.resolve(jsonResponse(missingModelSummary));
+      }
+
+      if (url.endsWith("/api/workflows/text_to_image_v0/validate")) {
+        return Promise.resolve(
+          jsonResponse({
+            workflow_id: "text_to_image_v0",
+            valid: false,
+            missing_models: [
+              {
+                folder: "checkpoints",
+                filename: "v1-5-pruned-emaonly-fp16.safetensors",
+                source_url: null,
+                checksum: null,
+              },
+            ],
+            errors: [],
+          }),
+        );
+      }
+
+      if (url.endsWith("/api/workflows/text_to_image_v0/run") && init?.method === "POST") {
+        return Promise.resolve(
+          jsonResponse({
+            workflow_id: "text_to_image_v0",
+            valid: false,
+            missing_models: [
+              {
+                folder: "checkpoints",
+                filename: "v1-5-pruned-emaonly-fp16.safetensors",
+                source_url: null,
+                checksum: null,
+              },
+            ],
+            errors: [],
+          }),
+        );
+      }
+
+      if (url.endsWith("/api/models/downloads") && init?.method === "POST") {
+        return Promise.resolve(jsonResponse({ job_id: "model-download-1", status: "queued", user_facing_message: "Downloading required models..." }));
+      }
+
+      if (url.endsWith("/api/models/downloads/model-download-1")) {
+        return Promise.resolve(
+          jsonResponse({
+            job_id: "model-download-1",
+            status: "completed",
+            user_facing_message: "Model download check finished.",
+            current_model_filename: "v1-5-pruned-emaonly-fp16.safetensors",
+            current_model_index: 1,
+            total_models: 1,
+            bytes_downloaded: 1024,
+            total_bytes: 1024,
+            percent: 100,
+            speed_bytes_per_second: null,
+            models: [],
+            model_summary: downloadedModelSummary,
+          }),
+        );
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderRunPage();
+
+    const runButton = await screen.findByRole("button", { name: /run workflow/i });
+    await waitFor(() => expect(runButton).toBeEnabled());
+    fireEvent.click(runButton);
+
+    const dialog = await screen.findByRole("dialog", { name: "Missing Models" });
+    expect(within(dialog).getByText("v1-5-pruned-emaonly-fp16.safetensors")).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Download Missing Models" }));
+
+    expect(await within(dialog).findByText("Text to Image has all required model files available.")).toBeInTheDocument();
+    expect(within(dialog).getByText("Available")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Download Missing Models" })).toBeDisabled();
   });
 
   it("allows Run while required models are checking, then opens Missing Models if backend validation fails", async () => {

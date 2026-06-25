@@ -58,6 +58,9 @@ export function useWorkflowModelActions({
         .then((job) => {
           setModelDownloadJob(job);
           setModelDownloadError(null);
+          if (job.model_summary) {
+            onModelSummaryRef.current(job.model_summary);
+          }
           if (!isModelDownloadActive(job.status)) {
             void loadRequirementsRef.current();
           }
@@ -105,10 +108,15 @@ export function useWorkflowModelActions({
     if (selections.length === 0) return;
     setModelDownloadStarting(true);
     setModelDownloadError(null);
+    setModelVerificationJob(null);
+    setModelVerificationError(null);
     try {
       const started = await startModelDownload(selections);
       const status = await fetchModelDownloadStatus(started.job_id);
       setModelDownloadJob(status);
+      if (status.model_summary) {
+        onModelSummaryRef.current(status.model_summary);
+      }
     } catch (error) {
       setModelDownloadError(error instanceof Error ? error.message : "Could not start the model download.");
     } finally {

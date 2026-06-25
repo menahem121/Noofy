@@ -490,6 +490,15 @@ export function WorkflowRunPage({
       setState((current) => ({ ...current, modelSummary }));
     },
   });
+  const activeModelDownloadJob = useMemo(() => {
+    if (!modelDownloadJob?.model_summary) return modelDownloadJob;
+    const model_summary = activeRequiredModelSummary(
+      modelDownloadJob.model_summary,
+      packageDataForWorkflow,
+      submittedInputValues,
+    );
+    return { ...modelDownloadJob, model_summary };
+  }, [modelDownloadJob, packageDataForWorkflow, submittedInputValues]);
 
   const outputImagesByNodeId = useMemo<Map<string, string[]>>(
     () => extractImageUrlsByNodeId(state.result),
@@ -2117,7 +2126,7 @@ export function WorkflowRunPage({
     <WorkflowRequiredModelsModal
       workflowName={workflowDisplayTitle}
       summary={activeModelSummary}
-      downloadJob={modelDownloadJob}
+      downloadJob={activeModelDownloadJob}
       downloadError={modelDownloadError}
       downloadBusy={modelDownloadStarting}
       verificationJob={modelVerificationJob}

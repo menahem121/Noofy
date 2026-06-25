@@ -134,7 +134,7 @@ export function WorkflowRequiredModelsModal({
   onRetryVerification: () => void;
   onClose: () => void;
 }) {
-  const effectiveSummary = verificationJob?.model_summary ?? summary;
+  const effectiveSummary = downloadJob?.model_summary ?? verificationJob?.model_summary ?? summary;
   const activeDownload = Boolean(downloadJob && isModelDownloadActive(downloadJob.status));
   const activeVerification = Boolean(verificationJob && ["queued", "running"].includes(verificationJob.status));
   const downloadable = effectiveSummary.models.some(isRequiredModelDownloadRetryable);

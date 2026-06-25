@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from app.diagnostics import DiagnosticsSink
-from app.engine.models import ImportModelDownloadProgressItem
+from app.engine.models import ImportModelDownloadProgressItem, RequiredModelSummary
 from app.models.download_progress import AggregateDownloadSpeedTracker
 from app.models.schemas import (
     ModelDownloadActiveResponse,
@@ -47,6 +47,7 @@ class _ModelDownloadJob:
     current_model_filename: str | None = None
     current_model_index: int | None = None
     speed_bytes_per_second: float | None = None
+    model_summary: RequiredModelSummary | None = None
 
 
 class ModelDownloadJobService:
@@ -254,6 +255,7 @@ class ModelDownloadJobService:
                     cancel_event=job.cancel_event,
                     explicit_source_urls_authoritative=False,
                 )
+                job.model_summary = getattr(result, "model_summary", None)
                 completed += len(job.direct_models)
                 successful_downloads += getattr(
                     result,
@@ -273,6 +275,11 @@ class ModelDownloadJobService:
                     progress_callback=progress_callback(package.metadata.id),
                     cancel_event=job.cancel_event,
                 )
+                if len(grouped) == 1:
+                    job.model_summary = await self._refreshed_workflow_model_summary(
+                        package,
+                        getattr(result, "model_summary", None),
+                    )
                 completed += len(selected_package.required_models)
                 successful_downloads += getattr(
                     result,
@@ -389,7 +396,28 @@ class ModelDownloadJobService:
             percent=percent,
             speed_bytes_per_second=job.speed_bytes_per_second,
             models=items,
+            model_summary=job.model_summary,
         )
+
+    async def _refreshed_workflow_model_summary(
+        self,
+        package: WorkflowPackage,
+        download_summary: RequiredModelSummary | None,
+    ) -> RequiredModelSummary | None:
+        workflow_library_service = getattr(self.engine_service, "workflow_library_service", None)
+        summarize_package = getattr(
+            workflow_library_service,
+            "model_availability_summary_for_package",
+            None,
+        )
+        if callable(summarize_package):
+            full_summary = await asyncio.to_thread(summarize_package, package)
+        else:
+            summarize = getattr(self._availability_service(), "summarize", None)
+            if not callable(summarize):
+                return download_summary
+            full_summary = await asyncio.to_thread(summarize, package)
+        return _merge_download_summary(full_summary, download_summary)
 
     def _sweep_old_jobs(self) -> None:
         cutoff = datetime.now(UTC) - JOB_TTL
@@ -420,6 +448,39 @@ def _dedupe_selections(selections: list[ModelDownloadSelection]) -> list[ModelDo
         seen.add(key)
         cleaned.append(selection)
     return cleaned
+
+
+def _merge_download_summary(
+    full_summary: RequiredModelSummary,
+    download_summary: RequiredModelSummary | None,
+) -> RequiredModelSummary:
+    if download_summary is None:
+        return full_summary
+    downloaded_by_requirement = {
+        model.requirement_id: model for model in download_summary.models
+    }
+    if not downloaded_by_requirement:
+        return full_summary
+    models = [
+        downloaded_by_requirement.get(model.requirement_id, model)
+        for model in full_summary.models
+    ]
+    available_count = sum(model.status == "available" for model in models)
+    return full_summary.model_copy(
+        update={
+            "total_count": len(models),
+            "available_count": available_count,
+            "possible_match_count": sum(
+                model.status == "possible_match" for model in models
+            ),
+            "missing_count": sum(model.status == "missing" for model in models),
+            "needs_manual_download_count": sum(
+                model.status == "needs_manual_download" for model in models
+            ),
+            "ready_to_run": len(models) == available_count,
+            "models": models,
+        }
+    )
 
 
 def _download_progress_status_label(status: str) -> str:

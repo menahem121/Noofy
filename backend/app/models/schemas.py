@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from app.engine.models import ImportModelDownloadProgressItem
+from app.engine.models import ImportModelDownloadProgressItem, RequiredModelSummary
 
 MODEL_INVENTORY_SCHEMA_VERSION = "2026-05-13"
 
@@ -157,6 +157,7 @@ class ModelDownloadJobStatus(BaseModel):
     percent: float | None = None
     speed_bytes_per_second: float | None = None
     models: list[ImportModelDownloadProgressItem] = Field(default_factory=list)
+    model_summary: RequiredModelSummary | None = None
 
 
 class ModelDownloadActiveResponse(BaseModel):

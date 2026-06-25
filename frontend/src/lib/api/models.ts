@@ -1,5 +1,5 @@
 import { deleteJson, getJson, postJson, putJson } from "./client";
-import type { ImportModelDownloadProgressItem } from "./workflows";
+import type { ImportModelDownloadProgressItem, RequiredModelSummary } from "./workflows";
 
 export type ModelInventoryStatus = "ready" | "missing" | "needs_attention" | "never_used";
 export type ModelInventorySource = "noofy" | "external_comfyui" | "engine_visible" | "required_by_workflow";
@@ -125,6 +125,7 @@ export interface ModelDownloadJobStatus {
   percent: number | null;
   speed_bytes_per_second: number | null;
   models: ImportModelDownloadProgressItem[];
+  model_summary: RequiredModelSummary | null;
 }
 
 export interface ModelDownloadActiveResponse {
