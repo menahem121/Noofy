@@ -1772,6 +1772,71 @@ async def test_start_workflow_runner_needs_reprepare_when_ready_state_lacks_runt
 
 
 @pytest.mark.anyio
+async def test_ensure_workflow_runner_reprepares_when_start_sees_pending_refreshed_capsule(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    packages_dir = tmp_path / "packages"
+    capsule_payload = _runner_capsule_payload(runner_char="c")
+    capsule_payload["custom_nodes"] = [
+        {
+            "package_id": "custom-node-a",
+            "source": "https://example.invalid/custom-node-a.git",
+            "trust_level": "quarantined_community",
+            "node_types": ["CustomNodeA"],
+        }
+    ]
+    _write_workflow_with_capsule(packages_dir, "runner_workflow", capsule_payload)
+    coordinator = None
+
+    def coordinator_factory(supervisor: RunnerSupervisor) -> RecordingRunnerCoordinator:
+        nonlocal coordinator
+        coordinator = RecordingRunnerCoordinator(supervisor)
+        return coordinator
+
+    service = _build_service(
+        tmp_path,
+        packages_dir=packages_dir,
+        runner_coordinator_factory=coordinator_factory,
+    )
+    real_prepare = service.workflow_runner_lifecycle_service.prepare_workflow
+    real_start = service.workflow_runner_lifecycle_service.start_workflow_runner
+    prepare_calls = 0
+    start_calls = 0
+
+    async def prepare_spy(workflow_id: str):
+        nonlocal prepare_calls
+        prepare_calls += 1
+        return await real_prepare(workflow_id)
+
+    async def start_spy(workflow_id: str, **kwargs):
+        nonlocal start_calls
+        start_calls += 1
+        if start_calls == 1:
+            return {
+                "workflow_id": workflow_id,
+                "status": "install_not_ready",
+                "runner": None,
+                "pid": None,
+                "install_status": InstallStatus.PENDING.value,
+                "error": None,
+            }
+        return await real_start(workflow_id, **kwargs)
+
+    monkeypatch.setattr(service.workflow_runner_lifecycle_service, "prepare_workflow", prepare_spy)
+    monkeypatch.setattr(service.workflow_runner_lifecycle_service, "start_workflow_runner", start_spy)
+
+    package = service.workflow_loader.get_package("runner_workflow")
+    result = await service._ensure_workflow_runner_for_run(package)
+
+    assert result is None
+    assert prepare_calls == 2
+    assert start_calls == 2
+    assert coordinator is not None
+    assert len(coordinator.started_specs) == 1
+
+
+@pytest.mark.anyio
 async def test_start_workflow_runner_blocks_staged_runtime_manifests(tmp_path: Path) -> None:
     packages_dir = tmp_path / "packages"
     capsule_payload = _runner_capsule_payload(runner_char="5")

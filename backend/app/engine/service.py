@@ -1,9 +1,10 @@
 import asyncio
 import re
 import time
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -1453,7 +1454,8 @@ class EngineService:
         runtime_status = getattr(self.runtime_manager, "status", None)
         if not callable(runtime_status):
             return None
-        comfyui_status = await runtime_status()
+        runtime_status_call = cast(Callable[[], Awaitable[Any]], runtime_status)
+        comfyui_status = await runtime_status_call()
         if (
             comfyui_status.mode != "managed"
             or comfyui_status.reachable
@@ -1838,6 +1840,11 @@ def _workflow_runner_unavailable_result(
 
 def _workflow_runner_start_needs_reprepare(payload: dict[str, object]) -> bool:
     if payload.get("status") == "needs_reprepare":
+        return True
+    if (
+        payload.get("status") == "install_not_ready"
+        and payload.get("install_status") == InstallStatus.PENDING.value
+    ):
         return True
     error = payload.get("error")
     if not isinstance(error, str):
