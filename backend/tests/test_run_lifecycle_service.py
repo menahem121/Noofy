@@ -5,7 +5,14 @@ from datetime import UTC, datetime
 import pytest
 
 from app.diagnostics import LogStore
-from app.engine.models import EngineJob, JobProgress, JobResult
+from app.engine.models import (
+    EngineJob,
+    JobProgress,
+    JobResult,
+    RequiredModelAvailability,
+    RequiredModelSummary,
+    WorkflowValidationResult,
+)
 from app.gallery import RunSubmissionSnapshot
 from app.runs.job_service import RunJobService
 from app.runs.lifecycle_service import RunLifecycleService
@@ -656,3 +663,87 @@ async def test_run_lifecycle_keeps_memory_failure_on_queue_handle() -> None:
     assert terminal is not None
     assert terminal.status == "blocked_by_memory"
     assert terminal.error_code == "insufficient_memory"
+
+
+@pytest.mark.anyio
+async def test_run_lifecycle_returns_validation_result_for_queued_handoff_model_failure() -> None:
+    queue = WorkflowRunQueueService()
+    record = queue.enqueue(
+        workflow_id="wf",
+        inputs={},
+        options={},
+        run_submission_snapshot=_snapshot(),
+        reason="preparing_run",
+    )
+    summary = RequiredModelSummary(
+        workflow_id="wf",
+        total_count=1,
+        available_count=0,
+        possible_match_count=0,
+        missing_count=1,
+        needs_manual_download_count=0,
+        ready_to_run=False,
+        models=[
+            RequiredModelAvailability(
+                requirement_id="loader:ckpt_name:checkpoints/missing.safetensors",
+                node_id="loader",
+                node_type="CheckpointLoaderSimple",
+                input_name="ckpt_name",
+                filename="missing.safetensors",
+                model_type="Checkpoint",
+                folder="checkpoints",
+                verification_level="sha256_size",
+                size_bytes=None,
+                source_urls=[],
+                source_availability="unknown",
+                status="verification_failed",
+                status_label="Verification failed",
+                asset_ownership="external_reference",
+                message="Noofy could not verify this model.",
+            ),
+        ],
+    )
+    validation = WorkflowValidationResult(
+        workflow_id="wf",
+        valid=False,
+        missing_models=[{"folder": "checkpoints", "filename": "missing.safetensors"}],
+        errors=["Required model files are missing."],
+        model_summary=summary,
+    )
+    lifecycle = RunLifecycleService(queue_service=queue, log_store=LogStore())
+
+    async def submit(queued):
+        assert queued.queue_id == record.queue_id
+        return validation
+
+    lifecycle.submit_queued_run = submit
+    await lifecycle.handoff(record.queue_id)
+
+    progress = queue.progress(record.queue_id)
+    assert progress is not None
+    assert progress.status == "failed"
+    assert progress.message == "Required model files are missing."
+
+    job_service = RunJobService(
+        runner_supervisor=_supervisor(_Adapter()),
+        log_store=LogStore(),
+        workflow_run_queue_service=queue,
+    )
+    result_service = RunResultService(
+        job_service=job_service,
+        log_store=LogStore(),
+        job_workflows={},
+        job_started_at={},
+        job_run_snapshots={},
+        finish_memory_sampling=lambda job_id: _no_retry(),
+        record_memory_observation=lambda result: None,
+        maybe_retry_after_memory_cleanup=lambda result: _no_retry(),
+        workflow_run_queue_service=queue,
+    )
+
+    result = await result_service.get_result(record.queue_id)
+
+    assert isinstance(result, WorkflowValidationResult)
+    assert result.valid is False
+    assert result.model_summary is not None
+    assert result.model_summary.models[0].status == "verification_failed"

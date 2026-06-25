@@ -202,6 +202,7 @@ class RunLifecycleService:
                 status=WorkflowRunQueueStatus.FAILED,
                 reason="; ".join(result.errors) or "workflow_validation_failed",
                 message="; ".join(result.errors) or "Workflow validation failed.",
+                validation_result=result,
             )
         return result
 

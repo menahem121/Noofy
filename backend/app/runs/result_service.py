@@ -5,7 +5,7 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 
 from app.diagnostics import DiagnosticsSink
-from app.engine.models import EngineJob, JobProgress, JobResult
+from app.engine.models import EngineJob, JobProgress, JobResult, WorkflowValidationResult
 from app.gallery import GalleryCaptureService, GalleryItem, RunSubmissionSnapshot
 from app.history import HistoryService
 from app.runs.job_service import RunJobService
@@ -77,7 +77,7 @@ class RunResultService:
         self._suppressed_library_history_job_ids.update(job_ids)
         return len(job_ids)
 
-    async def get_result(self, job_id: str) -> JobResult | EngineJob:
+    async def get_result(self, job_id: str) -> JobResult | EngineJob | WorkflowValidationResult:
         if self.workflow_run_queue_service is not None:
             queued_terminal = self.workflow_run_queue_service.terminal_job(job_id)
             if queued_terminal is not None:
@@ -152,7 +152,9 @@ class RunResultService:
             }
         )
 
-    def _decorate_queue_id(self, result: JobResult | EngineJob, handle: str):
+    def _decorate_queue_id(self, result: JobResult | EngineJob | WorkflowValidationResult, handle: str):
+        if isinstance(result, WorkflowValidationResult):
+            return result
         queue_id = self._queue_id_for(handle)
         if queue_id is None:
             queue_id = self._queue_id_for(result.job_id)

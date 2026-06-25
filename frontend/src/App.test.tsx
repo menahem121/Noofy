@@ -115,6 +115,9 @@ describe("App workflow tabs", () => {
   let workflowListSummary: typeof workflowSummary & Record<string, unknown> = workflowSummary;
   let importedWorkflowSummaries: Array<typeof workflowSummary & Record<string, unknown>> = [];
   let importPreviewResponses: Map<string, Record<string, unknown>> = new Map();
+  let importCommitResponses: Map<string, Record<string, unknown>> = new Map();
+  let workflowVerificationStartResponses: Map<string, Record<string, unknown>> = new Map();
+  let workflowVerificationStatusResponses: Map<string, Response | Promise<Response>> = new Map();
   let missingWorkflowIds: Set<string> = new Set();
 
   beforeEach(() => {
@@ -127,6 +130,9 @@ describe("App workflow tabs", () => {
     workflowListSummary = workflowSummary;
     importedWorkflowSummaries = [];
     importPreviewResponses = new Map();
+    importCommitResponses = new Map();
+    workflowVerificationStartResponses = new Map();
+    workflowVerificationStatusResponses = new Map();
     missingWorkflowIds = new Set();
     window.localStorage.clear();
     window.sessionStorage.clear();
@@ -156,6 +162,28 @@ describe("App workflow tabs", () => {
           }
           return Promise.resolve(jsonResponse(response));
         }
+      }
+      const importCommitMatch = url.match(/\/api\/workflows\/import\/([^/]+)\/commit$/);
+      if (importCommitMatch && method === "POST") {
+        const response = importCommitResponses.get(decodeURIComponent(importCommitMatch[1]));
+        if (response) {
+          if (response.workflow && typeof response.workflow === "object") {
+            upsertImportedWorkflow(response.workflow as typeof workflowSummary & Record<string, unknown>);
+          }
+          return Promise.resolve(jsonResponse(response));
+        }
+      }
+      const workflowVerificationStartMatch = url.match(/\/api\/workflows\/([^/]+)\/model-verification$/);
+      if (workflowVerificationStartMatch && method === "POST") {
+        const response = workflowVerificationStartResponses.get(decodeURIComponent(workflowVerificationStartMatch[1]));
+        if (response) return Promise.resolve(jsonResponse(response));
+      }
+      const workflowVerificationStatusMatch = url.match(/\/api\/workflows\/([^/]+)\/model-verification\/([^/]+)$/);
+      if (workflowVerificationStatusMatch) {
+        const response = workflowVerificationStatusResponses.get(
+          `${decodeURIComponent(workflowVerificationStatusMatch[1])}:${decodeURIComponent(workflowVerificationStatusMatch[2])}`,
+        );
+        if (response) return Promise.resolve(response);
       }
       if (url.endsWith("/api/workflows/text_to_image_v0/open") && method === "POST") {
         lastOpened = "2026-05-29T12:00:00+00:00";
@@ -556,6 +584,81 @@ describe("App workflow tabs", () => {
 
     await waitFor(() => expect(importPreviewWasRequested("home-drop.noofy")).toBe(true));
     expect(await screen.findByText("Home Drop was added to your local workflows.")).toBeInTheDocument();
+  });
+
+  it("finishes checking-only imports and opens Missing Models when background verification later fails", async () => {
+    const workflow = importedWorkflow("checking_drop", "Checking Drop");
+    const checkingModel = {
+      ...missingModel("delayed-check.safetensors"),
+      status: "checking",
+      status_label: "Checking",
+      missing_count: 0,
+      message: "Noofy is checking whether this model is already available locally.",
+    };
+    const checkingSummary = {
+      workflow_id: workflow.id,
+      total_count: 1,
+      available_count: 0,
+      possible_match_count: 0,
+      missing_count: 0,
+      needs_manual_download_count: 0,
+      ready_to_run: false,
+      models: [checkingModel],
+    };
+    const failedSummary = {
+      ...checkingSummary,
+      missing_count: 1,
+      models: [
+        {
+          ...checkingModel,
+          status: "verification_failed",
+          status_label: "Verification failed",
+          message: "Noofy could not verify this model.",
+        },
+      ],
+    };
+    importPreviewResponses.set(
+      "checking-drop.noofy",
+      importResponse(workflow, {
+        import_session_id: "checking-session",
+        required_model_count: 1,
+        model_summary: checkingSummary,
+      }),
+    );
+    importCommitResponses.set(
+      "checking-session",
+      importResponse(workflow, {
+        import_session_id: null,
+        model_summary: null,
+      }),
+    );
+    workflowVerificationStartResponses.set(workflow.id, {
+      job_id: "verification-1",
+      workflow_id: workflow.id,
+      status: "running",
+      user_facing_message: "Checking required models.",
+      total_models: 1,
+      verified_models: 0,
+      percent: 0,
+      models: failedSummary.models,
+      model_summary: failedSummary,
+    });
+
+    render(<App />);
+
+    await screen.findByText("Built-in Workflows");
+    dropFiles([new File(["archive"], "checking-drop.noofy", { type: "application/octet-stream" })]);
+
+    await waitFor(() => expect(importPreviewWasRequested("checking-drop.noofy")).toBe(true));
+    expect(await screen.findByText("Checking Drop was added to your local workflows.")).toBeInTheDocument();
+    const dialog = await screen.findByRole("dialog", { name: "Missing Models" });
+    expect(fetchMock.mock.calls.some(([url, init]) =>
+      String(url).endsWith(`/api/workflows/${workflow.id}/model-verification`) &&
+      (init as RequestInit | undefined)?.method === "POST",
+    )).toBe(true);
+    expect(within(dialog).getByText("Checking Drop needs required model files before it can run.")).toBeInTheDocument();
+    expect(within(dialog).getByText("delayed-check.safetensors")).toBeInTheDocument();
+    expect(within(dialog).getByText("Verification failed")).toBeInTheDocument();
   });
 
   it("keeps unresolved custom-node imports staged instead of showing an added notice", async () => {

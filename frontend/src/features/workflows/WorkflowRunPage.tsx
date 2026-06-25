@@ -24,6 +24,7 @@ import {
   fetchWorkflowStatus,
   isEngineJob,
   isApiError,
+  isWorkflowValidationResult,
   resetDashboardCustomization,
   runWorkflow,
   saveDashboard,
@@ -33,13 +34,13 @@ import {
   uploadDashboardImageMaskAsset,
   uploadDashboardVideoAsset,
   uploadDashboardThreeDAsset,
-  validateWorkflow,
   type DashboardControlDef,
   type DiagnosticEvent,
   type EngineJob,
   type JobProgress,
   type JobResult,
   type MemoryRequirement,
+  type RequiredModelSummary,
   type RunUserFixableError,
   type WorkflowInputDef,
   type WorkflowOutputDef,
@@ -112,6 +113,8 @@ import {
   activeWorkflowValidation,
   normalizedLoraInputValues,
   requiredModelDownloadSelections,
+  isRequiredModelNonReady,
+  isRequiredModelVerificationPending,
   WorkflowRequiredModelsModal,
 } from "./workflowModelRequirements";
 import {
@@ -216,6 +219,7 @@ interface WorkflowRunPageProps {
   onMissingWorkflow?: (workflowId: string) => void;
   onEditWidgets?: (schema: DashboardSchema) => void;
   onConfigureDashboard?: (workflowId?: string, workflowName?: string) => void;
+  onMissingModels?: (summary: RequiredModelSummary) => void;
   onNavigate: (route: AppRouteId) => void;
 }
 
@@ -249,6 +253,7 @@ export function WorkflowRunPage({
   onMissingWorkflow,
   onEditWidgets,
   onConfigureDashboard,
+  onMissingModels,
   onNavigate,
 }: WorkflowRunPageProps) {
   const [state, setState] = useState<RunPageState>(() => cachedWorkflowRunPageState(workflowId, initialState));
@@ -537,8 +542,8 @@ export function WorkflowRunPage({
         packageData: hasCurrentWorkflowData ? current.packageData : null,
         apiKeySettings: hasCurrentWorkflowData ? current.apiKeySettings : null,
         validation: hasCurrentWorkflowData ? current.validation : null,
-        modelSummaryLoading: !hasCurrentWorkflowData || current.modelSummary === null,
-        validationLoading: !hasCurrentWorkflowData || current.validation === null,
+        modelSummaryLoading: false,
+        validationLoading: false,
         error: null,
         packageLoadError: null,
         packageLoadErrorStatus: null,
@@ -557,14 +562,7 @@ export function WorkflowRunPage({
         error: error instanceof Error ? error.message : String(error),
         status: isApiError(error) ? error.status : null,
       }));
-    const modelSummaryPromise = fetchWorkflowModelSummary(targetWorkflowId).catch(() => null);
     const apiKeySettingsPromise = fetchApiKeySettings().catch(() => null);
-    const validationPromise = validateWorkflow(targetWorkflowId)
-      .then((validation): { validation: WorkflowValidationResult | null; error: unknown | null } => ({
-        validation,
-        error: null,
-      }))
-      .catch((error: unknown): { validation: null; error: unknown } => ({ validation: null, error }));
 
     const [workflowStatus, packageResult] = await Promise.all([workflowStatusPromise, packagePromise]);
     if (!isCurrentLoad()) return;
@@ -584,14 +582,6 @@ export function WorkflowRunPage({
     });
 
     await Promise.allSettled([
-      modelSummaryPromise.then((modelSummary) => {
-        if (!isCurrentLoad()) return;
-        setState((current) => ({
-          ...current,
-          modelSummary,
-          modelSummaryLoading: false,
-        }));
-      }),
       apiKeySettingsPromise.then((apiKeySettings) => {
         if (!isCurrentLoad()) return;
         setState((current) => ({
@@ -599,24 +589,6 @@ export function WorkflowRunPage({
           apiKeySettings,
         }));
       }),
-      validationPromise
-        .then(({ validation, error }) => {
-          if (!isCurrentLoad()) return;
-          if (error) {
-            setState((current) => ({
-              ...current,
-              validation: null,
-              validationLoading: false,
-              error: error instanceof Error ? error.message : String(error),
-            }));
-            return;
-          }
-          setState((current) => ({
-            ...current,
-            validation,
-            validationLoading: false,
-          }));
-        }),
     ]);
   }
 
@@ -709,6 +681,10 @@ export function WorkflowRunPage({
           }
           return;
         }
+        if (isWorkflowValidationResult(result)) {
+          await handleWorkflowValidationBlock(result);
+          return;
+        }
         if (shouldRetryRecoveredResult(result, shouldWaitForRecoveredOutputPayload)) {
           setState((current) => ({
             ...current,
@@ -776,6 +752,69 @@ export function WorkflowRunPage({
     } catch {
       // Non-fatal: the next run's status polling will self-correct.
       return null;
+    }
+  }
+
+  async function refreshWorkflowModelSummaryAfterRun() {
+    try {
+      const modelSummary = await fetchWorkflowModelSummary(workflowId);
+      setState((current) => ({ ...current, modelSummary, modelSummaryLoading: false }));
+      return modelSummary;
+    } catch {
+      return null;
+    }
+  }
+
+  async function openMissingModelsFromValidation(response: WorkflowValidationResult) {
+    const modelSummary = response.model_summary ?? await refreshWorkflowModelSummaryAfterRun();
+    void refreshWorkflowStatusAfterRun();
+    if (modelSummary) {
+      setState((current) => ({
+        ...current,
+        validation: response,
+        modelSummary,
+        modelSummaryLoading: false,
+        progress: null,
+        error: null,
+      }));
+      if (onMissingModels) {
+        onMissingModels(modelSummary);
+        return;
+      }
+    }
+    setRequiredModelsModalOpen(true);
+  }
+
+  async function handleWorkflowValidationBlock(response: WorkflowValidationResult) {
+    const userError = firstRunUserFixableError(response);
+    const message = workflowValidationErrorMessage(response);
+    const preparationFailure = response.error_category === "workflow_preparation";
+    setState((current) => ({
+      ...current,
+      validation: userError || preparationFailure ? current.validation : response,
+      progress: null,
+      error: response.valid || userError || preparationFailure || response.missing_models.length > 0 ? null : message,
+    }));
+    if (!response.valid && userError) {
+      setRunPreparationDialog(null);
+      void refreshWorkflowStatusAfterRun();
+      openInputErrorDialog(userError);
+    } else if (!response.valid && preparationFailure) {
+      const refreshedStatus = await refreshWorkflowStatusAfterRun();
+      setRunPreparationDialog(
+        runPreparationDialogFromStatus(refreshedStatus)
+          ?? runPreparationDialogFromValidation(response),
+      );
+    } else if (!response.valid && response.missing_models.length > 0) {
+      setRunPreparationDialog(null);
+      await openMissingModelsFromValidation(response);
+    } else if (!response.valid) {
+      setRunPreparationDialog(null);
+      void refreshWorkflowStatusAfterRun();
+      void openFailureDialog(message, null);
+    } else {
+      setRunPreparationDialog(null);
+      void refreshWorkflowStatusAfterRun();
     }
   }
 
@@ -876,33 +915,7 @@ export function WorkflowRunPage({
           stopPreparationTracking();
           finishRunSubmission();
           clearRunComparisonInputSource();
-          const userError = firstRunUserFixableError(response);
-          const message = workflowValidationErrorMessage(response);
-          const preparationFailure = response.error_category === "workflow_preparation";
-          setState((current) => ({
-            ...current,
-            validation: userError || preparationFailure ? current.validation : response,
-            progress: null,
-            error: response.valid || userError || preparationFailure ? null : message,
-          }));
-          if (!response.valid && userError) {
-            setRunPreparationDialog(null);
-            void refreshWorkflowStatusAfterRun();
-            openInputErrorDialog(userError);
-          } else if (!response.valid && preparationFailure) {
-            const refreshedStatus = await refreshWorkflowStatusAfterRun();
-            setRunPreparationDialog(
-              runPreparationDialogFromStatus(refreshedStatus)
-                ?? runPreparationDialogFromValidation(response),
-            );
-          } else if (!response.valid) {
-            setRunPreparationDialog(null);
-            void refreshWorkflowStatusAfterRun();
-            void openFailureDialog(message, null);
-          } else {
-            setRunPreparationDialog(null);
-            void refreshWorkflowStatusAfterRun();
-          }
+          await handleWorkflowValidationBlock(response);
           return;
         }
 
@@ -1270,6 +1283,20 @@ export function WorkflowRunPage({
 
       if (!terminalStatuses.has(progress.status)) return;
       if (isQueueOnlyTerminal(nextRun, progress)) {
+        if (progress.status === "failed") {
+          try {
+            const result = await fetchJobResult(handle);
+            if (isWorkflowValidationResult(result)) {
+              const message = workflowValidationErrorMessage(result);
+              upsertTrackedRun(trackedRunWithStatus(nextRun, "failed", message));
+              await handleWorkflowValidationBlock(result);
+              pollNextTrackedRunAfterTerminal();
+              return;
+            }
+          } catch {
+            // Fall back to the queue progress message below.
+          }
+        }
         handleTrackedTerminalProgress(nextRun, progress);
         return;
       }
@@ -1280,6 +1307,13 @@ export function WorkflowRunPage({
         if (isTrackableJob(result)) {
           upsertTrackedRun(trackedRunFromJob(result, nextRun.clientId));
         }
+        return;
+      }
+      if (isWorkflowValidationResult(result)) {
+        const message = workflowValidationErrorMessage(result);
+        upsertTrackedRun(trackedRunWithStatus(nextRun, "failed", message));
+        await handleWorkflowValidationBlock(result);
+        pollNextTrackedRunAfterTerminal();
         return;
       }
       handleTrackedResult(nextRun, result);
@@ -1561,7 +1595,23 @@ export function WorkflowRunPage({
     });
   }
 
-  const unresolvedModelSummary = activeModelSummary?.models.filter((model) => model.status !== "available") ?? [];
+  const modelSummaryPendingOnly = Boolean(
+    activeModelSummary?.models.length &&
+    activeModelSummary.models.every((model) => model.status === "available" || isRequiredModelVerificationPending(model)),
+  );
+  const modelSummaryBlocksRun = Boolean(activeModelSummary && activeModelSummary.models.some(isRequiredModelNonReady));
+  const validationOnlyMissingModels = Boolean(
+    activeValidation &&
+    !activeValidation.valid &&
+    activeValidation.missing_models.length > 0 &&
+    activeValidation.errors.length === 0,
+  );
+  const validationBlocksRun = Boolean(
+    activeValidation &&
+    !activeValidation.valid &&
+    !(modelSummaryPendingOnly && validationOnlyMissingModels),
+  );
+  const unresolvedModelSummary = activeModelSummary?.models.filter(isRequiredModelNonReady) ?? [];
   const missingModels = unresolvedModelSummary.length > 0 ? unresolvedModelSummary : activeValidation?.missing_models ?? [];
   const workflowSummary = workflowStatusForWorkflow?.workflow;
   const workflowNameSource = workflowSummary ?? packageDataForWorkflow?.metadata ?? packageDataForWorkflow;
@@ -1643,8 +1693,8 @@ export function WorkflowRunPage({
     dashboardValuesReady
       && !runReadinessPending
       && workflowStatusForWorkflow?.can_prepare !== false
-      && activeValidation?.valid
-      && activeModelSummary?.ready_to_run !== false
+      && !validationBlocksRun
+      && !modelSummaryBlocksRun
       && !backendKnownUnreachable
       && !engineKnownUnavailable
       && !isBlockedByMemory
@@ -1652,7 +1702,7 @@ export function WorkflowRunPage({
   );
   const hasDownloadableRequiredModels = requiredModelDownloadSelections(activeModelSummary, workflowId).length > 0;
   const hasRequiredModelFixAction = Boolean(
-    activeModelSummary && (missingModels.length > 0 || activeModelSummary.ready_to_run === false),
+    activeModelSummary && (unresolvedModelSummary.length > 0 || modelSummaryBlocksRun),
   );
   const runDisabledReason = canRun
     ? null
@@ -1666,7 +1716,7 @@ export function WorkflowRunPage({
         memoryStatus,
         missingModels,
         modelSummaryLoading: modelSummaryLoadingForWorkflow,
-        modelSummaryReady: activeModelSummary?.ready_to_run,
+        modelSummaryReady: modelSummaryPendingOnly ? true : activeModelSummary?.ready_to_run,
         validation: activeValidation,
         validationLoading: validationLoadingForWorkflow,
         workflowStatus: workflowStatusForWorkflow,
@@ -1931,7 +1981,7 @@ export function WorkflowRunPage({
           </div>
         </div>
       ) : null}
-      {missingModels.length > 0 ? (
+      {missingModels.length > 0 && hasRequiredModelFixAction ? (
         <div className="notice notice--warning" role="status">
           <Download size={18} aria-hidden="true" />
           <div>

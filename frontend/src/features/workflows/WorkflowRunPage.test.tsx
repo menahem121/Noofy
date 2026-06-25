@@ -2525,8 +2525,8 @@ describe("WorkflowRunPage", () => {
     expect(within(dialog).queryByText(/NoneType/i)).not.toBeInTheDocument();
   });
 
-  it("blocks the run and explains missing model requirements", async () => {
-    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+  it("opens Missing Models after run validation reports missing required models", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
 
       if (url.endsWith("/api/runtime")) {
@@ -2559,14 +2559,107 @@ describe("WorkflowRunPage", () => {
         );
       }
 
+      if (url.endsWith("/api/workflows/text_to_image_v0/run") && init?.method === "POST") {
+        return Promise.resolve(
+          jsonResponse({
+            workflow_id: "text_to_image_v0",
+            valid: false,
+            missing_models: [
+              {
+                folder: "checkpoints",
+                filename: "v1-5-pruned-emaonly-fp16.safetensors",
+                source_url: null,
+                checksum: null,
+              },
+            ],
+            errors: [],
+          }),
+        );
+      }
+
       return Promise.reject(new Error(`Unexpected request: ${url}`));
     });
 
     renderRunPage();
 
-    expect(await screen.findByText("This workflow needs required models")).toBeInTheDocument();
+    const runButton = await screen.findByRole("button", { name: /run workflow/i });
+    await waitFor(() => expect(runButton).toBeEnabled());
+    expect(screen.queryByText("This workflow needs required models")).not.toBeInTheDocument();
+
+    fireEvent.click(runButton);
+
+    expect(await screen.findByRole("dialog", { name: "Missing Models" })).toBeInTheDocument();
     expect(screen.getAllByText(/v1-5-pruned-emaonly-fp16\.safetensors/).length).toBeGreaterThan(0);
-    expect(screen.getByRole("button", { name: /run workflow/i })).toBeDisabled();
+  });
+
+  it("allows Run while required models are checking, then opens Missing Models if backend validation fails", async () => {
+    const checkingModelSummary = {
+      ...missingModelSummary,
+      missing_count: 0,
+      ready_to_run: false,
+      models: missingModelSummary.models.map((model) => ({
+        ...model,
+        status: "checking",
+        status_label: "Checking",
+        message: "Noofy is checking whether this model is already available locally.",
+      })),
+    };
+    let modelSummaryRequests = 0;
+    mockConfiguredDashboardFetch(
+      fetchMock,
+      readyRuntime,
+      configuredPackageData,
+      {
+        workflow_id: "text_to_image_v0",
+        valid: false,
+        missing_models: [
+          {
+            folder: "checkpoints",
+            filename: "v1-5-pruned-emaonly-fp16.safetensors",
+            source_url: null,
+            checksum: null,
+          },
+        ],
+        errors: [],
+      },
+      (url) => {
+        if (url.endsWith("/api/workflows/text_to_image_v0/model-summary")) {
+          modelSummaryRequests += 1;
+          return jsonResponse(modelSummaryRequests === 1 ? checkingModelSummary : missingModelSummary);
+        }
+        if (url.endsWith("/api/workflows/text_to_image_v0/validate")) {
+          return jsonResponse({
+            workflow_id: "text_to_image_v0",
+            valid: false,
+            missing_models: [
+              {
+                folder: "checkpoints",
+                filename: "v1-5-pruned-emaonly-fp16.safetensors",
+                source_url: null,
+                checksum: null,
+              },
+            ],
+            errors: [],
+          });
+        }
+        return undefined;
+      },
+    );
+
+    renderRunPage();
+
+    const runButton = await screen.findByRole("button", { name: /run workflow/i });
+    await waitFor(() => expect(runButton).toBeEnabled());
+    expect(screen.queryByText("This workflow needs required models")).not.toBeInTheDocument();
+
+    fireEvent.click(runButton);
+
+    expect(await screen.findByRole("dialog", { name: "Missing Models" })).toBeInTheDocument();
+    expect(screen.getAllByText(/v1-5-pruned-emaonly-fp16\.safetensors/).length).toBeGreaterThan(0);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/workflows/text_to_image_v0/run",
+      expect.objectContaining({ method: "POST" }),
+    );
   });
 
   it("blocks the run when the local engine is offline", async () => {
@@ -5280,7 +5373,7 @@ describe("WorkflowRunPage", () => {
     expect(screen.queryByText("ComfyUI is not responding")).not.toBeInTheDocument();
   });
 
-  it("explains why the canvas run button is disabled when required models are missing", async () => {
+  it("opens Missing Models from canvas run when required models are missing", async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
@@ -5290,6 +5383,23 @@ describe("WorkflowRunPage", () => {
       if (url.endsWith("/api/workflows/text_to_image_v0/package")) return Promise.resolve(jsonResponse(configuredPackageData));
       if (url.endsWith("/api/workflows/text_to_image_v0/model-summary")) return Promise.resolve(jsonResponse(missingModelSummary));
       if (url.endsWith("/api/workflows/text_to_image_v0/validate")) {
+        return Promise.resolve(
+          jsonResponse({
+            workflow_id: "text_to_image_v0",
+            valid: false,
+            missing_models: [
+              {
+                folder: "checkpoints",
+                filename: "v1-5-pruned-emaonly-fp16.safetensors",
+                source_url: null,
+                checksum: null,
+              },
+            ],
+            errors: [],
+          }),
+        );
+      }
+      if (url.endsWith("/api/workflows/text_to_image_v0/run") && init?.method === "POST") {
         return Promise.resolve(
           jsonResponse({
             workflow_id: "text_to_image_v0",
@@ -5355,16 +5465,12 @@ describe("WorkflowRunPage", () => {
     renderRunPage();
 
     const runButton = await screen.findByRole("button", { name: /run workflow/i });
-    expect(runButton).toBeDisabled();
-    expect(runButton).toHaveAttribute(
-      "title",
-      "Add required model before running: v1-5-pruned-emaonly-fp16.safetensors.",
-    );
-    expect(screen.getByRole("status")).toHaveTextContent(
-      "Add required model before running: v1-5-pruned-emaonly-fp16.safetensors.",
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Download" }));
-    const missingModelsDialog = screen.getByRole("dialog", { name: "Missing Models" });
+    expect(runButton).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Download" })).not.toBeInTheDocument();
+
+    fireEvent.click(runButton);
+
+    const missingModelsDialog = await screen.findByRole("dialog", { name: "Missing Models" });
     expect(missingModelsDialog).toBeInTheDocument();
     expect(
       Array.from(missingModelsDialog.querySelector(".required-models-modal")?.children ?? []).map(
@@ -5388,8 +5494,8 @@ describe("WorkflowRunPage", () => {
     expect(screen.queryByText("This workflow needs required models")).not.toBeInTheDocument();
   });
 
-  it("shows the canvas Download action for required model blockers even before an automatic source is available", async () => {
-    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+  it("shows manual-download model details after run validation reports a model blocker", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse(resourceSnapshot));
       if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
@@ -5427,6 +5533,23 @@ describe("WorkflowRunPage", () => {
           }),
         );
       }
+      if (url.endsWith("/api/workflows/text_to_image_v0/run") && init?.method === "POST") {
+        return Promise.resolve(
+          jsonResponse({
+            workflow_id: "text_to_image_v0",
+            valid: false,
+            missing_models: [
+              {
+                folder: "checkpoints",
+                filename: "v1-5-pruned-emaonly-fp16.safetensors",
+                source_url: null,
+                checksum: null,
+              },
+            ],
+            errors: [],
+          }),
+        );
+      }
       if (url.endsWith("/api/workflows/text_to_image_v0/user-state")) {
         return Promise.resolve(
           jsonResponse({
@@ -5443,7 +5566,15 @@ describe("WorkflowRunPage", () => {
 
     renderRunPage();
 
-    expect(await screen.findByRole("button", { name: "Download" })).toBeInTheDocument();
+    const runButton = await screen.findByRole("button", { name: "Run workflow" });
+    expect(runButton).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Download" })).not.toBeInTheDocument();
+
+    fireEvent.click(runButton);
+
+    const missingModelsDialog = await screen.findByRole("dialog", { name: "Missing Models" });
+    expect(within(missingModelsDialog).getByText("Needs manual download")).toBeInTheDocument();
+    expect(within(missingModelsDialog).getByText("Download Missing Models")).toBeDisabled();
   });
 
   it("starts local model verification when the missing models popup sees a possible local match", async () => {
@@ -5471,6 +5602,23 @@ describe("WorkflowRunPage", () => {
         );
       }
       if (url.endsWith("/api/workflows/text_to_image_v0/validate")) {
+        return Promise.resolve(
+          jsonResponse({
+            workflow_id: "text_to_image_v0",
+            valid: false,
+            missing_models: [
+              {
+                folder: "checkpoints",
+                filename: "v1-5-pruned-emaonly-fp16.safetensors",
+                source_url: null,
+                checksum: null,
+              },
+            ],
+            errors: [],
+          }),
+        );
+      }
+      if (url.endsWith("/api/workflows/text_to_image_v0/run") && init?.method === "POST") {
         return Promise.resolve(
           jsonResponse({
             workflow_id: "text_to_image_v0",
@@ -5537,7 +5685,7 @@ describe("WorkflowRunPage", () => {
 
     renderRunPage();
 
-    fireEvent.click(await screen.findByRole("button", { name: "Download" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Run workflow" }));
 
     expect(await screen.findByRole("progressbar", { name: "Model verification progress" })).toBeInTheDocument();
     expect(screen.getByText(/Verifying local model/)).toBeInTheDocument();
@@ -5568,6 +5716,23 @@ describe("WorkflowRunPage", () => {
       }
       if (url.endsWith("/api/workflows/text_to_image_v0/validate")) {
         return Promise.resolve(jsonResponse({ workflow_id: "text_to_image_v0", valid: false, missing_models: [], errors: ["Missing model"] }));
+      }
+      if (url.endsWith("/api/workflows/text_to_image_v0/run") && init?.method === "POST") {
+        return Promise.resolve(
+          jsonResponse({
+            workflow_id: "text_to_image_v0",
+            valid: false,
+            missing_models: [
+              {
+                folder: "checkpoints",
+                filename: "v1-5-pruned-emaonly-fp16.safetensors",
+                source_url: null,
+                checksum: null,
+              },
+            ],
+            errors: [],
+          }),
+        );
       }
       if (url.endsWith("/api/workflows/text_to_image_v0/model-verification") && init?.method === "POST") {
         return Promise.resolve(
@@ -5619,7 +5784,7 @@ describe("WorkflowRunPage", () => {
 
     renderRunPage();
 
-    fireEvent.click(await screen.findByRole("button", { name: "Download" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Run workflow" }));
 
     expect(await screen.findByText("Model verification failed")).toBeInTheDocument();
     await new Promise((resolve) => window.setTimeout(resolve, 100));
@@ -5695,7 +5860,7 @@ describe("WorkflowRunPage", () => {
     },
   );
 
-  it("renders saved dashboard values while model checks and validation are still pending", async () => {
+  it("renders saved dashboard values without waiting for model checks or validation", async () => {
     window.localStorage.setItem("noofy.prefs", JSON.stringify({ viewMode: "classic" }));
     const modelSummaryResponse = deferred<Response>();
     const validationResponse = deferred<Response>();
@@ -5728,19 +5893,9 @@ describe("WorkflowRunPage", () => {
     expect(screen.queryByText("Loading saved inputs")).not.toBeInTheDocument();
 
     const runButton = screen.getByRole("button", { name: "Run workflow" });
-    expect(runButton).toBeDisabled();
-
-    await act(async () => {
-      modelSummaryResponse.resolve(jsonResponse(readyModelSummary));
-    });
-
-    expect(screen.getByRole("button", { name: "Run workflow" })).toBeDisabled();
-
-    await act(async () => {
-      validationResponse.resolve(jsonResponse(validWorkflow));
-    });
-
-    await waitFor(() => expect(screen.getByRole("button", { name: "Run workflow" })).toBeEnabled());
+    expect(runButton).toBeEnabled();
+    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith("/api/workflows/text_to_image_v0/model-summary"))).toBe(false);
+    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith("/api/workflows/text_to_image_v0/validate"))).toBe(false);
   });
 
   it("ignores a slower workflow load after switching to another workflow", async () => {

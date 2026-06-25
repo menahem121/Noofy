@@ -1282,7 +1282,7 @@ class EngineService:
     async def cancel_job(self, job_id: str) -> JobProgress:
         return await self.run_job_service.cancel_job(job_id)
 
-    async def get_result(self, job_id: str) -> JobResult | EngineJob:
+    async def get_result(self, job_id: str) -> JobResult | EngineJob | WorkflowValidationResult:
         self.run_result_service.gallery_capture_service = self.gallery_capture_service
         self.run_result_service.workflow_library_store = self.workflow_library_store
         return await self.run_result_service.get_result(job_id)
@@ -1503,15 +1503,19 @@ class EngineService:
 
         available_models = self._available_model_keys(await adapter.list_available_models())
         missing_models = self.workflow_validator.validate_models(package, available_models)
+        model_summary = None
         if package.import_metadata is not None and package.required_models:
-            availability = self.model_availability_summary_for_package(package)
+            model_summary = self.model_availability_summary_for_package(package)
             verified_keys = {
                 (model.folder, model.filename)
-                for model in availability.models
+                for model in model_summary.models
                 if model.status == "available"
             }
             missing_models = self.workflow_validator.validate_models(package, verified_keys)
-        return self.workflow_validator.combine(package, structure_result, missing_models)
+        validation = self.workflow_validator.combine(package, structure_result, missing_models)
+        if missing_models and model_summary is not None:
+            validation.model_summary = model_summary
+        return validation
 
     def _install_payload(
         self,

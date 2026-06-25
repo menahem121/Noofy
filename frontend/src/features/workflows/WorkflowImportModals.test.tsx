@@ -327,6 +327,46 @@ describe("RequiredModelsModal", () => {
     expect(screen.getByRole("button", { name: "Download Missing Models" })).toBeEnabled();
   });
 
+  it("does not treat a stale ready summary as openable when a model row is non-ready", () => {
+    render(
+      <RequiredModelsModal
+        importResult={{
+          ...importResult,
+          model_summary: {
+            ...importResult.model_summary,
+            available_count: 1,
+            missing_count: 0,
+            ready_to_run: true,
+            models: [
+              {
+                ...missingModel,
+                status: "verification_failed",
+                status_label: "Verification failed",
+                message: "Noofy could not verify this local file.",
+              },
+            ],
+          },
+        }}
+        busy={false}
+        importing={false}
+        downloadJob={null}
+        verificationJob={null}
+        onDownload={vi.fn()}
+        onCancelDownload={vi.fn()}
+        onContinue={vi.fn()}
+        onReplace={vi.fn()}
+        onCopy={vi.fn()}
+        onReadyAction={vi.fn()}
+        onCancel={vi.fn()}
+        onViewModels={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "Open Workflow" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Download Missing Models" })).toBeEnabled();
+    expect(screen.getAllByText("Verification failed").length).toBeGreaterThan(0);
+  });
+
   it("replaces retry with View Models for disk-space download failures", () => {
     const onDownload = vi.fn();
     const onViewModels = vi.fn();

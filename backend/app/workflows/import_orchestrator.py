@@ -17,7 +17,6 @@ from app.engine.models import (
     StagedWorkflowImportResponse,
 )
 from app.history import HistoryService
-from app.artifacts import AssetOwnership
 from app.models.download_progress import AggregateDownloadSpeedTracker
 from app.workflows.importer import ImportedWorkflowPackageStore
 from app.workflows.library_service import WorkflowLibraryService
@@ -1285,13 +1284,24 @@ class WorkflowImportOrchestrator:
         )
 
     def _checking_model_summary(self, package: WorkflowPackage) -> RequiredModelSummary:
+        current = self.workflow_library_service.model_availability_summary_for_package(
+            package,
+            fast=True,
+            verify_hashes=False,
+        )
         return self._model_summary_from_availability(
             package,
             [
-                apply_group_metadata(
-                    self._checking_model_availability(group.representative), group
+                model.model_copy(
+                    update={
+                        "status": "checking",
+                        "status_label": "Checking",
+                        "message": "Noofy is checking whether this model is already available locally.",
+                    }
                 )
-                for group in group_required_models(package.required_models)
+                if model.status == "possible_match"
+                else model
+                for model in current.models
             ],
         )
 
@@ -1323,28 +1333,6 @@ class WorkflowImportOrchestrator:
             "incoming_workflow": self.workflow_library_service.workflow_summary(package),
             "actions": ["replace", "copy", "cancel"],
         }
-
-    def _checking_model_availability(self, model: RequiredModel) -> RequiredModelAvailability:
-        source_urls = list(getattr(model, "source_urls", []) or [])
-        if not source_urls and getattr(model, "source_url", None):
-            source_urls = [str(model.source_url)]
-        return RequiredModelAvailability(
-            requirement_id=_requirement_id(model),
-            node_id=model.node_id,
-            node_type=model.node_type,
-            input_name=model.input_name,
-            filename=model.filename,
-            model_type=model.model_type,
-            folder=model.folder,
-            verification_level=model.verification_level,
-            size_bytes=model.size_bytes,
-            source_urls=source_urls,
-            source_availability="known" if source_urls else "unknown",
-            status="checking",
-            status_label="Checking",
-            asset_ownership=AssetOwnership.EXTERNAL_REFERENCE,
-            message="Noofy is checking whether this model is already available locally.",
-        )
 
     def _model_summary_from_availability(
         self,

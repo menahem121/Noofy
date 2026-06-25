@@ -93,6 +93,22 @@ export function hasVerifiableLocalModels(summary: RequiredModelSummary | null) {
   return Boolean(summary?.models.some((model) => model.status === "possible_match"));
 }
 
+export function isRequiredModelVerificationPending(model: RequiredModelAvailability) {
+  return model.status === "checking" || model.status === "possible_match";
+}
+
+export function isRequiredModelNonReady(model: RequiredModelAvailability) {
+  return model.status !== "available" && !isRequiredModelVerificationPending(model);
+}
+
+export function requiredModelSummaryHasPendingVerification(summary: RequiredModelSummary | null) {
+  return Boolean(summary?.models.some(isRequiredModelVerificationPending));
+}
+
+export function requiredModelSummaryHasNonReadyModels(summary: RequiredModelSummary | null) {
+  return Boolean(summary?.models.some(isRequiredModelNonReady));
+}
+
 export function WorkflowRequiredModelsModal({
   workflowName,
   summary,

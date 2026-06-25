@@ -1,4 +1,5 @@
 import { getJson, postJson } from "./client";
+import type { WorkflowValidationResult } from "./workflows";
 
 export type JobStatus =
   | "queued"
@@ -146,7 +147,7 @@ export function fetchJobProgress(
 }
 
 export function fetchJobResult(jobId: string) {
-  return getJson<JobResult | EngineJob>(`/jobs/${jobId}/result`);
+  return getJson<JobResult | EngineJob | WorkflowValidationResult>(`/jobs/${jobId}/result`);
 }
 
 export function fetchJobLogs(jobId: string, options: { limit?: number } = {}) {

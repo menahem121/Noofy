@@ -10,7 +10,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.engine.models import EngineJob, JobProgress, MemoryFailureCode
+from app.engine.models import EngineJob, JobProgress, MemoryFailureCode, WorkflowValidationResult
 from app.gallery import RunSubmissionSnapshot
 
 
@@ -47,6 +47,7 @@ class WorkflowRunQueueRecord(BaseModel):
     memory_status: dict[str, Any] | None = None
     memory_requirement: dict[str, Any] | None = None
     memory_decision: dict[str, Any] | None = None
+    validation_result: WorkflowValidationResult | None = None
     next_eligible_at: str | None = None
     last_dispatch_epoch: int | None = None
 
@@ -351,6 +352,7 @@ class WorkflowRunQueueService:
         memory_status: dict[str, Any] | None = None,
         memory_requirement: dict[str, Any] | None = None,
         memory_decision: dict[str, Any] | None = None,
+        validation_result: WorkflowValidationResult | None = None,
     ) -> WorkflowRunQueueRecord | None:
         with self._lock:
             queue_id = self._queue_id_locked(handle)
@@ -366,6 +368,7 @@ class WorkflowRunQueueService:
                 memory_status=memory_status,
                 memory_requirement=memory_requirement,
                 memory_decision=memory_decision,
+                validation_result=validation_result,
             )
 
     def cancel(self, handle: str) -> WorkflowRunQueueRecord | None:
@@ -434,7 +437,7 @@ class WorkflowRunQueueService:
             developer_details=developer_details,
         )
 
-    def terminal_job(self, handle: str) -> EngineJob | None:
+    def terminal_job(self, handle: str) -> EngineJob | WorkflowValidationResult | None:
         resolved = self.resolve(handle)
         record = resolved.record
         if record is None or record.status not in {
@@ -442,6 +445,8 @@ class WorkflowRunQueueService:
             WorkflowRunQueueStatus.CANCELED,
         }:
             return None
+        if record.validation_result is not None:
+            return record.validation_result
         if record.status is WorkflowRunQueueStatus.CANCELED:
             status = "canceled"
         elif record.error_code == "insufficient_memory":
@@ -477,6 +482,7 @@ class WorkflowRunQueueService:
         memory_status: dict[str, Any] | None = None,
         memory_requirement: dict[str, Any] | None = None,
         memory_decision: dict[str, Any] | None = None,
+        validation_result: WorkflowValidationResult | None = None,
     ) -> WorkflowRunQueueRecord:
         updated = record.model_copy(
             update={
@@ -499,6 +505,7 @@ class WorkflowRunQueueService:
                     if memory_decision is not None
                     else record.memory_decision
                 ),
+                "validation_result": validation_result or record.validation_result,
                 "reservation_token": None,
                 "updated_at": _now_iso(),
             }

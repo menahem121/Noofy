@@ -12,6 +12,7 @@ import {
   markImportHasNoCustomNodes,
   previewWorkflowPackageImport,
   resolveImportCustomNodesFromUrls,
+  type RequiredModelSummary,
   type ImportModelDownloadJobStatus,
   type ImportModelVerificationJobStatus,
   type WorkflowImportResponse,
@@ -22,6 +23,10 @@ import { addPendingImportedSetupReminder } from "../home/pendingSetupBanners";
 import { useWorkflowLibrary } from "../home/WorkflowLibraryProvider";
 import { importNeedsConfiguration } from "./workflowImportUtils";
 import { cleanupRemovedWorkflowFrontendState } from "./workflowRemoval";
+import {
+  requiredModelSummaryHasNonReadyModels,
+  requiredModelSummaryHasPendingVerification,
+} from "./workflowModelRequirements";
 
 export interface WorkflowImportFlowState {
   importing: boolean;
@@ -95,12 +100,20 @@ function rememberImportedSetup(importResult: WorkflowImportResponse) {
   );
 }
 
-function shouldCommitDuringLocalModelVerification(importResult: WorkflowImportResponse) {
+export interface BackgroundModelVerificationRequest {
+  workflowId: string;
+  workflowName: string;
+  summary: RequiredModelSummary;
+}
+
+function shouldCommitWithoutModelBlocking(importResult: WorkflowImportResponse) {
+  const models = importResult.model_summary?.models ?? [];
   return Boolean(
     importResult.import_session_id &&
     !importResult.duplicate_identity &&
     !importNeedsCustomNodeResolution(importResult) &&
-    importResult.model_summary?.models.some((model) => model.status === "checking"),
+    models.length > 0 &&
+    !requiredModelSummaryHasNonReadyModels(importResult.model_summary ?? null),
   );
 }
 
@@ -124,12 +137,14 @@ export function useWorkflowImportFlow({
   workflowTabs,
   allowUnverifiedCommunityPreparation = true,
   deferConfigurationAfterDownloadedImport = false,
+  onBackgroundModelVerificationNeeded,
 }: {
   onOpenWorkflow: (workflowId: string, workflowName?: string) => void;
   onConfigureDashboard?: (workflowId?: string, workflowName?: string) => void;
   workflowTabs?: { closeWorkflowTab: (workflowId: string) => void } | null;
   allowUnverifiedCommunityPreparation?: boolean;
   deferConfigurationAfterDownloadedImport?: boolean;
+  onBackgroundModelVerificationNeeded?: (request: BackgroundModelVerificationRequest) => void;
 }): WorkflowImportFlowController {
   const workflowLibrary = useWorkflowLibrary();
   const [state, setState] = useState<WorkflowImportFlowState>(initialWorkflowImportFlowState);
@@ -171,9 +186,9 @@ export function useWorkflowImportFlow({
     }
   }, [onConfigureDashboard, onOpenWorkflow, workflowLibrary.setWorkflowsFromResponse]);
 
-  const commitDuringLocalModelVerification = useCallback(async (importResult: WorkflowImportResponse) => {
+  const commitWithoutModelBlocking = useCallback(async (importResult: WorkflowImportResponse) => {
     const sessionId = importResult.import_session_id;
-    if (!sessionId || !shouldCommitDuringLocalModelVerification(importResult)) return false;
+    if (!sessionId || !shouldCommitWithoutModelBlocking(importResult)) return false;
     setState((current) => ({
       ...current,
       importing: true,
@@ -186,8 +201,16 @@ export function useWorkflowImportFlow({
     }));
     const committed = await commitWorkflowImport(sessionId);
     await finishImport(committed, false);
+    const summary = importResult.model_summary;
+    if (summary && requiredModelSummaryHasPendingVerification(summary)) {
+      onBackgroundModelVerificationNeeded?.({
+        workflowId: committed.workflow.id,
+        workflowName: workflowDisplayName(committed.workflow),
+        summary,
+      });
+    }
     return true;
-  }, [finishImport]);
+  }, [finishImport, onBackgroundModelVerificationNeeded]);
 
   const startWorkflowImport = useCallback(async (file: File) => {
     if (!isSupportedWorkflowImportFile(file)) {
@@ -208,13 +231,13 @@ export function useWorkflowImportFlow({
 
     try {
       const importResult = await previewWorkflowPackageImport(file, allowUnverifiedCommunityPreparation);
-      if (await commitDuringLocalModelVerification(importResult)) return;
+      if (await commitWithoutModelBlocking(importResult)) return;
       if (
         importResult.import_session_id &&
         (
           importResult.duplicate_identity ||
           importNeedsCustomNodeResolution(importResult) ||
-          (importResult.model_summary && importResult.model_summary.total_count > 0)
+          requiredModelSummaryHasNonReadyModels(importResult.model_summary ?? null)
         )
       ) {
         setState((current) => ({
@@ -250,7 +273,7 @@ export function useWorkflowImportFlow({
     }
   }, [
     allowUnverifiedCommunityPreparation,
-    commitDuringLocalModelVerification,
+    commitWithoutModelBlocking,
     failImport,
     workflowLibrary.setWorkflowsFromResponse,
   ]);
@@ -348,13 +371,13 @@ export function useWorkflowImportFlow({
     setState((current) => ({ ...current, importing: true, importError: null }));
     try {
       const importResult = await resolveImportCustomNodesFromUrls(sessionId, urlsByNodeType);
-      if (await commitDuringLocalModelVerification(importResult)) return;
+      if (await commitWithoutModelBlocking(importResult)) return;
       if (
         importResult.import_session_id &&
         (
           importResult.duplicate_identity ||
           importNeedsCustomNodeResolution(importResult) ||
-          (importResult.model_summary && importResult.model_summary.total_count > 0)
+          requiredModelSummaryHasNonReadyModels(importResult.model_summary ?? null)
         )
       ) {
         setState((current) => ({
@@ -374,7 +397,7 @@ export function useWorkflowImportFlow({
         importError: error instanceof Error ? error.message : String(error),
       }));
     }
-  }, [commitDuringLocalModelVerification, finishImport, state.pendingImport?.import_session_id]);
+  }, [commitWithoutModelBlocking, finishImport, state.pendingImport?.import_session_id]);
 
   const approveCustomNodeCandidate = useCallback(async (candidateId: string) => {
     const sessionId = state.pendingImport?.import_session_id;
@@ -382,13 +405,13 @@ export function useWorkflowImportFlow({
     setState((current) => ({ ...current, importing: true, importError: null }));
     try {
       const importResult = await approveImportCustomNodeCandidate(sessionId, candidateId);
-      if (await commitDuringLocalModelVerification(importResult)) return;
+      if (await commitWithoutModelBlocking(importResult)) return;
       if (
         importResult.import_session_id &&
         (
           importResult.duplicate_identity ||
           importNeedsCustomNodeResolution(importResult) ||
-          (importResult.model_summary && importResult.model_summary.total_count > 0)
+          requiredModelSummaryHasNonReadyModels(importResult.model_summary ?? null)
         )
       ) {
         setState((current) => ({
@@ -408,7 +431,7 @@ export function useWorkflowImportFlow({
         importError: error instanceof Error ? error.message : String(error),
       }));
     }
-  }, [commitDuringLocalModelVerification, finishImport, state.pendingImport?.import_session_id]);
+  }, [commitWithoutModelBlocking, finishImport, state.pendingImport?.import_session_id]);
 
   const markWorkflowHasNoCustomNodes = useCallback(async () => {
     const sessionId = state.pendingImport?.import_session_id;
@@ -416,13 +439,13 @@ export function useWorkflowImportFlow({
     setState((current) => ({ ...current, importing: true, importError: null }));
     try {
       const importResult = await markImportHasNoCustomNodes(sessionId);
-      if (await commitDuringLocalModelVerification(importResult)) return;
+      if (await commitWithoutModelBlocking(importResult)) return;
       if (
         importResult.import_session_id &&
         (
           importResult.duplicate_identity ||
           importNeedsCustomNodeResolution(importResult) ||
-          (importResult.model_summary && importResult.model_summary.total_count > 0)
+          requiredModelSummaryHasNonReadyModels(importResult.model_summary ?? null)
         )
       ) {
         setState((current) => ({
@@ -442,7 +465,7 @@ export function useWorkflowImportFlow({
         importError: error instanceof Error ? error.message : String(error),
       }));
     }
-  }, [commitDuringLocalModelVerification, finishImport, state.pendingImport?.import_session_id]);
+  }, [commitWithoutModelBlocking, finishImport, state.pendingImport?.import_session_id]);
 
   const readyImportAction = useCallback(async () => {
     const sessionId = state.pendingImport?.import_session_id;

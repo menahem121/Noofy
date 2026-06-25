@@ -16,6 +16,7 @@ import { WorkflowLibraryProvider, useWorkflowLibrary } from "./features/home/Wor
 import { FirstLaunchOnboarding } from "./features/onboarding/FirstLaunchOnboarding";
 import { WorkflowGlobalDropImport, WorkflowImportStatusNotice } from "./features/workflows/WorkflowGlobalImport";
 import { WorkflowImportDialogs } from "./features/workflows/WorkflowImportModals";
+import { useGlobalModelReadiness } from "./features/workflows/useGlobalModelReadiness";
 import { useWorkflowImportFlow } from "./features/workflows/useWorkflowImportFlow";
 import { invalidateWorkflowRunPageCache } from "./features/workflows/workflowRunPageCache";
 import { workflowNeedsConfiguration } from "./features/workflows/workflowSearch";
@@ -108,11 +109,13 @@ function AppContent() {
   const [nativeWorkflowImport, setNativeWorkflowImport] = useState<NativeWorkflowImportRequest | null>(null);
   const [handledNativeImportId, setHandledNativeImportId] = useState<number | null>(null);
   const nativeWorkflowImportIdRef = useRef(0);
+  const modelReadiness = useGlobalModelReadiness();
   const workflowImportFlow = useWorkflowImportFlow({
     onOpenWorkflow: openWorkflow,
     onConfigureDashboard: configureDashboard,
     workflowTabs,
     deferConfigurationAfterDownloadedImport: true,
+    onBackgroundModelVerificationNeeded: modelReadiness.registerBackgroundVerification,
   });
   const importStatusHidden = shouldHideImportStatusNotice(route, workflowImportFlow.state.importResult?.workflow.id);
 
@@ -342,6 +345,12 @@ function AppContent() {
             })
           }
           onConfigureDashboard={configureDashboard}
+          onMissingModels={(summary) =>
+            modelReadiness.openMissingModels({
+              workflowId: route.workflowId,
+              workflowName: workflowNameFor(route.workflowId),
+              summary,
+            })}
           onNavigate={navigate}
         />
       );
@@ -491,6 +500,7 @@ function AppContent() {
           void workflowImportFlow.cancelImport().then(() => navigate("models"));
         }}
       />
+      {modelReadiness.element}
       {closeDialog ? (
         <WorkflowCloseDialog
           dialog={closeDialog}

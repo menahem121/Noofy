@@ -263,6 +263,17 @@ export interface WorkflowValidationResult {
   error_category?: string | null;
   error_code?: string | null;
   developer_details?: Record<string, unknown>;
+  model_summary?: RequiredModelSummary | null;
+}
+
+export function isWorkflowValidationResult(response: unknown): response is WorkflowValidationResult {
+  return Boolean(
+    response &&
+    typeof response === "object" &&
+    "valid" in response &&
+    "missing_models" in response &&
+    "errors" in response,
+  );
 }
 
 export interface RunUserFixableError {

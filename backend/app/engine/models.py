@@ -261,6 +261,7 @@ class WorkflowValidationResult(BaseModel):
     error_category: str | None = None
     error_code: str | None = None
     developer_details: dict[str, Any] = Field(default_factory=dict)
+    model_summary: RequiredModelSummary | None = None
 
 
 class EngineJob(BaseModel):

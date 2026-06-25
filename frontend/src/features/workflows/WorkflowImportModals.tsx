@@ -378,7 +378,8 @@ export function RequiredModelsModal({
   const jobModels = new Map(
     activeDownload ? downloadJob?.models.map((model) => [model.requirement_id, model]) ?? [] : [],
   );
-  const readyToRun = summary.ready_to_run && !activeDownload && !activeVerification;
+  const allModelsAvailable = summary.models.length > 0 && summary.models.every((model) => model.status === "available");
+  const readyToRun = summary.ready_to_run && allModelsAvailable && !activeDownload && !activeVerification;
   const needsWorkflowConfiguration = importNeedsConfiguration(importResult);
   const readyActionLabel = needsWorkflowConfiguration ? "Configure Workflow" : "Open Workflow";
 
