@@ -8,7 +8,7 @@ Runtime mechanics: everything needed to prepare isolated execution environments 
 |---------|------|
 | `comfyui/` | Managed ComfyUI sidecar, update/rebuild pipeline, launch settings |
 | `runners/` | Runner process supervision, launch, coordination, memory probing |
-| `dependencies/` | Custom nodes, dependency lock/resolver, accelerator/core-package policy, isolation data models, `core_node_manifest.json` |
+| `dependencies/` | Custom nodes, dependency lock/resolver, accelerator/core-package policy, isolation data models |
 | `memory/` | Memory governor, machine memory observer, resource monitor |
 | `storage/` | Storage GC, workspace store, workspace preparer |
 | `profiles/` | Runtime profile catalog, `profile_catalog.json` |

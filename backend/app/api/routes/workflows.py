@@ -349,6 +349,23 @@ async def resolve_import_custom_nodes_from_urls(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
+@router.post("/workflows/{workflow_id}/custom-nodes/resolve-from-urls")
+async def resolve_workflow_custom_nodes_from_urls(
+    workflow_id: str,
+    request: WorkflowImportCustomNodeUrlsRequest,
+    runner_lifecycle: WorkflowRunnerLifecycleServiceDep,
+):
+    try:
+        return await runner_lifecycle.resolve_workflow_engine_nodes_from_urls(
+            workflow_id,
+            urls_by_node_type=request.urls_by_node_type,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.post("/workflows/import/{import_session_id}/custom-nodes/approve-candidate")
 async def approve_import_custom_node_candidate(
     import_session_id: str,

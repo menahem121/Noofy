@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { WorkflowLibraryProvider } from "../home/WorkflowLibraryProvider";
 import {
+  importNeedsCustomNodeResolution,
   useWorkflowImportFlow,
   type BackgroundModelVerificationRequest,
   type WorkflowImportFlowController,
@@ -144,6 +145,33 @@ describe("useWorkflowImportFlow", () => {
       await controller.startWorkflowImport(new File(["archive"], "portrait.noofy"));
     });
   }
+
+  it("does not hold engine-unrecognized node results in staged import remediation", () => {
+    expect(
+      importNeedsCustomNodeResolution({
+        ...duplicatePreview,
+        duplicate_identity: null,
+        status: "engine_unrecognized_nodes",
+        custom_node_resolution: {
+          status: "engine_unrecognized_nodes",
+          mode: "manual_url",
+          user_facing_message: "This workflow uses nodes that the current engine does not recognize.",
+          missing_custom_node: null,
+          package_id: null,
+          unresolved_node_types: ["FutureCoreNode"],
+          ambiguous_node_types: [],
+          automatic_resolution_failures: [],
+          failed_custom_nodes: [],
+          candidate: null,
+          github_url_fields: [{ node_type: "FutureCoreNode", label: "FutureCoreNode" }],
+          can_provide_github_urls: true,
+          can_mark_no_custom_nodes: false,
+          update_guidance: "This can also happen if your managed ComfyUI engine is too old.",
+          developer_details: {},
+        },
+      }),
+    ).toBe(false);
+  });
 
   it("invalidates stale frontend workflow state before opening a duplicate replacement", async () => {
     const workflowTabs = { closeWorkflowTab: vi.fn() };

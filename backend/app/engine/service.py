@@ -1158,14 +1158,15 @@ class EngineService:
             "blocked_by_policy",
             "missing_custom_nodes",
             "needs_comfyui_update",
+            "engine_unrecognized_nodes",
         }:
             return {
                 **result,
                 "status": "runtime_unavailable",
                 "user_facing_message": (
-                    "Noofy could not find a usable local workflow engine and the add-ons "
-                    "needed to read this workflow's controls. Finish installing or repairing "
-                    "them, then try again."
+                    "Noofy could not verify the workflow engine nodes needed to read "
+                    "this workflow's controls. Finish repairing the engine or add-ons, "
+                    "then try again."
                 ),
             }
         self.schedule_authoring_preparation(workflow_id)

@@ -7,8 +7,6 @@ from pydantic import ValidationError
 from app.runtime.dependencies.custom_nodes import (
     CUSTOM_NODE_WORKSPACE_MANIFEST_SCHEMA_VERSION,
     CUSTOM_NODE_WORKSPACE_MANIFEST_FILENAME,
-    CoreNodeManifest,
-    CoreNodeManifestCatalog,
     CustomNodeMaterializationError,
     CustomNodeMaterializationErrorCode,
     CustomNodeSourceBoundary,
@@ -16,13 +14,11 @@ from app.runtime.dependencies.custom_nodes import (
     CustomNodeWorkspaceEntry,
     CustomNodeWorkspaceManifest,
     CustomNodeWorkspaceMaterializer,
-    core_node_manifest_catalog_for_runtime_profiles,
     validate_custom_node_source_relative_paths,
 )
 from app.runtime.dependencies.isolation import CapsuleLock, TrustLevel
 from app.runtime.profiles import (
     load_runtime_profile_catalog,
-    runtime_profile_catalog_for_local_comfyui,
 )
 
 
@@ -31,59 +27,12 @@ RUNTIME_PROFILE_HASH = "sha256:" + ("9" * 64)
 
 def _materializer(*, max_files: int = 20_000, max_bytes: int = 512 * 1024 * 1024) -> CustomNodeWorkspaceMaterializer:
     return CustomNodeWorkspaceMaterializer(
-        core_node_manifest_catalog=CoreNodeManifestCatalog(
-            manifests=[
-                CoreNodeManifest(
-                    runtime_profile_id="noofy-comfyui-v1-default",
-                    runtime_profile_variant_id="darwin-arm64-mps-dev",
-                    runtime_profile_manifest_hash=RUNTIME_PROFILE_HASH,
-                    node_types=["KSampler", "LoadImage", "SaveImage"],
-                )
-            ]
-        ),
         max_files=max_files,
         max_bytes=max_bytes,
     )
 
 
-def test_core_node_allowlist_rebinds_to_locally_validated_runtime_profile() -> None:
-    runtime_catalog = load_runtime_profile_catalog(
-        Path("app/runtime/profile_catalog.json")
-    )
-    profile = runtime_catalog.profiles[0]
-    variant = profile.variants[0]
-    core_catalog = CoreNodeManifestCatalog(
-        manifests=[
-            CoreNodeManifest(
-                runtime_profile_id=profile.runtime_profile_id,
-                runtime_profile_variant_id=variant.runtime_profile_variant_id,
-                runtime_profile_manifest_hash=profile.runtime_profile_manifest_hash,
-                node_types=["KSampler", "LoadImage"],
-            )
-        ]
-    )
-    local_catalog = runtime_profile_catalog_for_local_comfyui(
-        runtime_catalog,
-        comfyui_core_version="v9.9.9",
-        comfyui_core_source_hash="sha256:" + ("9" * 64),
-        source_reference="https://example.test/v9.9.9.zip",
-    )
-
-    rebound = core_node_manifest_catalog_for_runtime_profiles(
-        core_catalog,
-        local_catalog,
-    ).get(
-        runtime_profile_id=profile.runtime_profile_id,
-        runtime_profile_variant_id=variant.runtime_profile_variant_id,
-        runtime_profile_manifest_hash=(
-            local_catalog.profiles[0].runtime_profile_manifest_hash
-        ),
-    )
-
-    assert rebound.node_types == ["KSampler", "LoadImage"]
-
-
-def test_materializer_recognizes_core_nodes_and_materializes_required_bundled_nodes(tmp_path: Path) -> None:
+def test_materializer_records_graph_nodes_and_materializes_declared_bundled_nodes(tmp_path: Path) -> None:
     source_files = tmp_path / "source-files"
     _write_graph(source_files, ["LoadImage", "KSampler", "CustomRequired"])
     _write_custom_node(source_files, "RequiredNode", {"requirements.txt": "pillow==10.0.0\n", "node.py": "x = 1\n"})
@@ -100,11 +49,15 @@ def test_materializer_recognizes_core_nodes_and_materializes_required_bundled_no
     _materializer().materialize(manifest=manifest, source_files_dir=source_files, runner_workspace_dir=workspace)
 
     assert manifest.manifest_hash is not None
-    assert [entry.custom_node_package_id for entry in manifest.entries] == ["requirednode"]
+    assert [entry.custom_node_package_id for entry in manifest.entries] == [
+        "requirednode",
+        "unusednode",
+    ]
+    assert manifest.graph_node_types == ["CustomRequired", "KSampler", "LoadImage"]
     assert manifest.entries[0].materialized_relative_path == "custom_nodes/RequiredNode"
     assert "requirements.txt" in manifest.entries[0].dependency_marker_hashes
     assert (workspace / "custom_nodes" / "RequiredNode" / "node.py").exists()
-    assert not (workspace / "custom_nodes" / "UnusedNode").exists()
+    assert (workspace / "custom_nodes" / "UnusedNode" / "node.py").exists()
     stored_manifest = json.loads((workspace / CUSTOM_NODE_WORKSPACE_MANIFEST_FILENAME).read_text(encoding="utf-8"))
     assert stored_manifest["manifest_hash"] == manifest.manifest_hash
     assert stored_manifest["schema_version"] == "0.2.0"
@@ -112,6 +65,75 @@ def test_materializer_recognizes_core_nodes_and_materializes_required_bundled_no
         CUSTOM_NODE_WORKSPACE_MANIFEST_SCHEMA_VERSION
         == stored_manifest["schema_version"]
     )
+
+
+def test_materializer_lets_engine_verify_unclassified_flux_loader_utility_nodes(
+    tmp_path: Path,
+) -> None:
+    runtime_catalog = load_runtime_profile_catalog(
+        Path("app/runtime/profile_catalog.json")
+    )
+    profile = runtime_catalog.profiles[0]
+    variant = next(
+        item
+        for item in profile.variants
+        if item.runtime_profile_variant_id == "linux-x64-cuda130"
+    )
+    source_files = tmp_path / "source-files"
+    _write_graph(
+        source_files,
+        [
+            "BiRefNetRMBG",
+            "CLIPLoader",
+            "CLIPTextEncode",
+            "ConditioningZeroOut",
+            "FluxGuidance",
+            "GetImageSize",
+            "GrowMaskWithBlur",
+            "ImageCompositeMasked",
+            "ImageScaleToTotalPixels",
+            "KSampler",
+            "LoadImage",
+            "ReferenceLatent",
+            "ResizeMask",
+            "SaveImage",
+            "SetLatentNoiseMask",
+            "UNETLoader",
+            "VAEDecode",
+            "VAEEncode",
+            "VAELoader",
+        ],
+    )
+    _write_custom_node(source_files, "ComfyUI-KJNodes", {"node.py": "x = 1\n"})
+    _write_custom_node(source_files, "comfyui-rmbg", {"node.py": "x = 2\n"})
+    capsule = _capsule_for_runtime(
+        [
+            {
+                "package_id": "comfyui-kjnodes",
+                "source": "bundled_from_creator_machine",
+                "node_types": ["GrowMaskWithBlur", "ResizeMask"],
+            },
+            {
+                "package_id": "comfyui-rmbg",
+                "source": "bundled_from_creator_machine",
+                "node_types": ["BiRefNetRMBG"],
+            },
+        ],
+        profile=profile,
+        variant=variant,
+    )
+    materializer = CustomNodeWorkspaceMaterializer()
+
+    manifest = materializer.build_manifest(
+        capsule_lock=capsule,
+        source_files_dir=source_files,
+    )
+
+    assert [entry.custom_node_package_id for entry in manifest.entries] == [
+        "comfyui-kjnodes",
+        "comfyui-rmbg",
+    ]
+    assert all("CLIPLoader" not in entry.node_types for entry in manifest.entries)
 
 
 def test_materializer_does_not_mutate_trusted_core_runtime_files(tmp_path: Path) -> None:
@@ -158,15 +180,53 @@ def test_custom_node_manifest_is_deterministic_across_filesystem_order(tmp_path:
     assert left_manifest.manifest_hash == right_manifest.manifest_hash
 
 
-def test_materializer_rejects_unknown_non_core_node_type(tmp_path: Path) -> None:
+def test_materializer_leaves_unknown_node_types_to_runner_when_no_custom_nodes(
+    tmp_path: Path,
+) -> None:
     source_files = tmp_path / "source-files"
     _write_graph(source_files, ["NotCoreOrBundled"])
     capsule = _capsule([])
 
-    with pytest.raises(CustomNodeMaterializationError) as error:
-        _materializer().build_manifest(capsule_lock=capsule, source_files_dir=source_files)
+    manifest = _materializer().build_manifest(
+        capsule_lock=capsule,
+        source_files_dir=source_files,
+    )
 
-    assert error.value.code is CustomNodeMaterializationErrorCode.UNKNOWN_NODE_TYPE
+    assert manifest.entries == []
+    assert manifest.graph_node_types == ["NotCoreOrBundled"]
+
+
+def test_materializer_conservatively_copies_supported_packages_for_unclassified_nodes(
+    tmp_path: Path,
+) -> None:
+    source_files = tmp_path / "source-files"
+    _write_graph(source_files, ["KnownCustomA", "UnclassifiedNode"])
+    _write_custom_node(source_files, "CustomNodeA", {"node.py": "x = 1\n"})
+    _write_custom_node(source_files, "CustomNodeB", {"node.py": "x = 2\n"})
+    capsule = _capsule(
+        [
+            {
+                "package_id": "customnodea",
+                "source": "bundled_from_creator_machine",
+                "node_types": ["KnownCustomA"],
+            },
+            {
+                "package_id": "customnodeb",
+                "source": "bundled_from_creator_machine",
+                "node_types": ["KnownCustomB"],
+            },
+        ]
+    )
+
+    manifest = _materializer().build_manifest(
+        capsule_lock=capsule,
+        source_files_dir=source_files,
+    )
+
+    assert [entry.custom_node_package_id for entry in manifest.entries] == [
+        "customnodea",
+        "customnodeb",
+    ]
 
 
 def test_materializer_uses_single_bundled_package_when_exported_node_types_are_incomplete(tmp_path: Path) -> None:
@@ -431,7 +491,6 @@ def test_workspace_manifest_rejects_pre_boundary_schema_version() -> None:
             runtime_profile_id="profile",
             runtime_profile_variant_id="variant",
             runtime_profile_manifest_hash="sha256:" + ("1" * 64),
-            core_node_manifest_hash="sha256:" + ("2" * 64),
         )
 
 
@@ -685,6 +744,58 @@ def _workspace_entry(materialized_relative_path: str) -> CustomNodeWorkspaceEntr
         source_folder_name="custom-node",
         import_order_index=0,
         package_trust_level=TrustLevel.QUARANTINED_COMMUNITY,
+    )
+
+
+def _capsule_for_runtime(custom_nodes: list[dict], *, profile, variant) -> CapsuleLock:
+    return CapsuleLock.model_validate(
+        {
+            "schema_version": "0.1.0",
+            "workflow": {
+                "publisher_id": "publisher",
+                "package_id": "workflow",
+                "version": "0.1.0",
+                "trust_level": "quarantined_community",
+                "source": "noofy_archive_import",
+            },
+            "engine": {
+                "type": "comfyui",
+                "comfyui_version": profile.comfyui_core_version,
+                "core_source_hash": profile.comfyui_core_source_hash,
+            },
+            "runtime": {
+                "runtime_profile_id": profile.runtime_profile_id,
+                "runtime_profile_variant_id": variant.runtime_profile_variant_id,
+                "runtime_profile_manifest_hash": profile.runtime_profile_manifest_hash,
+                "runtime_profile_catalog_version": "0.1.0",
+                "fingerprint_schema_version": "0.1.0",
+                "dependency_env_fingerprint": "sha256:" + ("b" * 64),
+                "runner_fingerprint": "sha256:" + ("c" * 64),
+                "capsule_fingerprint": "sha256:" + ("d" * 64),
+                "os": variant.os,
+                "architecture": variant.architecture,
+                "python_version": variant.python_version,
+                "python_build_id": variant.python_build_id,
+                "gpu_backend": variant.gpu_backend_profile,
+                "dependency_lock_hash": variant.core_dependency_lock_hash,
+                "runner_workspace_hash": "sha256:" + ("f" * 64),
+            },
+            "custom_nodes": [
+                {
+                    "package_id": node["package_id"],
+                    "source": node["source"],
+                    "trust_level": "quarantined_community",
+                    "node_types": node["node_types"],
+                }
+                for node in custom_nodes
+            ],
+            "dependencies": {
+                "lock_file": "dependency-lock.json",
+                "install_policy": "quarantined-community-v1",
+            },
+            "models": [],
+            "trust": {"level": "quarantined_community"},
+        }
     )
 
 

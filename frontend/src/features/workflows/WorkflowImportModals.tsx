@@ -2,8 +2,8 @@ import {
   AlertCircle,
   ArrowRight,
   Download,
-  ExternalLink,
   Loader2,
+  Settings,
   X,
 } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -14,7 +14,6 @@ import {
   type RequiredModelAvailability,
   type WorkflowImportResponse,
 } from "../../lib/api/noofyApi";
-import { openExternalUrl } from "../../lib/openExternalUrl";
 import {
   failedModelMessage,
   isModelDownloadActive,
@@ -32,9 +31,11 @@ import { importNeedsConfiguration } from "./workflowImportUtils";
 export function WorkflowImportDialogs({
   importFlow,
   onViewModels,
+  onOpenEngineSettings,
 }: {
   importFlow: WorkflowImportFlowController;
   onViewModels: () => void;
+  onOpenEngineSettings: () => void;
 }) {
   const { state } = importFlow;
   const needsCustomNodeResolution = Boolean(
@@ -56,8 +57,7 @@ export function WorkflowImportDialogs({
           importResult={state.pendingImport}
           busy={state.importing}
           onResolveUrls={(urls) => void importFlow.resolveCustomNodesFromUrls(urls)}
-          onApproveCandidate={(candidateId) => void importFlow.approveCustomNodeCandidate(candidateId)}
-          onNoCustomNodes={() => void importFlow.markWorkflowHasNoCustomNodes()}
+          onOpenEngineSettings={onOpenEngineSettings}
           onCancel={() => void importFlow.cancelImport()}
         />
       ) : null}
@@ -86,21 +86,21 @@ export function RequiredCustomNodesModal({
   importResult,
   busy,
   onResolveUrls,
-  onApproveCandidate,
-  onNoCustomNodes,
+  onOpenEngineSettings,
   onCancel,
+  cancelLabel = "Cancel Import",
 }: {
   importResult: WorkflowImportResponse;
   busy: boolean;
   onResolveUrls: (urlsByNodeType: Record<string, string>) => void;
-  onApproveCandidate: (candidateId: string) => void;
-  onNoCustomNodes: () => void;
+  onOpenEngineSettings: () => void;
   onCancel: () => void;
+  cancelLabel?: string;
 }) {
   const resolution = importResult.custom_node_resolution;
   const fields = resolution?.github_url_fields ?? [];
   const [repositoryUrl, setRepositoryUrl] = useState("");
-  const [showManualUrl, setShowManualUrl] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
   const allNodeTypes = useMemo(() => {
     const ambiguous = resolution?.ambiguous_node_types.map((item) => item.node_type) ?? [];
     const packaged = resolution?.missing_custom_node?.node_types ?? [];
@@ -115,8 +115,6 @@ export function RequiredCustomNodesModal({
     resolution?.unresolved_node_types,
   ]);
   if (!resolution) return null;
-  const needsComfyUpdate = resolution.status === "needs_comfyui_update";
-  const candidate = resolution.mode === "candidate_approval" && !showManualUrl ? resolution.candidate : null;
   const missingName =
     resolution.missing_custom_node?.package_id ??
     resolution.package_id ??
@@ -128,69 +126,50 @@ export function RequiredCustomNodesModal({
     const url = repositoryUrl.trim();
     onResolveUrls(Object.fromEntries(fields.map((field) => [field.node_type, url])));
   };
-  const headerCopy = candidate
-    ? "Confirm the repository Noofy found, or enter a different GitHub URL."
-    : needsComfyUpdate
-      ? resolution.update_guidance ?? "Update managed ComfyUI from Settings, then check this workflow again."
-      : "Paste the repository's GitHub URL so Noofy can prepare this workflow.";
+  const headerCopy =
+    "This can also happen if your managed ComfyUI engine is too old. You can update the engine in Settings, then retry.";
+  const detailsText = JSON.stringify(resolution.developer_details ?? {}, null, 2);
 
   return (
     <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="required-custom-nodes-title">
       <section className="required-models-modal" aria-busy={busy}>
         <header className="required-models-modal__header">
           <div>
-            <p className="eyebrow">Required custom node</p>
+            <p className="eyebrow">Workflow nodes</p>
             <h2 id="required-custom-nodes-title">
-              {needsComfyUpdate ? "Update ComfyUI to continue" : "Add the missing custom node"}
+              This workflow uses nodes that the current engine does not recognize.
             </h2>
             <p>{headerCopy}</p>
           </div>
-          <button className="icon-button" type="button" aria-label="Cancel import" disabled={busy} onClick={onCancel}>
+          <button className="icon-button" type="button" aria-label="Close dialog" disabled={busy} onClick={onCancel}>
             <X size={18} aria-hidden="true" />
           </button>
         </header>
 
         <div className="required-models-modal__body">
-          {candidate ? (
-            <article className="custom-node-row custom-node-row--candidate">
-              <div className="custom-node-row__title">
-                <strong>{candidate.owner}/{candidate.repo}</strong>
-                <span>{candidate.description || "GitHub repository"}</span>
-              </div>
-              <CustomNodeTypes nodeTypes={allNodeTypes} />
-              <button
-                className="secondary-button"
-                type="button"
+          <article className="custom-node-row custom-node-row--repository">
+            <div className="custom-node-row__title">
+              <strong>{missingName}</strong>
+            </div>
+            <CustomNodeTypes nodeTypes={allNodeTypes} />
+            <label className="custom-node-row__url">
+              <span>GitHub repository URL</span>
+              <input
+                type="url"
+                value={repositoryUrl}
+                placeholder="https://github.com/owner/repository"
                 disabled={busy}
-                onClick={() => void openExternalUrl(candidate.repo_url)}
-              >
-                <ExternalLink size={14} aria-hidden="true" />
-                Open Repository
-              </button>
-            </article>
-          ) : (
-            <article className="custom-node-row custom-node-row--repository">
-              <div className="custom-node-row__title">
-                <strong>{missingName}</strong>
-              </div>
-              <CustomNodeTypes nodeTypes={allNodeTypes} />
-              <label className="custom-node-row__url">
-                <span>GitHub repository URL</span>
-                <input
-                  type="url"
-                  value={repositoryUrl}
-                  placeholder="https://github.com/owner/repository"
-                  disabled={busy || needsComfyUpdate}
-                  onChange={(event) => setRepositoryUrl(event.target.value)}
-                />
-              </label>
-            </article>
-          )}
+                onChange={(event) => setRepositoryUrl(event.target.value)}
+              />
+            </label>
+          </article>
 
-          {!needsComfyUpdate ? (
-            <p className="custom-node-trust-note">
-              Only continue with a repository you trust. Noofy installs it only for this workflow.
-            </p>
+          <p className="custom-node-trust-note">
+            Only continue with a repository you trust. Noofy installs it only for this workflow.
+          </p>
+
+          {showDetails ? (
+            <pre className="custom-node-details">{detailsText}</pre>
           ) : null}
 
           {busy ? (
@@ -202,41 +181,25 @@ export function RequiredCustomNodesModal({
         </div>
 
         <footer className="required-models-modal__footer">
-          {candidate ? (
-            <>
-              <button
-                className="primary-button"
-                type="button"
-                disabled={busy}
-                onClick={() => onApproveCandidate(candidate.candidate_id)}
-              >
-                {busy ? <Loader2 className="spin" size={16} aria-hidden="true" /> : <Download size={16} aria-hidden="true" />}
-                Use this repo
-              </button>
-              <button className="secondary-button" type="button" disabled={busy} onClick={() => setShowManualUrl(true)}>
-                Enter another GitHub URL manually
-              </button>
-            </>
-          ) : (
-            <>
-              <button
-                className="primary-button"
-                type="button"
-                disabled={busy || needsComfyUpdate || !canDownload}
-                onClick={submitRepositoryUrl}
-              >
-                {busy && !needsComfyUpdate ? <Loader2 className="spin" size={16} aria-hidden="true" /> : <Download size={16} aria-hidden="true" />}
-                Use GitHub URL
-              </button>
-              {needsComfyUpdate ? (
-                <button className="secondary-button" type="button" disabled={busy} onClick={onNoCustomNodes}>
-                  Check after ComfyUI update
-                </button>
-              ) : null}
-            </>
-          )}
+          <button
+            className="primary-button"
+            type="button"
+            disabled={busy || !canDownload}
+            onClick={submitRepositoryUrl}
+          >
+            {busy ? <Loader2 className="spin" size={16} aria-hidden="true" /> : <Download size={16} aria-hidden="true" />}
+            Provide GitHub URL
+          </button>
+          <button className="secondary-button" type="button" disabled={busy} onClick={onOpenEngineSettings}>
+            <Settings size={16} aria-hidden="true" />
+            Update engine in Settings
+          </button>
+          <button className="secondary-button" type="button" disabled={busy} onClick={() => setShowDetails((value) => !value)}>
+            <AlertCircle size={16} aria-hidden="true" />
+            Show details
+          </button>
           <button className="ghost-button" type="button" disabled={busy} onClick={onCancel}>
-            Cancel Import
+            {cancelLabel}
           </button>
         </footer>
       </section>

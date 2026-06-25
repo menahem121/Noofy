@@ -1651,7 +1651,7 @@ def test_get_bindable_inputs_does_not_accept_partial_core_object_info_for_custom
     assert result["nodes"] == []
 
 
-def test_get_bindable_inputs_waits_for_unresolved_raw_custom_node_metadata(
+def test_get_bindable_inputs_uses_graph_metadata_while_engine_verification_is_pending(
     tmp_path: Path,
 ) -> None:
     graph = {
@@ -1670,7 +1670,12 @@ def test_get_bindable_inputs_waits_for_unresolved_raw_custom_node_metadata(
         original_filename="unknown-raw-node.json",
     )
     assert package.import_metadata is not None
-    assert package.import_metadata.status == "missing_custom_nodes"
+    assert package.import_metadata.status == "needs_input_setup"
+    raw_details = package.import_metadata.developer_details["raw_comfyui_json"]
+    assert raw_details["custom_node_detection"] == {
+        "status": "engine_verification_pending",
+        "executable_node_types": ["UnknownRawNode"],
+    }
     service = DashboardAuthoringService(
         workflow_store_dir=tmp_path / "packages",
         workflow_loader=WorkflowPackageLoader(
@@ -1681,10 +1686,10 @@ def test_get_bindable_inputs_waits_for_unresolved_raw_custom_node_metadata(
         log_store=log_store,
     )
 
-    assert (
-        service.get_bindable_inputs(package.metadata.id)["status"]
-        == "controls_preparing"
-    )
+    result = service.get_bindable_inputs(package.metadata.id)
+    assert result["status"] == "ready"
+    assert result["enrichment"] == "heuristic"
+    assert result["nodes"][0]["node_type"] == "UnknownRawNode"
 
 
 def test_classify_graph_inputs_includes_audio_widgets() -> None:

@@ -161,6 +161,10 @@ export function WorkflowsPage({
     cancelImport,
     dismissImportResult,
   } = importFlowController;
+  const importDisabled =
+    importFlow.importing ||
+    importFlow.downloadingModels ||
+    runtimeStatus.backendStatus === "unreachable";
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [exportDialog, setExportDialog] = useState<{
@@ -494,7 +498,7 @@ export function WorkflowsPage({
                 className="primary-button"
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
-                disabled={importFlow.importing || importFlow.downloadingModels}
+                disabled={importDisabled}
               >
                 <FileUp size={16} aria-hidden="true" />
                 {importFlow.importing ? "Importing..." : "Import Workflow"}
@@ -812,6 +816,7 @@ Noofy hides the technical complexity, manages the workflow experience, and lets 
         <WorkflowImportDialogs
           importFlow={importFlowController}
           onViewModels={() => void handleViewModelsAfterImportDiskSpaceFailure()}
+          onOpenEngineSettings={() => onNavigate("settings")}
         />
       ) : null}
     </AppLayout>

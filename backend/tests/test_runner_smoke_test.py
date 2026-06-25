@@ -5,6 +5,9 @@ from pathlib import Path
 import pytest
 
 from app.diagnostics import LogStore
+from app.runtime.dependencies.custom_nodes import (
+    CUSTOM_NODE_WORKSPACE_MANIFEST_FILENAME,
+)
 from app.runtime.dependencies.isolation import CapsuleLock, SmokeStageResult, SmokeStageStatus
 from app.runtime.runners.runner_process import RunnerLaunchSpec, RunnerProcessSupervisor
 from app.runtime.smoke_test import (
@@ -98,6 +101,20 @@ def _prepared_workspace(tmp_path: Path):
         log_store=LogStore(),
     )
     return preparer.prepare(_capsule_lock())
+
+
+def _write_custom_node_workspace_manifest(
+    prepared_workspace,
+    *,
+    graph_node_types: list[str],
+) -> None:
+    (
+        prepared_workspace.runner_workspace_path
+        / CUSTOM_NODE_WORKSPACE_MANIFEST_FILENAME
+    ).write_text(
+        json.dumps({"graph_node_types": graph_node_types}),
+        encoding="utf-8",
+    )
 
 
 def _prompt_node_types(prompt: dict[str, object]) -> set[str]:
@@ -722,6 +739,129 @@ async def test_runner_smoke_tester_verifies_custom_node_registration(
         }
     }
     assert report.workflow_execution.status is SmokeStageStatus.BLOCKED
+
+
+@pytest.mark.anyio
+async def test_runner_smoke_tester_accepts_graph_nodes_known_to_runner(
+    tmp_path: Path,
+) -> None:
+    process = FakeProcess()
+
+    async def process_factory(command: list[str], **kwargs):
+        return process
+
+    async def healthy(base_url: str):
+        return True, None
+
+    async def object_info(base_url: str):
+        return {"CLIPLoader": {}, "CustomSamplerNode": {}}
+
+    process_supervisor = RunnerProcessSupervisor(
+        process_factory=process_factory,
+        health_check=healthy,
+        startup_timeout_seconds=0.1,
+        health_poll_interval_seconds=0.001,
+        log_store=LogStore(),
+    )
+    prepared = _prepared_workspace(tmp_path)
+    _write_custom_node_workspace_manifest(
+        prepared,
+        graph_node_types=["CLIPLoader", "CustomSamplerNode"],
+    )
+    smoke_tester = RunnerSmokeTester(
+        process_supervisor=process_supervisor,
+        launch_spec_factory=lambda capsule_lock, prepared_workspace: RunnerLaunchSpec(
+            runner_id="smoke-1",
+            kind=RunnerKind.ISOLATED_COMFYUI,
+            fingerprint=capsule_lock.runtime.runner_fingerprint,
+            python_executable="/opt/noofy/python",
+            working_dir=prepared_workspace.runner_workspace_path,
+            port=9191,
+        ),
+        object_info_fetcher=object_info,
+        log_store=LogStore(),
+    )
+
+    report = await smoke_tester.run(
+        _capsule_lock(
+            custom_nodes=[
+                {
+                    "package_id": "custom-sampler",
+                    "source": "https://example.invalid/custom-sampler.git",
+                    "trust_level": "quarantined_community",
+                    "node_types": ["CustomSamplerNode"],
+                }
+            ]
+        ),
+        prepared,
+    )
+
+    assert report.custom_node_import.status is SmokeStageStatus.PASSED
+    assert report.workflow_execution.status is SmokeStageStatus.BLOCKED
+
+
+@pytest.mark.anyio
+async def test_runner_smoke_tester_fails_when_graph_node_is_missing_from_runner(
+    tmp_path: Path,
+) -> None:
+    process = FakeProcess()
+
+    async def process_factory(command: list[str], **kwargs):
+        return process
+
+    async def healthy(base_url: str):
+        return True, None
+
+    async def object_info(base_url: str):
+        return {"CustomSamplerNode": {}}
+
+    process_supervisor = RunnerProcessSupervisor(
+        process_factory=process_factory,
+        health_check=healthy,
+        startup_timeout_seconds=0.1,
+        health_poll_interval_seconds=0.001,
+        log_store=LogStore(),
+    )
+    prepared = _prepared_workspace(tmp_path)
+    _write_custom_node_workspace_manifest(
+        prepared,
+        graph_node_types=["CLIPLoader", "CustomSamplerNode"],
+    )
+    smoke_tester = RunnerSmokeTester(
+        process_supervisor=process_supervisor,
+        launch_spec_factory=lambda capsule_lock, prepared_workspace: RunnerLaunchSpec(
+            runner_id="smoke-1",
+            kind=RunnerKind.ISOLATED_COMFYUI,
+            fingerprint=capsule_lock.runtime.runner_fingerprint,
+            python_executable="/opt/noofy/python",
+            working_dir=prepared_workspace.runner_workspace_path,
+            port=9191,
+        ),
+        object_info_fetcher=object_info,
+        log_store=LogStore(),
+    )
+
+    report = await smoke_tester.run(
+        _capsule_lock(
+            custom_nodes=[
+                {
+                    "package_id": "custom-sampler",
+                    "source": "https://example.invalid/custom-sampler.git",
+                    "trust_level": "quarantined_community",
+                    "node_types": ["CustomSamplerNode"],
+                }
+            ]
+        ),
+        prepared,
+    )
+
+    assert report.custom_node_import.status is SmokeStageStatus.PASSED
+    assert report.workflow_execution.status is SmokeStageStatus.FAILED
+    assert report.workflow_execution.message == (
+        "This workflow uses nodes that the current engine does not recognize."
+    )
+    assert report.workflow_execution.details["reason"] == "engine_unrecognized_node_types"
+    assert report.workflow_execution.details["missing_node_types"] == ["CLIPLoader"]
 
 
 @pytest.mark.anyio

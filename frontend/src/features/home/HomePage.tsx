@@ -530,6 +530,7 @@ export function HomePage({
         : null;
   const importResult = homeData.importResult;
   const importResultWorkflowName = importResult ? workflowDisplayName(importResult.workflow) : "";
+  const importDisabled = homeData.importing || runtimeStatus.backendStatus === "unreachable";
 
   useEffect(() => {
     setHighlightedSearchIndex(-1);
@@ -799,6 +800,7 @@ export function HomePage({
             <WorkflowImportDialogs
               importFlow={importFlowController}
               onViewModels={() => void handleViewModelsAfterImportDiskSpaceFailure()}
+              onOpenEngineSettings={() => onNavigate("settings")}
             />
           ) : null}
 
@@ -815,14 +817,14 @@ export function HomePage({
                 </p>
               </div>
               <label
-                className={`secondary-button action-card__button${homeData.importing ? " is-disabled" : ""}`}
-                aria-disabled={homeData.importing}
+                className={`secondary-button action-card__button${importDisabled ? " is-disabled" : ""}`}
+                aria-disabled={importDisabled}
               >
                 <input
                   className="sr-only"
                   type="file"
                   accept={WORKFLOW_IMPORT_ACCEPT}
-                  disabled={homeData.importing}
+                  disabled={importDisabled}
                   onChange={(event) => void handleWorkflowFileSelected(event)}
                 />
                 <FileUp size={16} aria-hidden="true" />

@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from app.diagnostics import LogStore
-from app.runtime.dependencies.custom_nodes import CoreNodeManifest, CoreNodeManifestCatalog, CustomNodeWorkspaceMaterializer
+from app.runtime.dependencies.custom_nodes import CustomNodeWorkspaceMaterializer
 from app.runtime.dependencies.dependency_env import DependencyEnvironmentInstallRequest
 from app.runtime.dependencies.dependency_lock import (
     DependencyRelationship,
@@ -903,18 +903,7 @@ def _with_cached_custom_node(
 
 
 def _cached_node_materializer() -> CustomNodeWorkspaceMaterializer:
-    return CustomNodeWorkspaceMaterializer(
-        core_node_manifest_catalog=CoreNodeManifestCatalog(
-            manifests=[
-                CoreNodeManifest(
-                    runtime_profile_id="noofy-comfyui-v1-default",
-                    runtime_profile_variant_id="darwin-arm64-mps-dev",
-                    runtime_profile_manifest_hash="sha256:" + ("9" * 64),
-                    node_types=["KSampler", "LoadImage", "SaveImage"],
-                )
-            ]
-        )
-    )
+    return CustomNodeWorkspaceMaterializer()
 
 
 def _write_source_cache_manifest(

@@ -26,6 +26,7 @@ from app.runtime.dependencies.isolation import (
     InstallStatus,
     InstalledModelReference,
     RunnerWorkspaceManifest,
+    SmokeStageStatus,
     SmokeTestStatus,
     TrustLevel,
 )
@@ -720,6 +721,7 @@ class WorkflowRunnerLifecycleService:
     def get_install_state(self, workflow_id: str) -> dict[str, object]:
         if self.capsule_loader is None or self.capsule_installer is None:
             return self._unsupported_install_payload(workflow_id)
+        package = self.workflow_loader.get_package(workflow_id)
         capsule_lock = self._preparable_capsule_lock(workflow_id)
         if capsule_lock is None:
             return self._unsupported_install_payload(workflow_id)
@@ -728,7 +730,11 @@ class WorkflowRunnerLifecycleService:
             workflow_id,
             state,
             capsule_lock=capsule_lock,
-            requires_preparation=bool(capsule_lock.custom_nodes),
+            package=package,
+            requires_preparation=_workflow_requires_isolated_preparation(
+                package,
+                capsule_lock,
+            ),
         )
 
     def get_install_state_developer_details(self, workflow_id: str) -> dict[str, object]:
@@ -777,6 +783,35 @@ class WorkflowRunnerLifecycleService:
             "user_facing_message": "No preparation is currently running for this workflow.",
             "cancelable": False,
         }
+
+    async def resolve_workflow_engine_nodes_from_urls(
+        self,
+        workflow_id: str,
+        *,
+        urls_by_node_type: dict[str, str],
+    ) -> dict[str, object]:
+        if self.imported_package_store is None:
+            raise RuntimeError("Imported workflow remediation is not configured.")
+        package = self.workflow_loader.get_package(workflow_id)
+        resolved = self.imported_package_store.resolve_custom_nodes_from_github_urls(
+            package,
+            urls_by_node_type=urls_by_node_type,
+            allow_unverified_community_preparation=_community_preparation_opted_in(
+                package
+            ),
+        )
+        self.imported_package_store.persist_custom_node_resolution(resolved)
+        self.log_store.add(
+            "info",
+            "Committed workflow node remediation source provided",
+            "runtime.runners.lifecycle_service",
+            workflow_id=workflow_id,
+            details={
+                "node_types": sorted(urls_by_node_type),
+                "source_resolution": _workflow_source_resolution(resolved),
+            },
+        )
+        return await self.prepare_workflow(workflow_id)
 
     def _workflow_summary(self, package: WorkflowPackage) -> dict[str, object]:
         if self.workflow_summary is not None:
@@ -856,11 +891,16 @@ class WorkflowRunnerLifecycleService:
             InstallStatus.PREPARED_NEEDS_INPUT_SETUP,
         }:
             return None
+        package = self.workflow_loader.get_package(workflow_id)
         payload = self._install_payload(
             workflow_id,
             state,
             capsule_lock=capsule_lock,
-            requires_preparation=bool(capsule_lock.custom_nodes),
+            package=package,
+            requires_preparation=_workflow_requires_isolated_preparation(
+                package,
+                capsule_lock,
+            ),
         )
         payload["reused_cached_preparation"] = True
         self.log_store.add(
@@ -924,7 +964,12 @@ class WorkflowRunnerLifecycleService:
                     "error": model_resolution_error,
                 },
             )
-            return self._install_payload(workflow_id, state, capsule_lock=capsule_lock)
+            return self._install_payload(
+                workflow_id,
+                state,
+                capsule_lock=capsule_lock,
+                package=package,
+            )
 
         try:
             state = await self.capsule_installer.prepare(
@@ -934,6 +979,16 @@ class WorkflowRunnerLifecycleService:
                 workflow_execution_smoke_allowed=not package.unresolved_runtime_inputs,
             )
         except CapsuleInstallError as exc:
+            remediated = await self._try_engine_missing_node_remediation(
+                workflow_id=workflow_id,
+                package=package,
+                capsule_lock=capsule_lock,
+                local_model_requirements=local_model_requirements,
+                workflow_execution_smoke_allowed=not package.unresolved_runtime_inputs,
+                failure=exc,
+            )
+            if remediated is not None:
+                return remediated
             self.log_store.add(
                 "error",
                 "Capsule preparation failed",
@@ -944,8 +999,140 @@ class WorkflowRunnerLifecycleService:
                     "error": str(exc),
                 },
             )
-            return self._install_payload(workflow_id, exc.state, capsule_lock=capsule_lock)
-        return self._install_payload(workflow_id, state, capsule_lock=capsule_lock)
+            return self._install_payload(
+                workflow_id,
+                exc.state,
+                capsule_lock=capsule_lock,
+                package=package,
+            )
+        return self._install_payload(
+            workflow_id,
+            state,
+            capsule_lock=capsule_lock,
+            package=package,
+        )
+
+    async def _try_engine_missing_node_remediation(
+        self,
+        *,
+        workflow_id: str,
+        package: WorkflowPackage,
+        capsule_lock: CapsuleLock,
+        local_model_requirements: list[LocalModelRequirement],
+        workflow_execution_smoke_allowed: bool,
+        failure: CapsuleInstallError,
+    ) -> dict[str, object] | None:
+        missing_node_types = _engine_unrecognized_missing_node_types(failure.state)
+        if not missing_node_types:
+            return None
+        if self.imported_package_store is None or package.import_metadata is None:
+            return None
+        self.log_store.add(
+            "info",
+            "Workflow preparation found engine-unrecognized nodes; attempting automatic resolution",
+            "runtime.runners.lifecycle_service",
+            workflow_id=workflow_id,
+            details={
+                "capsule_fingerprint": capsule_lock.runtime.capsule_fingerprint,
+                "missing_node_types": missing_node_types,
+            },
+        )
+        remediated_package = self.imported_package_store.resolve_missing_engine_nodes_automatically(
+            package,
+            missing_node_types=missing_node_types,
+            allow_unverified_community_preparation=_community_preparation_opted_in(package),
+        )
+        self.imported_package_store.persist_custom_node_resolution(remediated_package)
+        if not _engine_auto_resolution_attempted(remediated_package):
+            self.log_store.add(
+                "warning",
+                "Workflow preparation needs user node resolution",
+                "runtime.runners.lifecycle_service",
+                workflow_id=workflow_id,
+                details={
+                    "missing_node_types": missing_node_types,
+                    "source_resolution": _workflow_source_resolution(remediated_package),
+                },
+            )
+            return self._install_payload(
+                workflow_id,
+                failure.state,
+                capsule_lock=capsule_lock,
+                package=remediated_package,
+            )
+
+        refreshed_capsule_lock = self._preparable_capsule_lock(workflow_id)
+        if refreshed_capsule_lock is None:
+            return self._install_payload(
+                workflow_id,
+                failure.state,
+                capsule_lock=capsule_lock,
+                package=remediated_package,
+            )
+        local_model_requirements = _local_model_requirements(
+            remediated_package,
+            refreshed_capsule_lock,
+        )
+        refreshed_capsule_lock = refreshed_capsule_lock.model_copy(
+            update={
+                "source_policy": _effective_prepare_source_policy(
+                    remediated_package,
+                    refreshed_capsule_lock,
+                    local_model_requirements=local_model_requirements,
+                )
+            }
+        )
+        try:
+            retry_state = await self.capsule_installer.prepare(
+                refreshed_capsule_lock,
+                workflow_id=workflow_id,
+                local_model_requirements=local_model_requirements,
+                workflow_execution_smoke_allowed=workflow_execution_smoke_allowed,
+            )
+        except CapsuleInstallError as retry_exc:
+            retry_missing_node_types = _engine_unrecognized_missing_node_types(
+                retry_exc.state
+            )
+            if retry_missing_node_types:
+                fallback_package = self.imported_package_store.with_engine_unrecognized_nodes(
+                    remediated_package,
+                    missing_node_types=retry_missing_node_types,
+                    reason="automatic_resolution_retry_still_missing",
+                    automatic_resolution_failures=[
+                        "Noofy staged a candidate automatically, but the current engine still does not recognize these nodes."
+                    ],
+                )
+                self.imported_package_store.persist_custom_node_resolution(
+                    fallback_package
+                )
+                return self._install_payload(
+                    workflow_id,
+                    retry_exc.state,
+                    capsule_lock=refreshed_capsule_lock,
+                    package=fallback_package,
+                )
+            return self._install_payload(
+                workflow_id,
+                retry_exc.state,
+                capsule_lock=refreshed_capsule_lock,
+                package=remediated_package,
+            )
+        self.log_store.add(
+            "info",
+            "Workflow preparation succeeded after automatic node resolution",
+            "runtime.runners.lifecycle_service",
+            workflow_id=workflow_id,
+            details={
+                "missing_node_types": missing_node_types,
+                "capsule_fingerprint": refreshed_capsule_lock.runtime.capsule_fingerprint,
+            },
+        )
+        return self._install_payload(
+            workflow_id,
+            retry_state,
+            capsule_lock=refreshed_capsule_lock,
+            package=remediated_package,
+        )
 
     async def start_workflow_runner(
         self,
@@ -1630,6 +1817,7 @@ class WorkflowRunnerLifecycleService:
         state: InstallState,
         *,
         capsule_lock: CapsuleLock | None = None,
+        package: WorkflowPackage | None = None,
         requires_preparation: bool = True,
     ) -> dict[str, object]:
         # Workflows with nothing to prepare (no custom nodes, so they run on
@@ -1642,7 +1830,7 @@ class WorkflowRunnerLifecycleService:
             InstallStatus.IMPORTED,
         }:
             status = InstallStatus.READY
-        return sanitize({
+        payload = {
             "workflow_id": workflow_id,
             "capsule_fingerprint": state.capsule_fingerprint,
             "status": status.value,
@@ -1660,7 +1848,12 @@ class WorkflowRunnerLifecycleService:
             "source_policy": capsule_source_policy(capsule_lock).model_dump(mode="json")
             if capsule_lock is not None
             else None,
-        })
+        }
+        if package is not None:
+            node_resolution = _workflow_node_resolution_payload(package)
+            if node_resolution is not None:
+                payload["custom_node_resolution"] = node_resolution
+        return sanitize(payload)
 
     def _unsupported_install_payload(self, workflow_id: str) -> dict[str, object]:
         return {
@@ -2034,6 +2227,131 @@ def _effective_prepare_source_policy(
     else:
         model_source_trust = policy.model_source_trust
     return policy.model_copy(update={"model_source_trust": model_source_trust})
+
+
+def _workflow_requires_isolated_preparation(
+    package: WorkflowPackage,
+    capsule_lock: CapsuleLock,
+) -> bool:
+    return package.import_metadata is not None or bool(capsule_lock.custom_nodes)
+
+
+def _engine_unrecognized_missing_node_types(state: InstallState) -> list[str]:
+    workflow_execution = state.smoke_test_report.workflow_execution
+    if workflow_execution.status is not SmokeStageStatus.FAILED:
+        return []
+    if workflow_execution.details.get("reason") != "engine_unrecognized_node_types":
+        return []
+    missing = workflow_execution.details.get("missing_node_types")
+    if not isinstance(missing, list):
+        return []
+    return sorted({item for item in missing if isinstance(item, str) and item})
+
+
+def _workflow_source_resolution(package: WorkflowPackage) -> dict[str, object]:
+    details = (
+        package.import_metadata.developer_details.get("source_resolution")
+        if package.import_metadata is not None
+        else None
+    )
+    return details if isinstance(details, dict) else {}
+
+
+def _engine_auto_resolution_attempted(package: WorkflowPackage) -> bool:
+    if package.import_metadata is None:
+        return False
+    attempt = package.import_metadata.developer_details.get(
+        "engine_node_auto_resolution"
+    )
+    if not isinstance(attempt, dict) or attempt.get("status") != "attempted":
+        return False
+    source_resolution = _workflow_source_resolution(package)
+    return source_resolution.get("status") == "resolved" or any(
+        record.included for record in package.custom_nodes
+    )
+
+
+def _community_preparation_opted_in(package: WorkflowPackage) -> bool:
+    if package.source_policy is None:
+        return True
+    return bool(package.source_policy.community_preparation_opted_in)
+
+
+def _workflow_node_resolution_payload(
+    package: WorkflowPackage,
+) -> dict[str, object] | None:
+    if package.import_metadata is None:
+        return None
+    source_resolution = _workflow_source_resolution(package)
+    status = package.import_metadata.status
+    resolution_status = source_resolution.get("status")
+    if status not in {
+        "engine_unrecognized_nodes",
+        "missing_custom_nodes",
+        "needs_comfyui_update",
+    } and resolution_status not in {
+        "engine_unrecognized_nodes",
+        "failed",
+        "missing_custom_nodes",
+        "needs_comfyui_update",
+    }:
+        return None
+    unresolved_node_types = [
+        item
+        for item in source_resolution.get("unresolved_node_types", [])
+        if isinstance(item, str)
+    ]
+    ambiguous_node_types = [
+        item
+        for item in source_resolution.get("ambiguous_node_types", [])
+        if isinstance(item, dict)
+    ]
+    unresolved_from_ambiguous = [
+        item["node_type"]
+        for item in ambiguous_node_types
+        if isinstance(item.get("node_type"), str)
+    ]
+    fields = [
+        {"node_type": node_type, "label": node_type}
+        for node_type in sorted(set(unresolved_node_types + unresolved_from_ambiguous))
+    ]
+    candidate = source_resolution.get("candidate")
+    public_candidate = None
+    if isinstance(candidate, dict):
+        public_candidate = {
+            key: value for key, value in candidate.items() if key != "source"
+        }
+    developer_details = dict(source_resolution)
+    if public_candidate is not None:
+        developer_details["candidate"] = public_candidate
+    public_status = (
+        resolution_status
+        if resolution_status == "engine_unrecognized_nodes"
+        else status or resolution_status or "engine_unrecognized_nodes"
+    )
+    return {
+        "status": public_status,
+        "mode": source_resolution.get("mode") or "manual_url",
+        "user_facing_message": package.import_metadata.user_facing_message,
+        "missing_custom_node": source_resolution.get("missing_custom_node"),
+        "package_id": source_resolution.get("package_id"),
+        "unresolved_node_types": unresolved_node_types,
+        "ambiguous_node_types": ambiguous_node_types,
+        "automatic_resolution_failures": source_resolution.get(
+            "automatic_resolution_failures", []
+        ),
+        "failed_custom_nodes": source_resolution.get("failed_custom_nodes", []),
+        "candidate": public_candidate,
+        "github_url_fields": fields,
+        "can_provide_github_urls": bool(fields),
+        "can_mark_no_custom_nodes": False,
+        "update_guidance": source_resolution.get("update_guidance")
+        or (
+            "This can also happen if your managed ComfyUI engine is too old. "
+            "You can update the engine in Settings, then retry."
+        ),
+        "developer_details": developer_details,
+    }
 
 
 def _required_actions_for_workflow(

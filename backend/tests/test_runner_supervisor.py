@@ -64,6 +64,7 @@ from app.workflows.package import (
     InputBinding,
     WorkflowCustomNodeRecord,
     WorkflowInput,
+    WorkflowImportMetadata,
     WorkflowMetadata,
     WorkflowPackage,
 )
@@ -1834,7 +1835,38 @@ def test_bindable_inputs_explain_terminal_missing_runtime_without_scheduling() -
     result = service.bindable_inputs_for_authoring("text_to_image_v0")
 
     assert result["status"] == "runtime_unavailable"
-    assert "local workflow engine" in result["user_facing_message"]
+    assert "workflow engine nodes" in result["user_facing_message"]
+    assert scheduled == []
+
+
+def test_bindable_inputs_explain_engine_unrecognized_import_without_scheduling() -> None:
+    service, _supervisor = _build_service(RecordingAdapter())
+    scheduled: list[str] = []
+    service.get_bindable_inputs = lambda workflow_id: {
+        "workflow_id": workflow_id,
+        "status": "controls_preparing",
+        "enrichment": "pending",
+        "nodes": [],
+    }
+    service.workflow_runner_lifecycle_service.workflow_status = lambda _workflow_id: {
+        "install": {"status": "preparing"}
+    }
+    package = service.workflow_loader.get_package("text_to_image_v0").model_copy(
+        update={
+            "import_metadata": WorkflowImportMetadata(
+                imported_at=datetime.now(UTC).isoformat(),
+                status="engine_unrecognized_nodes",
+                user_facing_message="This workflow uses nodes that the current engine does not recognize.",
+            )
+        }
+    )
+    service.workflow_loader = SimpleNamespace(get_package=lambda _workflow_id: package)
+    service.schedule_authoring_preparation = scheduled.append
+
+    result = service.bindable_inputs_for_authoring("text_to_image_v0")
+
+    assert result["status"] == "runtime_unavailable"
+    assert "workflow engine nodes" in result["user_facing_message"]
     assert scheduled == []
 
 

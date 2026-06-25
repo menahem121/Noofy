@@ -47,6 +47,8 @@ def import_status_message(status: str) -> str:
         return "Required custom nodes were not found"
     if status == "needs_comfyui_update":
         return "Update managed ComfyUI, then retry"
+    if status == "engine_unrecognized_nodes":
+        return "Workflow nodes need attention"
     if status == "cannot_prepare_automatically":
         return "Cannot prepare automatically"
     return "Imported"

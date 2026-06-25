@@ -56,7 +56,7 @@ All runtime isolation code lives in [backend/app/runtime/](../backend/app/runtim
 | Capsule lock + install-state schemas | [backend/app/workflows/capsule.py](../backend/app/workflows/capsule.py), [backend/app/runtime/install_state.py](../backend/app/runtime/install_state.py) |
 | Layered fingerprints (dependency-env, runner, capsule) | [backend/app/runtime/fingerprints.py](../backend/app/runtime/fingerprints.py) |
 | Runtime profile catalog | [backend/app/runtime/profiles/profiles.py](../backend/app/runtime/profiles/profiles.py), [backend/app/runtime/profiles/profile_catalog.json](../backend/app/runtime/profiles/profile_catalog.json) |
-| Pinned core-node manifest | [backend/app/runtime/core_node_manifest.json](../backend/app/runtime/core_node_manifest.json) |
+| Live runner node verification | [backend/app/runtime/smoke_test.py](../backend/app/runtime/smoke_test.py) |
 | Dependency lock + pinned `uv` resolver, staged index builds, legacy wheel cache | [backend/app/runtime/dependencies/dependency_lock.py](../backend/app/runtime/dependencies/dependency_lock.py), [dependency_resolver.py](../backend/app/runtime/dependencies/dependency_resolver.py), [dependency_env.py](../backend/app/runtime/dependencies/dependency_env.py) |
 | Accelerator / core-package policy for custom-node dependencies | [backend/app/runtime/dependencies/accelerator_policy.py](../backend/app/runtime/dependencies/accelerator_policy.py) |
 | Runner launch-default → launch-arg mapping | [backend/app/runtime/comfyui/launch_settings.py](../backend/app/runtime/comfyui/launch_settings.py) |

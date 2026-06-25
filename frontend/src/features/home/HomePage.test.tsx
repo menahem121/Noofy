@@ -361,6 +361,48 @@ describe("HomePage", () => {
     expect(componentsCss).toContain("rgba(255, 69, 0");
   });
 
+  it("disables workflow import when the backend is unreachable", async () => {
+    mockSearchableHome();
+    const view = renderHomePage({
+      runtimeState: {
+        ...readyRuntimeState,
+        backendStatus: "unreachable",
+        engineStatus: "offline",
+      },
+      skipInitialRefresh: true,
+    });
+
+    await screen.findByText("Import any ComfyUI Workflow");
+    const input = view.container.querySelector('input[type="file"]') as HTMLInputElement;
+
+    expect(input).toBeDisabled();
+    expect(screen.getByText("Choose File").closest("label")).toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("keeps workflow import enabled while the managed engine is starting", async () => {
+    mockSearchableHome();
+    const view = renderHomePage({
+      runtimeState: {
+        ...readyRuntimeState,
+        backendStatus: "reachable",
+        engineStatus: "starting",
+        runtime: {
+          ...readyRuntime,
+          reachable: false,
+          managed_process_running: false,
+          sidecar_starting: true,
+        } as RuntimeHealthState["runtime"],
+      },
+      skipInitialRefresh: true,
+    });
+
+    await screen.findByText("Import any ComfyUI Workflow");
+    const input = view.container.querySelector('input[type="file"]') as HTMLInputElement;
+
+    expect(input).not.toBeDisabled();
+    expect(screen.getByText("Choose File").closest("label")).toHaveAttribute("aria-disabled", "false");
+  });
+
   it("loads backend runtime and workflow summaries through the Noofy API", async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);

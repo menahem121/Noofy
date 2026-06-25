@@ -1,10 +1,7 @@
 from app.runtime.capsule_installer import CapsuleInstaller, CapsuleInstallError
 from app.runtime.dependencies.custom_nodes import (
-    CORE_NODE_MANIFEST_SCHEMA_VERSION,
     CUSTOM_NODE_WORKSPACE_MANIFEST_FILENAME,
     CUSTOM_NODE_WORKSPACE_MANIFEST_SCHEMA_VERSION,
-    CoreNodeManifest,
-    CoreNodeManifestCatalog,
     CustomNodeMaterializationError,
     CustomNodeMaterializationErrorCode,
     CustomNodeSourceBoundary,
@@ -13,7 +10,6 @@ from app.runtime.dependencies.custom_nodes import (
     CustomNodeWorkspaceManifest,
     CustomNodeWorkspaceMaterializer,
     custom_node_workspace_manifest_hash,
-    load_core_node_manifest_catalog,
     validate_custom_node_source_relative_paths,
     with_computed_custom_node_workspace_hash,
 )
@@ -228,7 +224,6 @@ __all__ = [
     "AsyncDownloader",
     "CORE_RUNNER_FINGERPRINT",
     "CORE_RUNNER_ID",
-    "CORE_NODE_MANIFEST_SCHEMA_VERSION",
     "CUSTOM_NODE_WORKSPACE_MANIFEST_FILENAME",
     "CUSTOM_NODE_WORKSPACE_MANIFEST_SCHEMA_VERSION",
     "CapsuleInstallError",
@@ -236,8 +231,6 @@ __all__ = [
     "CapsuleLock",
     "CommandResult",
     "CommandRunner",
-    "CoreNodeManifest",
-    "CoreNodeManifestCatalog",
     "CustomNodeMaterializationError",
     "CustomNodeMaterializationErrorCode",
     "CustomNodeSourceBoundary",
@@ -394,7 +387,6 @@ __all__ = [
     "estimate_evidence_rank",
     "inspect_dependency_marker_files",
     "likely_memory_error",
-    "load_core_node_manifest_catalog",
     "merge_resolved_dependency_locks",
     "model_view_fingerprint",
     "model_reference_cleanup_policy",

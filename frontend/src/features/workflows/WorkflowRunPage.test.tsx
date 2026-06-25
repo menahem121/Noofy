@@ -1124,6 +1124,72 @@ describe("WorkflowRunPage", () => {
     ]);
   });
 
+  it("lets already-imported workflows resolve engine-unrecognized nodes from a GitHub URL", async () => {
+    const onNavigate = vi.fn();
+    let resolved = false;
+    const statusWithNodeResolution = {
+      ...workflowStatus,
+      install: {
+        status: "failed",
+        custom_node_resolution: {
+          status: "engine_unrecognized_nodes",
+          mode: "manual_url",
+          user_facing_message: "This workflow uses nodes that the current engine does not recognize.",
+          missing_custom_node: null,
+          package_id: null,
+          unresolved_node_types: ["FutureCoreNode"],
+          ambiguous_node_types: [],
+          automatic_resolution_failures: [],
+          failed_custom_nodes: [],
+          candidate: null,
+          github_url_fields: [{ node_type: "FutureCoreNode", label: "FutureCoreNode" }],
+          can_provide_github_urls: true,
+          can_mark_no_custom_nodes: false,
+          update_guidance: "This can also happen if your managed ComfyUI engine is too old.",
+          developer_details: { reason: "github_search_no_candidate" },
+        },
+      },
+    };
+    mockConfiguredDashboardFetch(fetchMock, readyRuntime, configuredPackageData, null, (url, init) => {
+      if (url.endsWith("/api/workflows/text_to_image_v0/status")) {
+        return jsonResponse(resolved ? workflowStatus : statusWithNodeResolution);
+      }
+      if (url.endsWith("/api/workflows/text_to_image_v0/custom-nodes/resolve-from-urls") && init?.method === "POST") {
+        resolved = true;
+        return jsonResponse({ status: "ready" });
+      }
+      return undefined;
+    });
+
+    renderRunPage({ onNavigate });
+
+    expect(await screen.findByRole("heading", { name: "This workflow uses nodes that the current engine does not recognize." })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText("https://github.com/owner/repository"), {
+      target: { value: "https://github.com/example/future-core-node" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Update engine in Settings" }));
+    expect(onNavigate).toHaveBeenCalledWith("settings");
+    fireEvent.click(screen.getByRole("button", { name: "Provide GitHub URL" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/workflows/text_to_image_v0/custom-nodes/resolve-from-urls",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({
+            urls_by_node_type: {
+              FutureCoreNode: "https://github.com/example/future-core-node",
+            },
+          }),
+        }),
+      );
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole("heading", { name: "This workflow uses nodes that the current engine does not recognize." })).not.toBeInTheDocument();
+    });
+  });
+
   it("resumes dashboard setup instead of rendering run views when the package dashboard is not ready", async () => {
     const onConfigureDashboard = vi.fn();
     mockConfiguredDashboardFetch(fetchMock, readyRuntime, unconfiguredPackageData);

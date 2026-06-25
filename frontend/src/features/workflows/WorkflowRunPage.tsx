@@ -25,8 +25,9 @@ import {
   isEngineJob,
   isApiError,
   isWorkflowValidationResult,
-  resetDashboardCustomization,
-  runWorkflow,
+    resetDashboardCustomization,
+    resolveWorkflowCustomNodesFromUrls,
+    runWorkflow,
   saveDashboard,
   uploadDashboardAsset,
   uploadDashboardAudioAsset,
@@ -44,9 +45,10 @@ import {
   type RunUserFixableError,
   type WorkflowInputDef,
   type WorkflowOutputDef,
-  type WorkflowPackageResponse,
-  type WorkflowStatusResponse,
-  type WorkflowValidationResult,
+    type WorkflowPackageResponse,
+    type WorkflowStatusResponse,
+    type WorkflowImportResponse,
+    type WorkflowValidationResult,
   type UploadProgress,
 } from "../../lib/api/noofyApi";
 import type { DashboardSchema } from "../dashboard-builder/dashboardBuilderContent";
@@ -98,6 +100,7 @@ import {
   WorkflowMissingPanel,
   WorkflowRefreshRequiredDialog,
 } from "./WorkflowRunDialogs";
+import { RequiredCustomNodesModal } from "./WorkflowImportModals";
 import { DashboardInputControls, FallbackInputs } from "./WorkflowClassicInputs";
 import {
   actionBarPositionFromDashboard,
@@ -266,6 +269,8 @@ export function WorkflowRunPage({
   const [batchCount, setBatchCount] = useState(1);
   const [trackedRuns, setTrackedRuns] = useState<TrackedRun[]>([]);
   const [runPreparationDialog, setRunPreparationDialog] = useState<RunPreparationDialogState | null>(null);
+  const [workflowNodeResolutionBusy, setWorkflowNodeResolutionBusy] = useState(false);
+  const [dismissedWorkflowNodeResolutionFingerprint, setDismissedWorkflowNodeResolutionFingerprint] = useState<string | null>(null);
   const [loraBrowserDialog, setLoraBrowserDialog] = useState<LoraBrowserDialogState | null>(null);
   const [exportDialog, setExportDialog] = useState<{ extension: ".noofy" | ".json"; url: string } | null>(null);
   const [requiredModelsModalOpen, setRequiredModelsModalOpen] = useState(false);
@@ -761,6 +766,22 @@ export function WorkflowRunPage({
     } catch {
       // Non-fatal: the next run's status polling will self-correct.
       return null;
+    }
+  }
+
+  async function handleWorkflowNodeResolutionUrls(urlsByNodeType: Record<string, string>) {
+    setWorkflowNodeResolutionBusy(true);
+    try {
+      await resolveWorkflowCustomNodesFromUrls(workflowId, urlsByNodeType);
+      const refreshedStatus = await refreshWorkflowStatusAfterRun();
+      setRunPreparationDialog(runPreparationDialogFromStatus(refreshedStatus));
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        error: error instanceof Error ? error.message : "Could not resolve workflow nodes.",
+      }));
+    } finally {
+      setWorkflowNodeResolutionBusy(false);
     }
   }
 
@@ -1665,6 +1686,19 @@ export function WorkflowRunPage({
   const installStatus = typeof workflowStatusForWorkflow?.install?.status === "string"
     ? workflowStatusForWorkflow.install.status
     : null;
+  const workflowNodeResolution = workflowCustomNodeResolutionFromStatus(workflowStatusForWorkflow);
+  const workflowNodeResolutionFingerprint = workflowNodeResolution
+    ? JSON.stringify({
+        workflowId,
+        status: workflowNodeResolution.status,
+        unresolved_node_types: workflowNodeResolution.unresolved_node_types,
+        github_url_fields: workflowNodeResolution.github_url_fields,
+      })
+    : null;
+  const showWorkflowNodeResolution = Boolean(
+    workflowNodeResolution
+      && workflowNodeResolutionFingerprint !== dismissedWorkflowNodeResolutionFingerprint,
+  );
   const memoryStatus = activeMemoryStatus;
   const memoryNotice = memoryStatus ? memoryStatusDisplay(memoryStatus) : null;
   const memoryDiagnostics = memoryStatus
@@ -2082,6 +2116,21 @@ export function WorkflowRunPage({
       onClose={() => setRunPreparationDialog(null)}
     />
   ) : null;
+  const workflowNodeResolutionElement = showWorkflowNodeResolution && workflowNodeResolution ? (
+    <RequiredCustomNodesModal
+      importResult={workflowImportResponseForNodeResolution({
+        workflowId,
+        workflowName: workflowDisplayTitle,
+        workflow: workflowStatusForWorkflow?.workflow ?? workflowSummary,
+        resolution: workflowNodeResolution,
+      })}
+      busy={workflowNodeResolutionBusy}
+      onResolveUrls={(urls) => void handleWorkflowNodeResolutionUrls(urls)}
+      onOpenEngineSettings={() => onNavigate("settings")}
+      onCancel={() => setDismissedWorkflowNodeResolutionFingerprint(workflowNodeResolutionFingerprint)}
+      cancelLabel="Dismiss"
+    />
+  ) : null;
   const loraBrowserElement = loraBrowserDialog ? (
     <CivitaiLoraBrowserModal
       workflowId={workflowId}
@@ -2259,6 +2308,7 @@ export function WorkflowRunPage({
         {inputErrorDialogElement}
         {failureDialogElement}
         {preparationDialogElement}
+        {workflowNodeResolutionElement}
         {loraBrowserElement}
         {exportDialogElement}
         {requiredModelsModalElement}
@@ -2423,10 +2473,54 @@ export function WorkflowRunPage({
       {inputErrorDialogElement}
       {workflowCancelConfirmationElement}
       {preparationDialogElement}
+      {workflowNodeResolutionElement}
       {loraBrowserElement}
       {exportDialogElement}
       {requiredModelsModalElement}
       {workflowRefreshDialogElement}
     </AppLayout>
   );
+}
+
+type WorkflowCustomNodeResolution = NonNullable<WorkflowImportResponse["custom_node_resolution"]>;
+
+function workflowCustomNodeResolutionFromStatus(
+  status: WorkflowStatusResponse | null,
+): WorkflowCustomNodeResolution | null {
+  const install = status?.install;
+  const resolution = install && typeof install === "object" ? install.custom_node_resolution : null;
+  if (!resolution || typeof resolution !== "object") return null;
+  return resolution as WorkflowCustomNodeResolution;
+}
+
+function workflowImportResponseForNodeResolution({
+  workflowId,
+  workflowName,
+  workflow,
+  resolution,
+}: {
+  workflowId: string;
+  workflowName: string;
+  workflow: WorkflowStatusResponse["workflow"] | null | undefined;
+  resolution: WorkflowCustomNodeResolution;
+}): WorkflowImportResponse {
+  return {
+    import_session_id: null,
+    workflow_id: workflowId,
+    status: resolution.status,
+    user_facing_message: resolution.user_facing_message,
+    workflow: workflow ?? {
+      id: workflowId,
+      name: workflowName,
+      version: "0.1.0",
+      description: "",
+      trust_level: "quarantined_community",
+    },
+    required_model_count: 0,
+    custom_node_count: 0,
+    unresolved_input_count: 0,
+    model_summary: null,
+    duplicate_identity: null,
+    custom_node_resolution: resolution,
+  };
 }

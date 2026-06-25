@@ -620,7 +620,7 @@ def test_import_workflow_endpoint_passes_community_preparation_opt_in(monkeypatc
     assert fake_service.allow_unverified_community_preparation is True
 
 
-def test_preview_workflow_import_keeps_unresolved_custom_nodes_pending(tmp_path) -> None:
+def test_preview_workflow_import_stores_unresolved_node_resolution_without_pending_session(tmp_path) -> None:
     package_store = FakePackageStore(_unresolved_custom_node_package())
     service = EngineService(
         workflow_loader=WorkflowPackageLoader(tmp_path / "packages"),
@@ -638,7 +638,7 @@ def test_preview_workflow_import_keeps_unresolved_custom_nodes_pending(tmp_path)
         allow_unverified_community_preparation=True,
     )
 
-    assert preview.import_session_id is not None
+    assert preview.import_session_id is None
     assert preview.custom_node_resolution is not None
     assert preview.custom_node_resolution["mode"] == "manual_url"
     assert preview.custom_node_resolution["package_id"] == "comfyui-moss-tts"
@@ -648,10 +648,10 @@ def test_preview_workflow_import_keeps_unresolved_custom_nodes_pending(tmp_path)
     ]
     assert package_store.preview_count == 1
     assert package_store.import_count == 0
-    assert package_store.prepared_import_count == 0
+    assert package_store.prepared_import_count == 1
 
 
-def test_direct_workflow_import_rejects_unresolved_custom_nodes_without_persisting(
+def test_direct_workflow_import_stores_unresolved_node_resolution(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -674,17 +674,17 @@ def test_direct_workflow_import_rejects_unresolved_custom_nodes_without_persisti
             headers={"Content-Type": "application/octet-stream"},
         )
 
-    assert response.status_code == 409
-    detail = response.json()["detail"]
-    assert "custom-node resolution" in detail["message"]
-    assert detail["custom_node_resolution"]["mode"] == "manual_url"
-    assert detail["custom_node_resolution"]["package_id"] == "comfyui-moss-tts"
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "missing_custom_nodes"
+    assert payload["custom_node_resolution"]["mode"] == "manual_url"
+    assert payload["custom_node_resolution"]["package_id"] == "comfyui-moss-tts"
     assert package_store.preview_count == 1
     assert package_store.import_count == 0
-    assert package_store.prepared_import_count == 0
+    assert package_store.prepared_import_count == 1
 
 
-def test_direct_import_orchestrator_rejects_unresolved_custom_nodes_without_persisting(
+def test_direct_import_orchestrator_stores_unresolved_node_resolution(
     tmp_path,
 ) -> None:
     package_store = FakePackageStore(_unresolved_custom_node_package())
@@ -698,18 +698,16 @@ def test_direct_import_orchestrator_rejects_unresolved_custom_nodes_without_pers
         model_availability_service=FakeAvailabilityService(),
     )
 
-    with pytest.raises(ImportRequiresCustomNodeResolutionError) as error:
-        service.import_workflow_archive(
-            b"archive",
-            original_filename="txt2audio_MOSS-TTS.noofy",
-            allow_unverified_community_preparation=True,
-        )
+    payload = service.import_workflow_archive(
+        b"archive",
+        original_filename="txt2audio_MOSS-TTS.noofy",
+        allow_unverified_community_preparation=True,
+    )
 
-    assert error.value.custom_node_resolution is not None
-    assert error.value.custom_node_resolution["mode"] == "manual_url"
+    assert payload["custom_node_resolution"]["mode"] == "manual_url"
     assert package_store.preview_count == 1
     assert package_store.import_count == 0
-    assert package_store.prepared_import_count == 0
+    assert package_store.prepared_import_count == 1
 
 
 def test_resolved_custom_node_resolution_does_not_keep_import_pending(tmp_path) -> None:
@@ -1102,6 +1100,59 @@ async def test_import_orchestrator_schedules_initial_preparation_for_resolved_cu
     await asyncio.sleep(0)
 
     assert prepare_calls == ["local__custom_node_workflow__0.1.0"]
+
+
+@pytest.mark.anyio
+async def test_import_orchestrator_schedules_initial_preparation_without_custom_nodes(
+    tmp_path,
+) -> None:
+    package = WorkflowPackage(
+        metadata=WorkflowMetadata(
+            id="local__future_core_workflow__0.1.0",
+            name="Future core workflow",
+            version="0.1.0",
+        ),
+        engine="comfyui",
+        comfyui_graph={"1": {"class_type": "FutureCoreNode", "inputs": {}}},
+        import_metadata=WorkflowImportMetadata(
+            source_format="comfyui_api_json",
+            original_filename="future-core.json",
+            imported_at="2026-06-25T00:00:00Z",
+            status="imported",
+            user_facing_message="Imported",
+            developer_details={"raw_comfyui_json": {"executable_node_types": ["FutureCoreNode"]}},
+        ),
+        source_policy=SourcePolicy(
+            trust_level="quarantined_community",
+            source_policy="isolated_community_sources",
+            automatic_preparation_allowed=True,
+            allowed_source_origins=["registry-locked"],
+            model_source_trust="filename_only",
+            community_preparation_opted_in=True,
+        ),
+    )
+    prepare_calls: list[str] = []
+
+    async def prepare(workflow_id: str) -> dict[str, object]:
+        prepare_calls.append(workflow_id)
+        return {"status": "ready"}
+
+    class Library:
+        def workflow_summary(self, package: WorkflowPackage) -> dict[str, object]:
+            return {"id": package.metadata.id, "name": package.metadata.name}
+
+    orchestrator = WorkflowImportOrchestrator(
+        imported_package_store=FakePackageStore(package),
+        workflow_library_service=Library(),
+        model_availability_service=FakeAvailabilityService(),
+        log_store=LogStore(),
+        post_import_preparer=prepare,
+    )
+
+    orchestrator.import_workflow_archive(b"archive")
+    await asyncio.sleep(0)
+
+    assert prepare_calls == ["local__future_core_workflow__0.1.0"]
 
 
 def test_pending_import_session_stays_alive_during_active_download(tmp_path) -> None:

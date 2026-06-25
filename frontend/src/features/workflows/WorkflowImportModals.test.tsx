@@ -4,14 +4,10 @@ import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import type { RequiredModelAvailability, WorkflowImportResponse } from "../../lib/api/noofyApi";
-import { openExternalUrl } from "../../lib/openExternalUrl";
-import { RequiredCustomNodesModal, RequiredModelsModal } from "./WorkflowImportModals";
+import { RequiredCustomNodesModal, RequiredModelsModal, WorkflowImportDialogs } from "./WorkflowImportModals";
+import type { WorkflowImportFlowController } from "./useWorkflowImportFlow";
 
 const modelsCss = readFileSync(resolve(process.cwd(), "src/styles/models.css"), "utf8");
-
-vi.mock("../../lib/openExternalUrl", () => ({
-  openExternalUrl: vi.fn(),
-}));
 
 const missingModel = {
   requirement_id: "vae/flux2-vae.safetensors",
@@ -112,6 +108,69 @@ function renderImportModal(result: WorkflowImportResponse) {
     />,
   );
 }
+
+function renderImportDialogs(pendingImport: WorkflowImportResponse) {
+  const flow: WorkflowImportFlowController = {
+    state: {
+      importing: false,
+      downloadingModels: false,
+      downloadJob: null,
+      verificationJob: null,
+      pendingImport,
+      importResult: null,
+      importError: null,
+    },
+    startWorkflowImport: async () => undefined,
+    failImport: vi.fn(),
+    downloadMissingModels: async () => undefined,
+    cancelModelDownload: async () => undefined,
+    continueImport: async () => undefined,
+    duplicateImport: async () => undefined,
+    resolveCustomNodesFromUrls: async () => undefined,
+    approveCustomNodeCandidate: async () => undefined,
+    markWorkflowHasNoCustomNodes: async () => undefined,
+    readyImportAction: async () => undefined,
+    cancelImport: async () => undefined,
+    dismissImportResult: vi.fn(),
+    dismissImportError: vi.fn(),
+  };
+  return render(
+    <WorkflowImportDialogs
+      importFlow={flow}
+      onViewModels={vi.fn()}
+      onOpenEngineSettings={vi.fn()}
+    />,
+  );
+}
+
+describe("WorkflowImportDialogs", () => {
+  it("shows model remediation before workflow-level engine-node remediation while import is staged", () => {
+    renderImportDialogs({
+      ...importResult,
+      status: "engine_unrecognized_nodes",
+      custom_node_resolution: {
+        status: "engine_unrecognized_nodes",
+        mode: "manual_url",
+        user_facing_message: "This workflow uses nodes that the current engine does not recognize.",
+        missing_custom_node: null,
+        package_id: null,
+        unresolved_node_types: ["FutureCoreNode"],
+        ambiguous_node_types: [],
+        automatic_resolution_failures: [],
+        failed_custom_nodes: [],
+        candidate: null,
+        github_url_fields: [{ node_type: "FutureCoreNode", label: "FutureCoreNode" }],
+        can_provide_github_urls: true,
+        can_mark_no_custom_nodes: false,
+        update_guidance: "This can also happen if your managed ComfyUI engine is too old.",
+        developer_details: {},
+      },
+    });
+
+    expect(screen.getByRole("button", { name: "Download Missing Models" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "This workflow uses nodes that the current engine does not recognize." })).not.toBeInTheDocument();
+  });
+});
 
 describe("RequiredModelsModal", () => {
   it("shows the precise destination-folder model type", () => {
@@ -498,24 +557,28 @@ describe("RequiredCustomNodesModal", () => {
       can_provide_github_urls: true,
       can_mark_no_custom_nodes: false,
       update_guidance: null,
-      developer_details: {},
+      developer_details: {
+        reason: "github_search_no_candidate",
+        missing_node_types: ["MissingSampler", "SharedNode"],
+      },
     },
   } satisfies WorkflowImportResponse;
 
   it("groups node types under one repository and submits one GitHub URL for all of them", () => {
     const onResolveUrls = vi.fn();
+    const onOpenEngineSettings = vi.fn();
     const { container } = render(
       <RequiredCustomNodesModal
         importResult={customNodeImport}
         busy={false}
         onResolveUrls={onResolveUrls}
-        onApproveCandidate={vi.fn()}
-        onNoCustomNodes={vi.fn()}
+        onOpenEngineSettings={onOpenEngineSettings}
         onCancel={vi.fn()}
       />,
     );
 
-    expect(screen.getByRole("heading", { name: "Add the missing custom node" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "This workflow uses nodes that the current engine does not recognize." })).toBeInTheDocument();
+    expect(screen.getByText("This can also happen if your managed ComfyUI engine is too old. You can update the engine in Settings, then retry.")).toBeInTheDocument();
     expect(screen.getByText("comfyui-missing")).toBeInTheDocument();
     expect(screen.getByText("Nodes used by this workflow")).toBeInTheDocument();
     expect(screen.getByText("MissingSampler")).toBeInTheDocument();
@@ -523,49 +586,40 @@ describe("RequiredCustomNodesModal", () => {
     expect(screen.getByText(/Only continue with a repository you trust/)).toBeInTheDocument();
     expect(container.querySelectorAll(".custom-node-row")).toHaveLength(1);
     expect(container.querySelector(".notice--warning")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Update engine in Settings" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Show details" })).toBeInTheDocument();
 
     const inputs = screen.getAllByPlaceholderText("https://github.com/owner/repository");
     expect(inputs).toHaveLength(1);
     fireEvent.change(inputs[0], { target: { value: "https://github.com/example/missing" } });
-    fireEvent.click(screen.getByRole("button", { name: "Use GitHub URL" }));
+    fireEvent.click(screen.getByRole("button", { name: "Provide GitHub URL" }));
 
     expect(onResolveUrls).toHaveBeenCalledWith({
       MissingSampler: "https://github.com/example/missing",
       SharedNode: "https://github.com/example/missing",
     });
+
+    fireEvent.click(screen.getByRole("button", { name: "Update engine in Settings" }));
+    expect(onOpenEngineSettings).toHaveBeenCalledTimes(1);
   });
 
-  it("shows update guidance when the user says the workflow has no custom nodes", () => {
-    const onNoCustomNodes = vi.fn();
+  it("shows details without exposing them as the primary message", () => {
     render(
       <RequiredCustomNodesModal
-        importResult={{
-          ...customNodeImport,
-          status: "needs_comfyui_update",
-          custom_node_resolution: {
-            ...customNodeImport.custom_node_resolution,
-            status: "needs_comfyui_update",
-            user_facing_message: "Update managed ComfyUI, then retry.",
-            update_guidance: "Update managed ComfyUI from Settings to a newer version, then retry preparation.",
-          },
-        }}
+        importResult={customNodeImport}
         busy={false}
         onResolveUrls={vi.fn()}
-        onApproveCandidate={vi.fn()}
-        onNoCustomNodes={onNoCustomNodes}
+        onOpenEngineSettings={vi.fn()}
         onCancel={vi.fn()}
       />,
     );
 
-    expect(screen.getByRole("heading", { name: "Update ComfyUI to continue" })).toBeInTheDocument();
-    expect(screen.getByText("Update managed ComfyUI from Settings to a newer version, then retry preparation.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Use GitHub URL" })).toBeDisabled();
-    fireEvent.click(screen.getByRole("button", { name: "Check after ComfyUI update" }));
-    expect(onNoCustomNodes).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/github_search_no_candidate/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Show details" }));
+    expect(screen.getByText(/github_search_no_candidate/)).toBeInTheDocument();
   });
 
-  it("shows a medium-confidence GitHub candidate and lets the user approve or enter another URL", () => {
-    const onApproveCandidate = vi.fn();
+  it("keeps candidate details secondary and does not show approval actions", () => {
     render(
       <RequiredCustomNodesModal
         importResult={{
@@ -589,23 +643,15 @@ describe("RequiredCustomNodesModal", () => {
         }}
         busy={false}
         onResolveUrls={vi.fn()}
-        onApproveCandidate={onApproveCandidate}
-        onNoCustomNodes={vi.fn()}
+        onOpenEngineSettings={vi.fn()}
         onCancel={vi.fn()}
       />,
     );
 
-    expect(screen.getByRole("heading", { name: "Add the missing custom node" })).toBeInTheDocument();
-    expect(screen.getByText("example/ComfyUI-Missing")).toBeInTheDocument();
-    expect(screen.queryByText("NODE_CLASS_MAPPINGS found in Python source")).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Open Repository" }));
-    expect(openExternalUrl).toHaveBeenCalledWith("https://github.com/example/ComfyUI-Missing");
-
-    fireEvent.click(screen.getByRole("button", { name: "Use this repo" }));
-    expect(onApproveCandidate).toHaveBeenCalledWith("candidate-1");
-
-    fireEvent.click(screen.getByRole("button", { name: "Enter another GitHub URL manually" }));
-    expect(screen.getByRole("button", { name: "Use GitHub URL" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "This workflow uses nodes that the current engine does not recognize." })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Use this repo" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open Repository" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Provide GitHub URL" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Update engine in Settings" })).toBeInTheDocument();
   });
 });

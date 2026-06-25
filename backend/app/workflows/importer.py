@@ -25,10 +25,6 @@ from app.archive_safety import (
 )
 from app.core.config import settings
 from app.diagnostics import DiagnosticsSink
-from app.runtime.dependencies.custom_nodes import (
-    core_node_manifest_catalog_for_runtime_profiles,
-    load_core_node_manifest_catalog,
-)
 from app.runtime.dependencies.isolation import CapsuleLock, HardwareObservations, ModelLock, TrustLevel
 from app.runtime.profiles import RuntimeProfileCatalog
 from app.runtime.node_registry import (
@@ -371,6 +367,7 @@ class ImportedWorkflowPackageStore:
         source_resolution = _source_resolution_details(package)
         if not source_resolution:
             return package
+        engine_resolution = source_resolution.get("status") == "engine_unrecognized_nodes"
         unresolved_node_types = [
             item for item in source_resolution.get("unresolved_node_types", [])
             if isinstance(item, str)
@@ -450,10 +447,26 @@ class ImportedWorkflowPackageStore:
 
         updated = package.model_copy(update={"custom_nodes": list(records_by_id.values())})
         if still_unresolved or failed:
+            retryable_node_types = sorted(
+                set(still_unresolved)
+                | {
+                    item["node_type"]
+                    for item in failed
+                    if isinstance(item.get("node_type"), str)
+                }
+            )
+            if engine_resolution:
+                return _engine_unrecognized_nodes_resolution(
+                    updated,
+                    reason="user_github_url_resolution_failed",
+                    unresolved_node_types=retryable_node_types,
+                    resolved_custom_nodes=resolved_reports,
+                    failed_custom_nodes=failed,
+                )
             return _missing_raw_custom_nodes(
                 updated,
                 reason="user_github_url_resolution_failed",
-                unresolved_node_types=still_unresolved,
+                unresolved_node_types=retryable_node_types,
                 ambiguous_node_types=[],
                 resolved_custom_nodes=resolved_reports,
                 failed_custom_nodes=failed,
@@ -476,6 +489,259 @@ class ImportedWorkflowPackageStore:
             updated,
             allow_unverified_community_preparation=allow_unverified_community_preparation,
         )
+
+    def resolve_missing_engine_nodes_automatically(
+        self,
+        package: WorkflowPackage,
+        *,
+        missing_node_types: list[str],
+        allow_unverified_community_preparation: bool,
+    ) -> WorkflowPackage:
+        node_types = sorted(
+            {
+                node_type
+                for node_type in missing_node_types
+                if isinstance(node_type, str) and node_type.strip()
+            }
+        )
+        if not node_types:
+            return package
+        package = _engine_unrecognized_nodes_resolution(
+            package,
+            reason="engine_unrecognized_node_types",
+            unresolved_node_types=node_types,
+        )
+        if (
+            package.source_policy is not None
+            and not package.source_policy.automatic_preparation_allowed
+        ):
+            return _engine_unrecognized_nodes_resolution(
+                package,
+                reason="source_policy_blocks_github_resolution",
+                unresolved_node_types=node_types,
+                automatic_resolution_failures=[
+                    "This package policy does not allow automatic community source resolution."
+                ],
+            )
+
+        declared_attempt = self._with_resolved_community_sources(
+            package,
+            allow_unverified_community_preparation=allow_unverified_community_preparation,
+            allow_missing_status=True,
+        )
+        declared_source_resolution = _source_resolution_details(declared_attempt)
+        if (
+            isinstance(declared_source_resolution, dict)
+            and declared_source_resolution.get("status") == "resolved"
+            and any(
+                record.included and not set(record.node_types).isdisjoint(node_types)
+                for record in declared_attempt.custom_nodes
+            )
+        ):
+            return _package_with_engine_auto_resolution_attempt(
+                declared_attempt,
+                node_types=node_types,
+                method="declared_source",
+                resolved_custom_nodes=[
+                    item
+                    for item in declared_source_resolution.get(
+                        "resolved_custom_nodes", []
+                    )
+                    if isinstance(item, dict)
+                ],
+            )
+
+        registry_package, registry_reports = self._package_with_registry_records_for_node_types(
+            package,
+            node_types=node_types,
+        )
+        if registry_package is not None:
+            resolved = self._with_resolved_community_sources(
+                registry_package,
+                allow_unverified_community_preparation=allow_unverified_community_preparation,
+                allow_missing_status=True,
+            )
+            return _package_with_engine_auto_resolution_attempt(
+                resolved,
+                node_types=node_types,
+                method="registry",
+                resolved_custom_nodes=registry_reports,
+            )
+
+        if not _source_policy_allows_github_custom_node_resolution(package.source_policy):
+            return _engine_unrecognized_nodes_resolution(
+                package,
+                reason="source_policy_blocks_github_resolution",
+                unresolved_node_types=node_types,
+                automatic_resolution_failures=[
+                    "This package policy only allows verified or Noofy-controlled custom-node sources."
+                ],
+            )
+
+        target = _github_search_target_for_package(package)
+        if target is None:
+            return _engine_unrecognized_nodes_resolution(
+                package,
+                reason="github_search_no_target",
+                unresolved_node_types=node_types,
+                automatic_resolution_failures=[
+                    "Noofy could not build a reliable search query for these nodes."
+                ],
+            )
+        candidates, search_failures = self._github_custom_node_candidates(target)
+        eligible = [
+            candidate
+            for candidate in candidates
+            if _github_candidate_auto_installable(candidate)
+        ]
+        if len(eligible) != 1:
+            reason = (
+                "github_search_ambiguous_candidate"
+                if len(eligible) > 1
+                else "github_search_no_candidate"
+            )
+            failures = search_failures or [
+                "Noofy searched package names and node types but did not find exactly one reliable candidate."
+            ]
+            if candidates and not eligible:
+                failures = [
+                    "Noofy found search results, but none had enough ComfyUI evidence for automatic installation."
+                ]
+            return _engine_unrecognized_nodes_resolution(
+                package,
+                reason=reason,
+                unresolved_node_types=node_types,
+                automatic_resolution_failures=failures,
+                candidate=(
+                    _github_candidate_payload(candidates[0], include_source=False)
+                    if candidates
+                    else None
+                ),
+            )
+
+        best = eligible[0]
+        package_id = _package_id_for_github_source(best.source, fallback=best.repo)
+        updated = self._package_with_candidate_source(
+            package,
+            package_id=package_id,
+            node_types=list(target.node_types or tuple(node_types)),
+            source=best.source,
+            resolution_method="github_search_auto",
+        )
+        resolved = self._with_resolved_community_sources(
+            updated,
+            allow_unverified_community_preparation=allow_unverified_community_preparation,
+            allow_missing_status=True,
+        )
+        self.log_store.add(
+            "info",
+            "Automatically staged workflow node source from GitHub search",
+            "workflow.import",
+            workflow_id=package.metadata.id,
+            details={
+                "candidate_id": best.candidate_id,
+                "repo": f"{best.owner}/{best.repo}",
+                "node_types": node_types,
+                "confidence": best.confidence,
+                "evidence_score": best.evidence_score,
+            },
+        )
+        resolved_source_resolution = _source_resolution_details(resolved)
+        resolved_custom_nodes = (
+            resolved_source_resolution.get("resolved_custom_nodes", [])
+            if isinstance(resolved_source_resolution, dict)
+            else []
+        )
+        first_resolved = (
+            resolved_custom_nodes[0]
+            if resolved_custom_nodes and isinstance(resolved_custom_nodes[0], dict)
+            else {}
+        )
+        return _package_with_engine_auto_resolution_attempt(
+            resolved,
+            node_types=node_types,
+            method="github_search",
+            resolved_custom_nodes=[
+                {
+                    "package_id": package_id,
+                    "resolution_method": "github_search_auto",
+                    "source_ref": best.source.source_ref,
+                    "source_cache_ref": first_resolved.get("source_cache_ref"),
+                    "source_repo_url": best.source.source_repo_url,
+                    "confidence": best.confidence,
+                }
+            ],
+        )
+
+    def with_engine_unrecognized_nodes(
+        self,
+        package: WorkflowPackage,
+        *,
+        missing_node_types: list[str],
+        reason: str,
+        automatic_resolution_failures: list[str] | None = None,
+    ) -> WorkflowPackage:
+        return _engine_unrecognized_nodes_resolution(
+            package,
+            reason=reason,
+            unresolved_node_types=missing_node_types,
+            automatic_resolution_failures=automatic_resolution_failures,
+        )
+
+    def _package_with_registry_records_for_node_types(
+        self,
+        package: WorkflowPackage,
+        *,
+        node_types: list[str],
+    ) -> tuple[WorkflowPackage | None, list[dict[str, object]]]:
+        if self.node_registry_resolver is None:
+            return None, []
+        records_by_id = {record.id: record for record in package.custom_nodes}
+        node_types_by_package_id: dict[str, set[str]] = {
+            record.id: set(record.node_types) for record in package.custom_nodes
+        }
+        resolved_reports: list[dict[str, object]] = []
+        for node_type in node_types:
+            if any(
+                node_type in package_node_types
+                for package_node_types in node_types_by_package_id.values()
+            ):
+                continue
+            try:
+                entry, method = self.node_registry_resolver.registry_entry_for_node_types(
+                    [node_type]
+                )
+            except NodeRegistryResolutionError:
+                return None, []
+            node_types_by_package_id.setdefault(entry.package_id, set()).add(node_type)
+            resolved_reports.append(
+                {
+                    "node_type": node_type,
+                    "package_id": entry.package_id,
+                    "resolution_method": method,
+                }
+            )
+        if not resolved_reports:
+            return None, []
+        for package_id, package_node_types in node_types_by_package_id.items():
+            existing = records_by_id.get(package_id)
+            if existing is not None:
+                records_by_id[package_id] = existing.model_copy(
+                    update={
+                        "node_types": sorted(
+                            set(existing.node_types) | package_node_types
+                        )
+                    }
+                )
+                continue
+            records_by_id[package_id] = WorkflowCustomNodeRecord(
+                id=package_id,
+                folder_name=package_id,
+                source=f"registry_metadata:{package_id}",
+                included=False,
+                node_types=sorted(package_node_types),
+            )
+        return package.model_copy(update={"custom_nodes": list(records_by_id.values())}), resolved_reports
 
     def resolve_custom_nodes_from_approved_candidate(
         self,
@@ -565,6 +831,63 @@ class ImportedWorkflowPackageStore:
             },
         )
 
+    def persist_custom_node_resolution(self, package: WorkflowPackage) -> WorkflowPackage:
+        package_dir = self.package_dir(package)
+        package_file = package_dir / "package.json"
+        capsule_file = package_dir / "capsule.lock.json"
+        assert_path_within(
+            self.root_dir,
+            package_file,
+            purpose="persist workflow node resolution",
+        )
+        assert_path_within(
+            self.root_dir,
+            capsule_file,
+            purpose="persist workflow node resolution capsule",
+        )
+
+        package_payload = package.model_dump(mode="json", exclude_none=True)
+        package_payload.pop("inputs", None)
+        package_payload.pop("outputs", None)
+        package_payload.pop("dashboard", None)
+        try:
+            capsule_lock = self._build_capsule_lock(package)
+        except ImportCapsuleLockError as exc:
+            if not isinstance(exc.__cause__, RuntimeProfileSelectionError):
+                raise NoofyImportError(str(exc)) from exc
+            capsule_lock = None
+
+        package_tmp = package_file.with_suffix(f".json.{uuid4().hex}.tmp")
+        capsule_tmp = capsule_file.with_suffix(f".json.{uuid4().hex}.tmp")
+        try:
+            package_tmp.write_text(
+                json.dumps(package_payload, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+            if capsule_lock is not None:
+                capsule_tmp.write_text(
+                    capsule_lock.model_dump_json(indent=2),
+                    encoding="utf-8",
+                )
+            package_tmp.replace(package_file)
+            if capsule_lock is not None:
+                capsule_tmp.replace(capsule_file)
+        finally:
+            package_tmp.unlink(missing_ok=True)
+            capsule_tmp.unlink(missing_ok=True)
+        self.log_store.add(
+            "info",
+            "Persisted workflow node resolution metadata",
+            "workflow.import",
+            workflow_id=package.metadata.id,
+            details={
+                "custom_node_count": len(package.custom_nodes),
+                "capsule_lock_updated": capsule_lock is not None,
+                "source_resolution": _source_resolution_details(package) or {},
+            },
+        )
+        return package
+
     def _with_automatic_custom_node_resolution(
         self,
         package: WorkflowPackage,
@@ -622,8 +945,13 @@ class ImportedWorkflowPackageStore:
             )
 
         candidates = sorted(candidates, key=_github_candidate_sort_key, reverse=True)
-        best = candidates[0]
-        if best.confidence == "high":
+        eligible = [
+            candidate
+            for candidate in candidates
+            if _github_candidate_auto_installable(candidate)
+        ]
+        if len(eligible) == 1:
+            best = eligible[0]
             package_id = _package_id_for_github_source(best.source, fallback=best.repo)
             updated = self._package_with_candidate_source(
                 package,
@@ -646,23 +974,25 @@ class ImportedWorkflowPackageStore:
                     "candidate_id": best.candidate_id,
                     "repo": f"{best.owner}/{best.repo}",
                     "node_types": list(target.node_types),
+                    "confidence": best.confidence,
                     "evidence_score": best.evidence_score,
                 },
             )
             return resolved
 
-        if best.confidence == "medium":
+        if len(eligible) > 1:
             return _missing_custom_node_resolution(
                 package,
-                reason="github_search_needs_user_approval",
+                reason="github_search_ambiguous_candidate",
                 unresolved_node_types=list(target.node_types),
                 missing_package_id=target.package_id,
-                candidate=_github_candidate_payload(best, include_source=True),
+                candidate=_github_candidate_payload(eligible[0], include_source=True),
                 automatic_resolution_failures=[
-                    "Noofy found a likely repository, but the match is not strong enough for silent install."
+                    "Noofy found more than one reliable candidate and did not choose automatically."
                 ],
             )
 
+        best = candidates[0]
         return _missing_custom_node_resolution(
             package,
             reason="github_search_low_confidence",
@@ -1024,159 +1354,29 @@ class ImportedWorkflowPackageStore:
         if raw_details is None:
             return package
 
-        core_node_types = self._selected_core_runtime_node_types()
         detected_node_types = _raw_comfyui_required_node_types(package)
-        missing_node_types = sorted(
-            node_type
-            for node_type in detected_node_types
-            if node_type not in core_node_types
-        )
         raw_details = {
             **raw_details,
             "executable_node_types": sorted(detected_node_types),
-            "core_node_count": len(core_node_types),
-            "required_custom_node_types": missing_node_types,
         }
         package = _package_with_raw_comfyui_details(package, raw_details)
-        if not missing_node_types:
-            return _package_with_raw_custom_node_detection(
-                package,
-                {
-                    "status": "core_only",
-                    "required_custom_node_types": [],
-                },
-            )
-
-        if self.node_registry_resolver is None:
-            self.log_store.add(
-                "warning",
-                "Raw ComfyUI JSON custom-node registry unavailable",
-                "workflow.import",
-                workflow_id=package.metadata.id,
-                details={"unresolved_node_types": missing_node_types},
-            )
-            return _unsupported_raw_custom_nodes(
-                package,
-                reason="custom_node_registry_not_configured",
-                unresolved_node_types=missing_node_types,
-            )
-
-        records_by_id = {record.id: record for record in package.custom_nodes}
-        node_types_by_package_id: dict[str, set[str]] = {
-            record.id: set(record.node_types) for record in package.custom_nodes
-        }
-        resolved_reports: list[dict[str, object]] = []
-        unresolved_node_types: list[str] = []
-        ambiguous_node_types: list[dict[str, object]] = []
-        for node_type in missing_node_types:
-            if any(node_type in node_types for node_types in node_types_by_package_id.values()):
-                continue
-            try:
-                entry, method = self.node_registry_resolver.registry_entry_for_node_types(
-                    [node_type]
-                )
-            except NodeRegistryResolutionError as exc:
-                if exc.code is NodeRegistryResolutionErrorCode.AMBIGUOUS_NODE_TYPE:
-                    ambiguous_node_types.append(
-                        {
-                            "node_type": node_type,
-                            "package_ids": exc.developer_details.get(
-                                "package_ids", []
-                            ),
-                        }
-                    )
-                else:
-                    unresolved_node_types.append(node_type)
-                continue
-            node_types_by_package_id.setdefault(entry.package_id, set()).add(node_type)
-            resolved_reports.append(
-                {
-                    "node_type": node_type,
-                    "package_id": entry.package_id,
-                    "resolution_method": method,
-                }
-            )
-
-        if unresolved_node_types or ambiguous_node_types:
-            self.log_store.add(
-                "warning",
-                "Raw ComfyUI JSON custom-node requirements could not be resolved",
-                "workflow.import",
-                workflow_id=package.metadata.id,
-                details={
-                    "unresolved_node_types": unresolved_node_types,
-                    "ambiguous_node_types": ambiguous_node_types,
-                    "resolved_custom_nodes": resolved_reports,
-                },
-            )
-            return _unsupported_raw_custom_nodes(
-                package,
-                reason="unresolved_custom_node_types",
-                unresolved_node_types=unresolved_node_types,
-                ambiguous_node_types=ambiguous_node_types,
-                resolved_custom_nodes=resolved_reports,
-            )
-
-        for package_id, node_types in node_types_by_package_id.items():
-            existing = records_by_id.get(package_id)
-            if existing is not None:
-                records_by_id[package_id] = existing.model_copy(
-                    update={"node_types": sorted(set(existing.node_types) | node_types)}
-                )
-                continue
-            records_by_id[package_id] = WorkflowCustomNodeRecord(
-                id=package_id,
-                folder_name=package_id,
-                source=f"registry_metadata:{package_id}",
-                included=False,
-                node_types=sorted(node_types),
-            )
-
-        updated_package = package.model_copy(
-            update={"custom_nodes": list(records_by_id.values())}
-        )
         self.log_store.add(
             "info",
-            "Raw ComfyUI JSON custom-node requirements detected",
+            "Raw ComfyUI JSON executable node types recorded",
             "workflow.import",
             workflow_id=package.metadata.id,
             details={
-                "required_custom_node_types": missing_node_types,
-                "custom_node_package_ids": sorted(node_types_by_package_id),
+                "executable_node_types": sorted(detected_node_types),
                 "source_format": raw_details.get("source_format"),
             },
         )
         return _package_with_raw_custom_node_detection(
-            updated_package,
+            package,
             {
-                "status": "resolved_to_registry_packages",
-                "required_custom_node_types": missing_node_types,
-                "resolved_custom_nodes": resolved_reports,
+                "status": "engine_verification_pending",
+                "executable_node_types": sorted(detected_node_types),
             },
         )
-
-    def _selected_core_runtime_node_types(self) -> set[str]:
-        catalog = (
-            self.runtime_profile_catalog_provider()
-            if self.runtime_profile_catalog_provider is not None
-            else None
-        )
-        if catalog is None:
-            from app.runtime.profiles import load_runtime_profile_catalog
-            from app.runtime.profiles.profiles import DEFAULT_RUNTIME_PROFILE_CATALOG_PATH
-
-            catalog = load_runtime_profile_catalog(DEFAULT_RUNTIME_PROFILE_CATALOG_PATH)
-        core_catalog = core_node_manifest_catalog_for_runtime_profiles(
-            load_core_node_manifest_catalog(),
-            catalog,
-        )
-        profile, variant = _select_import_runtime_profile(catalog.profiles)
-        manifest = core_catalog.get(
-            runtime_profile_id=profile.runtime_profile_id,
-            runtime_profile_variant_id=variant.runtime_profile_variant_id,
-            runtime_profile_manifest_hash=profile.runtime_profile_manifest_hash,
-        )
-        return set(manifest.node_types)
 
     def _with_resolved_community_sources(
         self,
@@ -2225,6 +2425,102 @@ def _missing_custom_node_resolution(
         message=message,
         source_resolution=source_resolution,
     )
+
+
+ENGINE_UNRECOGNIZED_NODES_MESSAGE = (
+    "This workflow uses nodes that the current engine does not recognize."
+)
+ENGINE_UPDATE_GUIDANCE = (
+    "This can also happen if your managed ComfyUI engine is too old. "
+    "You can update the engine in Settings, then retry."
+)
+
+
+def _engine_unrecognized_nodes_resolution(
+    package: WorkflowPackage,
+    *,
+    reason: str,
+    unresolved_node_types: list[str],
+    ambiguous_node_types: list[dict[str, object]] | None = None,
+    resolved_custom_nodes: list[dict[str, object]] | None = None,
+    failed_custom_nodes: list[dict[str, object]] | None = None,
+    automatic_resolution_failures: list[str] | None = None,
+    candidate: dict[str, object] | None = None,
+) -> WorkflowPackage:
+    node_types = sorted(set(unresolved_node_types))
+    source_resolution: dict[str, object] = {
+        "status": "engine_unrecognized_nodes",
+        "mode": "manual_url",
+        "reason": reason,
+        "unresolved_node_types": node_types,
+        "ambiguous_node_types": ambiguous_node_types or [],
+        "resolved_custom_nodes": resolved_custom_nodes or [],
+        "failed_custom_nodes": failed_custom_nodes or [],
+        "automatic_resolution_failures": automatic_resolution_failures or [],
+        "update_guidance": ENGINE_UPDATE_GUIDANCE,
+    }
+    if candidate is not None:
+        source_resolution["candidate"] = candidate
+    if _raw_comfyui_details(package) is not None:
+        package = _package_with_raw_custom_node_detection(
+            package,
+            {
+                "status": "engine_unrecognized_nodes",
+                **source_resolution,
+            },
+        )
+    return _package_with_import_resolution_status(
+        package,
+        status="engine_unrecognized_nodes",
+        message=ENGINE_UNRECOGNIZED_NODES_MESSAGE,
+        source_resolution=source_resolution,
+    )
+
+
+def _package_with_engine_auto_resolution_attempt(
+    package: WorkflowPackage,
+    *,
+    node_types: list[str],
+    method: str,
+    resolved_custom_nodes: list[dict[str, object]],
+) -> WorkflowPackage:
+    import_metadata = package.import_metadata
+    if import_metadata is None:
+        return package
+    developer_details = dict(import_metadata.developer_details)
+    developer_details["engine_node_auto_resolution"] = {
+        "status": "attempted",
+        "method": method,
+        "node_types": sorted(set(node_types)),
+        "resolved_custom_nodes": resolved_custom_nodes,
+    }
+    return package.model_copy(
+        update={
+            "import_metadata": import_metadata.model_copy(
+                update={"developer_details": developer_details}
+            )
+        }
+    )
+
+
+def _github_candidate_auto_installable(candidate: GitHubCustomNodeCandidate) -> bool:
+    if candidate.confidence not in {"high", "medium"}:
+        return False
+    if candidate.evidence_score <= 0:
+        return False
+    if _github_candidate_is_generic_core_engine_repo(candidate):
+        return False
+    return True
+
+
+def _github_candidate_is_generic_core_engine_repo(
+    candidate: GitHubCustomNodeCandidate,
+) -> bool:
+    owner = candidate.owner.casefold()
+    repo = candidate.repo.casefold().replace("_", "-")
+    if repo in {"comfyui", "comfyui-frontend"}:
+        return True
+    return owner == "comfyanonymous" and repo == "comfyui"
 
 
 def _package_id_for_github_source(

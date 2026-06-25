@@ -23,7 +23,6 @@ import pytest
 from app.artifacts import ModelVerificationLevel
 from app.diagnostics import LogStore
 from app.gallery import CapturedGalleryOutput, GalleryStore
-from app.runtime.dependencies.custom_nodes import CoreNodeManifest, CoreNodeManifestCatalog
 from app.runtime.node_registry import (
     CustomNodeSourceCache,
     NodeRegistryResolver,
@@ -1925,26 +1924,8 @@ def test_exported_archive_strips_local_model_state_and_source_url_secrets(tmp_pa
 
 def test_raw_json_round_trip_exports_portable_resolved_models_and_custom_nodes(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime_catalog = load_runtime_profile_catalog(Path("app/runtime/profile_catalog.json"))
-    core_catalog = CoreNodeManifestCatalog(
-        manifests=[
-            CoreNodeManifest(
-                runtime_profile_id=profile.runtime_profile_id,
-                runtime_profile_variant_id=variant.runtime_profile_variant_id,
-                runtime_profile_manifest_hash=profile.runtime_profile_manifest_hash,
-                node_types=["VAELoader"],
-            )
-            for profile in runtime_catalog.profiles
-            for variant in profile.variants
-        ]
-    )
-    monkeypatch.setattr(
-        importer_module,
-        "load_core_node_manifest_catalog",
-        lambda: core_catalog,
-    )
     source_root = "custom-node-" + ("a" * 40)
     source_archive = _custom_node_source_archive(source_root)
     source_hash = hashlib.sha256(source_archive).hexdigest()
@@ -1984,6 +1965,11 @@ def test_raw_json_round_trip_exports_portable_resolved_models_and_custom_nodes(
         raw_bytes,
         original_filename="roundtrip.json",
         allow_unverified_community_preparation=True,
+    )
+    preview = first_store.with_engine_unrecognized_nodes(
+        preview,
+        missing_node_types=["RoundTripCustomNode"],
+        reason="engine_unrecognized_node_types",
     )
     resolved_custom_nodes = first_store.resolve_custom_nodes_from_github_urls(
         preview,

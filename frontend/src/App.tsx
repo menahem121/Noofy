@@ -499,6 +499,7 @@ function AppContent() {
         onViewModels={() => {
           void workflowImportFlow.cancelImport().then(() => navigate("models"));
         }}
+        onOpenEngineSettings={() => navigate("settings")}
       />
       {modelReadiness.element}
       {closeDialog ? (

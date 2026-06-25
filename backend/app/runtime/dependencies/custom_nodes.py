@@ -29,11 +29,8 @@ from app.archive_safety import (
 )
 from app.runtime.fingerprints import sha256_fingerprint
 from app.runtime.dependencies.isolation import CapsuleLock, CustomNodeLock, TrustLevel
-from app.runtime.profiles import RuntimeProfileCatalog, RuntimeProfileSelection
 
-CORE_NODE_MANIFEST_SCHEMA_VERSION = "0.1.0"
 CUSTOM_NODE_WORKSPACE_MANIFEST_SCHEMA_VERSION = "0.2.0"
-DEFAULT_CORE_NODE_MANIFEST_PATH = Path(__file__).with_name("core_node_manifest.json")
 CUSTOM_NODE_WORKSPACE_MANIFEST_FILENAME = "noofy-custom-node-workspace-manifest.json"
 MAX_CUSTOM_NODE_FILES = 20_000
 MAX_CUSTOM_NODE_BYTES = 512 * 1024 * 1024
@@ -63,7 +60,6 @@ class CustomNodeMaterializationErrorCode(StrEnum):
     PROTECTED_PATH_SHADOWING = "protected_path_shadowing"
     SYMLINK_ESCAPE = "symlink_escape"
     UNSUPPORTED_FILE_TYPE = "unsupported_file_type"
-    UNKNOWN_NODE_TYPE = "unknown_node_type"
     UNSUPPORTED_SOURCE_KIND = "unsupported_source_kind"
     WORKSPACE_PROMOTION_FAILED = "workspace_promotion_failed"
 
@@ -108,60 +104,6 @@ class CustomNodeMaterializationError(RuntimeError):
             "error_code": code.value,
             "technical_message": message,
         }
-
-
-class CoreNodeManifest(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    schema_version: str = Field(default=CORE_NODE_MANIFEST_SCHEMA_VERSION, min_length=1)
-    runtime_profile_id: str = Field(min_length=1)
-    runtime_profile_variant_id: str = Field(min_length=1)
-    runtime_profile_manifest_hash: str = Field(min_length=1)
-    node_types: list[str] = Field(default_factory=list)
-
-    @field_validator("node_types")
-    @classmethod
-    def _sort_unique_node_types(cls, value: list[str]) -> list[str]:
-        return sorted(set(value))
-
-    @property
-    def manifest_hash(self) -> str:
-        return sha256_fingerprint(
-            {
-                "kind": "core_node_manifest",
-                "schema_version": self.schema_version,
-                "runtime_profile_id": self.runtime_profile_id,
-                "runtime_profile_variant_id": self.runtime_profile_variant_id,
-                "runtime_profile_manifest_hash": self.runtime_profile_manifest_hash,
-                "node_types": self.node_types,
-            }
-        )
-
-
-class CoreNodeManifestCatalog(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    schema_version: str = Field(default=CORE_NODE_MANIFEST_SCHEMA_VERSION, min_length=1)
-    manifests: list[CoreNodeManifest] = Field(default_factory=list)
-
-    def get(
-        self,
-        *,
-        runtime_profile_id: str,
-        runtime_profile_variant_id: str,
-        runtime_profile_manifest_hash: str,
-    ) -> CoreNodeManifest:
-        for manifest in self.manifests:
-            if (
-                manifest.runtime_profile_id == runtime_profile_id
-                and manifest.runtime_profile_variant_id == runtime_profile_variant_id
-                and manifest.runtime_profile_manifest_hash == runtime_profile_manifest_hash
-            ):
-                return manifest
-        raise CustomNodeMaterializationError(
-            CustomNodeMaterializationErrorCode.UNKNOWN_NODE_TYPE,
-            f"No pinned core-node manifest exists for runtime profile variant {runtime_profile_variant_id}.",
-        )
 
 
 class CustomNodeSourceKind(StrEnum):
@@ -214,7 +156,6 @@ class CustomNodeWorkspaceManifest(BaseModel):
     runtime_profile_id: str = Field(min_length=1)
     runtime_profile_variant_id: str = Field(min_length=1)
     runtime_profile_manifest_hash: str = Field(min_length=1)
-    core_node_manifest_hash: str = Field(min_length=1)
     graph_node_types: list[str] = Field(default_factory=list)
     entries: list[CustomNodeWorkspaceEntry] = Field(default_factory=list)
     manifest_hash: str | None = None
@@ -249,34 +190,6 @@ def custom_node_workspace_manifest_hash(manifest: CustomNodeWorkspaceManifest) -
     )
 
 
-def load_core_node_manifest_catalog(path: Path = DEFAULT_CORE_NODE_MANIFEST_PATH) -> CoreNodeManifestCatalog:
-    with path.open("r", encoding="utf-8") as file:
-        return CoreNodeManifestCatalog.model_validate(json.load(file))
-
-
-def core_node_manifest_catalog_for_runtime_profiles(
-    base_catalog: CoreNodeManifestCatalog,
-    runtime_profile_catalog: RuntimeProfileCatalog,
-) -> CoreNodeManifestCatalog:
-    """Rebind the approved core-node allowlist to active local profile hashes."""
-    manifests: list[CoreNodeManifest] = []
-    for manifest in base_catalog.manifests:
-        profile = runtime_profile_catalog.profile_by_id(manifest.runtime_profile_id)
-        if profile is None:
-            manifests.append(manifest)
-            continue
-        manifests.append(
-            manifest.model_copy(
-                update={
-                    "runtime_profile_manifest_hash": (
-                        profile.runtime_profile_manifest_hash
-                    )
-                }
-            )
-        )
-    return base_catalog.model_copy(update={"manifests": manifests})
-
-
 def validate_custom_node_source_relative_paths(relative_paths: list[str]) -> None:
     """Validate archive/source path names before filesystem materialization."""
     path_index = MaterializedPathIndex()
@@ -302,12 +215,10 @@ class CustomNodeWorkspaceMaterializer:
     def __init__(
         self,
         *,
-        core_node_manifest_catalog: CoreNodeManifestCatalog | None = None,
-        runtime_profile_catalog_provider: Callable[[], RuntimeProfileCatalog] | None = None,
+        runtime_profile_catalog_provider: Callable[[], object] | None = None,
         max_files: int = MAX_CUSTOM_NODE_FILES,
         max_bytes: int = MAX_CUSTOM_NODE_BYTES,
     ) -> None:
-        self.core_node_manifest_catalog = core_node_manifest_catalog or load_core_node_manifest_catalog()
         self.runtime_profile_catalog_provider = runtime_profile_catalog_provider
         self.max_files = max_files
         self.max_bytes = max_bytes
@@ -318,25 +229,10 @@ class CustomNodeWorkspaceMaterializer:
         capsule_lock: CapsuleLock,
         source_files_dir: Path | None,
         cached_source_dirs: dict[str, Path] | None = None,
-        profile_selection: RuntimeProfileSelection | None = None,
+        profile_selection: object | None = None,
     ) -> CustomNodeWorkspaceManifest:
-        core_node_manifest_catalog = self.core_node_manifest_catalog
-        if self.runtime_profile_catalog_provider is not None:
-            core_node_manifest_catalog = core_node_manifest_catalog_for_runtime_profiles(
-                core_node_manifest_catalog,
-                self.runtime_profile_catalog_provider(),
-            )
-        core_manifest = core_node_manifest_catalog.get(
-            runtime_profile_id=capsule_lock.runtime.runtime_profile_id,
-            runtime_profile_variant_id=capsule_lock.runtime.runtime_profile_variant_id,
-            runtime_profile_manifest_hash=capsule_lock.runtime.runtime_profile_manifest_hash,
-        )
         graph_node_types = _graph_node_types(source_files_dir)
-        required_custom_nodes = _required_custom_nodes(
-            capsule_lock.custom_nodes,
-            graph_node_types=graph_node_types,
-            core_node_types=set(core_manifest.node_types),
-        )
+        required_custom_nodes = _required_custom_nodes(capsule_lock.custom_nodes)
         if required_custom_nodes and source_files_dir is None:
             raise CustomNodeMaterializationError(
                 CustomNodeMaterializationErrorCode.CUSTOM_NODE_SOURCE_NOT_BUNDLED,
@@ -359,7 +255,6 @@ class CustomNodeWorkspaceMaterializer:
                 runtime_profile_id=capsule_lock.runtime.runtime_profile_id,
                 runtime_profile_variant_id=capsule_lock.runtime.runtime_profile_variant_id,
                 runtime_profile_manifest_hash=capsule_lock.runtime.runtime_profile_manifest_hash,
-                core_node_manifest_hash=core_manifest.manifest_hash,
                 graph_node_types=graph_node_types,
                 entries=entries,
             )
@@ -501,31 +396,12 @@ class CustomNodeWorkspaceMaterializer:
 
 def _required_custom_nodes(
     custom_nodes: list[CustomNodeLock],
-    *,
-    graph_node_types: list[str],
-    core_node_types: set[str],
 ) -> list[CustomNodeLock]:
-    custom_node_type_map: dict[str, CustomNodeLock] = {}
+    required_custom_nodes = sorted(
+        custom_nodes,
+        key=lambda item: (item.package_id, item.source),
+    )
     for custom_node in custom_nodes:
-        for node_type in custom_node.node_types:
-            custom_node_type_map[node_type] = custom_node
-
-    required_by_id: dict[str, CustomNodeLock] = {}
-    for node_type in graph_node_types:
-        if node_type in core_node_types:
-            continue
-        custom_node = custom_node_type_map.get(node_type)
-        if custom_node is None and len(custom_nodes) == 1:
-            custom_node = custom_nodes[0]
-        if custom_node is None:
-            raise CustomNodeMaterializationError(
-                CustomNodeMaterializationErrorCode.UNKNOWN_NODE_TYPE,
-                f"Workflow graph uses unknown non-core node type: {node_type}",
-            )
-        required_by_id[custom_node.package_id] = custom_node
-
-    required_custom_nodes = sorted(required_by_id.values(), key=lambda item: (item.package_id, item.source))
-    for custom_node in required_custom_nodes:
         if _custom_node_source_kind(custom_node) is None:
             raise CustomNodeMaterializationError(
                 CustomNodeMaterializationErrorCode.UNSUPPORTED_SOURCE_KIND,

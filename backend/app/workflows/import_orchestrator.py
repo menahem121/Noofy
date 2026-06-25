@@ -194,7 +194,11 @@ def _custom_node_resolution_log_details(
 def _custom_node_resolution_payload(package: WorkflowPackage) -> dict[str, object] | None:
     status = package.import_metadata.status if package.import_metadata else None
     source_resolution = _source_resolution_details(package)
-    if status not in {"missing_custom_nodes", "needs_comfyui_update"} and not source_resolution:
+    if status not in {
+        "missing_custom_nodes",
+        "needs_comfyui_update",
+        "engine_unrecognized_nodes",
+    } and not source_resolution:
         return None
     mode = source_resolution.get("mode")
     unresolved_node_types = [
@@ -216,7 +220,12 @@ def _custom_node_resolution_payload(package: WorkflowPackage) -> dict[str, objec
     missing_package_id = source_resolution.get("package_id")
     has_unresolved_shape = (
         mode in {"manual_url", "candidate_approval"}
-        or status in {"missing_custom_nodes", "needs_comfyui_update"}
+        or status in {
+            "missing_custom_nodes",
+            "needs_comfyui_update",
+            "engine_unrecognized_nodes",
+        }
+        or source_resolution.get("status") == "engine_unrecognized_nodes"
         or bool(unresolved_node_types)
         or bool(ambiguous_node_types)
         or isinstance(missing_custom_node, dict)
@@ -235,15 +244,23 @@ def _custom_node_resolution_payload(package: WorkflowPackage) -> dict[str, objec
         public_developer_details["candidate"] = public_candidate
     if not fields and not has_unresolved_shape:
         return None
+    resolution_status = source_resolution.get("status")
+    public_status = (
+        resolution_status
+        if resolution_status == "engine_unrecognized_nodes"
+        else status or resolution_status or "missing_custom_nodes"
+    )
     return {
-        "status": status or source_resolution.get("status", "missing_custom_nodes"),
+        "status": public_status,
         "mode": mode or (
-            "manual_url" if status == "missing_custom_nodes" else None
+            "manual_url"
+            if status in {"missing_custom_nodes", "engine_unrecognized_nodes"}
+            else None
         ),
         "user_facing_message": (
             package.import_metadata.user_facing_message
             if package.import_metadata is not None
-            else "Noofy could not find the required custom nodes for this workflow."
+            else "This workflow uses nodes that the current engine does not recognize."
         ),
         "missing_custom_node": missing_custom_node,
         "package_id": missing_package_id,
@@ -257,7 +274,11 @@ def _custom_node_resolution_payload(package: WorkflowPackage) -> dict[str, objec
         "github_url_fields": fields,
         "can_provide_github_urls": bool(fields),
         "can_mark_no_custom_nodes": status == "needs_comfyui_update" and bool(fields),
-        "update_guidance": source_resolution.get("update_guidance"),
+        "update_guidance": source_resolution.get("update_guidance")
+        or (
+            "This can also happen if your managed ComfyUI engine is too old. "
+            "You can update the engine in Settings, then retry."
+        ),
         "developer_details": public_developer_details,
     }
 
@@ -334,11 +355,6 @@ class WorkflowImportOrchestrator:
                 **_raw_comfyui_import_details(preview_package),
             },
         )
-        if _import_needs_custom_node_resolution(preview_package):
-            raise ImportRequiresCustomNodeResolutionError(
-                "This workflow needs custom-node resolution before it can be imported. Use staged import preview.",
-                custom_node_resolution=custom_node_resolution,
-            )
         try:
             package = self.imported_package_store.import_prepared_archive(
                 data,
@@ -402,8 +418,6 @@ class WorkflowImportOrchestrator:
 
     def _schedule_post_import_preparation(self, package: WorkflowPackage) -> None:
         if self.post_import_preparer is None:
-            return
-        if not any(record.included for record in package.custom_nodes):
             return
         if package.source_policy is None or not package.source_policy.automatic_preparation_allowed:
             return
@@ -485,7 +499,6 @@ class WorkflowImportOrchestrator:
         if (
             not package.required_models
             and duplicate_identity is None
-            and not _import_needs_custom_node_resolution(package)
         ):
             self.log_store.add(
                 "info",
@@ -740,10 +753,6 @@ class WorkflowImportOrchestrator:
         pending = self._pending_import_or_raise(import_session_id)
         if self._has_active_import_download(pending):
             raise RuntimeError("Model download is still running. Cancel it or wait for it to finish before continuing.")
-        if _import_needs_custom_node_resolution(pending.package):
-            raise RuntimeError(
-                "Noofy needs custom-node information before importing this workflow."
-            )
         if pending.duplicate_identity is not None and duplicate_action not in {"replace", "copy"}:
             raise DuplicateWorkflowIdentityError(
                 "This workflow is already in Noofy. Choose Replace existing workflow, Import as copy, or Cancel import."

@@ -13,7 +13,6 @@ from collections.abc import Awaitable, Callable
 
 from app.runtime.dependencies.custom_nodes import (
     CustomNodeMaterializationError,
-    CustomNodeMaterializationErrorCode,
 )
 from app.diagnostics import DiagnosticsSink
 from app.runtime.dependencies.dependency_lock import (
@@ -289,11 +288,6 @@ class CapsuleInstaller:
             )
             raise CapsuleInstallError(message, state=state) from exc
         except CustomNodeMaterializationError as exc:
-            status = (
-                InstallStatus.CANNOT_PREPARE_AUTOMATICALLY
-                if exc.code is CustomNodeMaterializationErrorCode.UNKNOWN_NODE_TYPE
-                else InstallStatus.BLOCKED_BY_POLICY
-            )
             self.log_store.add(
                 "error",
                 "Custom-node source preparation failed",
@@ -303,7 +297,7 @@ class CapsuleInstaller:
             )
             state = self._transition(
                 fingerprint,
-                status,
+                InstallStatus.BLOCKED_BY_POLICY,
                 workflow_id,
                 last_error=exc.user_message,
             )

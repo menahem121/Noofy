@@ -19,8 +19,6 @@ from app.engine.service import EngineService
 from app.runtime.capsule_installer import CapsuleInstaller
 from app.runtime.dependencies.custom_nodes import (
     CUSTOM_NODE_WORKSPACE_MANIFEST_FILENAME,
-    CoreNodeManifest,
-    CoreNodeManifestCatalog,
     CustomNodeWorkspaceMaterializer,
 )
 from app.runtime.install_state import InstallStateStore
@@ -463,14 +461,7 @@ def test_raw_comfyui_ui_json_import_ignores_unreferenced_definition_node_types(
         original_filename="custom-ui.json",
     )
 
-    assert {record.id for record in package.custom_nodes} == {
-        "magic-pack",
-    }
-    assert {
-        (record.id, tuple(record.node_types)) for record in package.custom_nodes
-    } == {
-        ("magic-pack", ("MagicSampler",)),
-    }
+    assert package.custom_nodes == []
     assert package.import_metadata is not None
     raw_details = package.import_metadata.developer_details["raw_comfyui_json"]
     assert raw_details["api_node_types"] == ["MagicSampler", "SaveImage"]
@@ -480,12 +471,10 @@ def test_raw_comfyui_ui_json_import_ignores_unreferenced_definition_node_types(
         "SaveImage",
     ]
     assert raw_details["executable_ui_node_types"] == []
-    assert raw_details["custom_node_detection"]["status"] == (
-        "resolved_to_registry_packages"
-    )
-    assert raw_details["custom_node_detection"]["required_custom_node_types"] == [
-        "MagicSampler",
-    ]
+    assert raw_details["custom_node_detection"] == {
+        "status": "engine_verification_pending",
+        "executable_node_types": ["MagicSampler", "SaveImage"],
+    }
 
 
 def test_raw_comfyui_ui_json_import_requires_referenced_definition_node_types(
@@ -542,52 +531,21 @@ def test_raw_comfyui_ui_json_import_requires_referenced_definition_node_types(
         original_filename="custom-ui.json",
     )
 
-    assert [(record.id, record.node_types) for record in package.custom_nodes] == [
-        ("hidden-pack", ["HiddenDefinitionNode"])
-    ]
+    assert package.custom_nodes == []
     assert package.import_metadata is not None
     raw_details = package.import_metadata.developer_details["raw_comfyui_json"]
     assert raw_details["api_node_types"] == ["SaveImage"]
     assert raw_details["executable_ui_node_types"] == ["HiddenDefinitionNode"]
-    assert raw_details["custom_node_detection"]["required_custom_node_types"] == [
-        "HiddenDefinitionNode"
-    ]
+    assert raw_details["custom_node_detection"] == {
+        "status": "engine_verification_pending",
+        "executable_node_types": ["HiddenDefinitionNode", "SaveImage"],
+    }
 
 
-def test_raw_comfyui_json_core_node_comparison_uses_selected_runtime_manifest(
+def test_raw_comfyui_json_unknown_node_is_stored_for_engine_verification(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime_catalog = load_runtime_profile_catalog(Path("app/runtime/profile_catalog.json"))
-    profile, selected_variant = importer_module._select_import_runtime_profile(
-        runtime_catalog.profiles
-    )
-    other_variant = next(
-        variant
-        for variant in profile.variants
-        if variant.runtime_profile_variant_id != selected_variant.runtime_profile_variant_id
-    )
-    core_catalog = CoreNodeManifestCatalog(
-        manifests=[
-            CoreNodeManifest(
-                runtime_profile_id=profile.runtime_profile_id,
-                runtime_profile_variant_id=selected_variant.runtime_profile_variant_id,
-                runtime_profile_manifest_hash=profile.runtime_profile_manifest_hash,
-                node_types=["SaveImage"],
-            ),
-            CoreNodeManifest(
-                runtime_profile_id=profile.runtime_profile_id,
-                runtime_profile_variant_id=other_variant.runtime_profile_variant_id,
-                runtime_profile_manifest_hash=profile.runtime_profile_manifest_hash,
-                node_types=["CrossProfileCoreNode"],
-            ),
-        ]
-    )
-    monkeypatch.setattr(
-        importer_module,
-        "load_core_node_manifest_catalog",
-        lambda: core_catalog,
-    )
     store = ImportedWorkflowPackageStore(
         tmp_path / "packages",
         log_store=LogStore(),
@@ -605,9 +563,13 @@ def test_raw_comfyui_json_core_node_comparison_uses_selected_runtime_manifest(
     )
 
     assert package.import_metadata is not None
-    assert package.import_metadata.status == "missing_custom_nodes"
-    source_resolution = package.import_metadata.developer_details["source_resolution"]
-    assert source_resolution["unresolved_node_types"] == ["CrossProfileCoreNode"]
+    assert package.import_metadata.status != "missing_custom_nodes"
+    assert package.custom_nodes == []
+    raw_details = package.import_metadata.developer_details["raw_comfyui_json"]
+    assert raw_details["custom_node_detection"] == {
+        "status": "engine_verification_pending",
+        "executable_node_types": ["CrossProfileCoreNode"],
+    }
 
 
 def test_raw_comfyui_json_import_resolves_custom_node_source_from_exact_node_type(
@@ -642,9 +604,14 @@ def test_raw_comfyui_json_import_resolves_custom_node_source_from_exact_node_typ
     )
     graph = {"1": {"class_type": "MagicSampler", "inputs": {}}}
 
-    package = store.import_archive(
+    preview = store.preview_archive(
         json.dumps(graph).encode("utf-8"),
         original_filename="custom-api.json",
+        allow_unverified_community_preparation=True,
+    )
+    package = store.resolve_missing_engine_nodes_automatically(
+        preview,
+        missing_node_types=["MagicSampler"],
         allow_unverified_community_preparation=True,
     )
 
@@ -666,6 +633,10 @@ def test_raw_comfyui_json_import_resolves_custom_node_source_from_exact_node_typ
 def test_raw_comfyui_json_import_marks_unknown_custom_node_types_missing(
     tmp_path: Path,
 ) -> None:
+    class NoCandidateResolver:
+        def find_candidates(self, target: importer_module.GitHubCustomNodeSearchTarget):
+            return []
+
     store = ImportedWorkflowPackageStore(
         tmp_path / "packages",
         log_store=LogStore(),
@@ -673,18 +644,25 @@ def test_raw_comfyui_json_import_marks_unknown_custom_node_types_missing(
             registry=NoofyNodeRegistry(registry_id="empty-test-registry"),
             log_store=LogStore(),
         ),
+        custom_node_github_resolver=NoCandidateResolver(),
     )
     graph = {"1": {"class_type": "NotInRegistryNode", "inputs": {}}}
 
-    package = store.preview_archive(
+    preview = store.preview_archive(
         json.dumps(graph).encode("utf-8"),
         original_filename="unknown-custom-node.json",
+        allow_unverified_community_preparation=True,
+    )
+    package = store.resolve_missing_engine_nodes_automatically(
+        preview,
+        missing_node_types=["NotInRegistryNode"],
+        allow_unverified_community_preparation=True,
     )
 
     assert package.import_metadata is not None
-    assert package.import_metadata.status == "missing_custom_nodes"
+    assert package.import_metadata.status == "engine_unrecognized_nodes"
     source_resolution = package.import_metadata.developer_details["source_resolution"]
-    assert source_resolution["reason"] == "unresolved_custom_node_types"
+    assert source_resolution["reason"] == "github_search_no_candidate"
     assert source_resolution["unresolved_node_types"] == ["NotInRegistryNode"]
     assert package.identity is not None
     assert package.identity.trust_level == "quarantined_community"
@@ -693,6 +671,19 @@ def test_raw_comfyui_json_import_marks_unknown_custom_node_types_missing(
 def test_raw_comfyui_json_import_marks_ambiguous_custom_node_types_missing(
     tmp_path: Path,
 ) -> None:
+    source = NodeRegistrySource(
+        source_kind=NodeRegistrySourceKind.GIT_ZIP_ARCHIVE,
+        source_url="https://codeload.github.com/example/first-pack/zip/" + "a" * 40,
+        source_ref="a" * 40,
+        source_content_hash="sha256:" + "a" * 64,
+    )
+    resolver = FakeGitHubCustomNodeSearchResolver(
+        source,
+        [
+            _github_candidate(source, candidate_id="first", repo="first-pack"),
+            _github_candidate(source, candidate_id="second", repo="second-pack"),
+        ],
+    )
     store = ImportedWorkflowPackageStore(
         tmp_path / "packages",
         log_store=LogStore(),
@@ -706,21 +697,26 @@ def test_raw_comfyui_json_import_marks_ambiguous_custom_node_types_missing(
             ),
             log_store=LogStore(),
         ),
+        custom_node_github_resolver=resolver,
     )
     graph = {"1": {"class_type": "SharedNode", "inputs": {}}}
 
-    package = store.preview_archive(
+    preview = store.preview_archive(
         json.dumps(graph).encode("utf-8"),
         original_filename="ambiguous-custom-node.json",
+        allow_unverified_community_preparation=True,
+    )
+    package = store.resolve_missing_engine_nodes_automatically(
+        preview,
+        missing_node_types=["SharedNode"],
+        allow_unverified_community_preparation=True,
     )
 
     assert package.import_metadata is not None
-    assert package.import_metadata.status == "missing_custom_nodes"
+    assert package.import_metadata.status == "engine_unrecognized_nodes"
     source_resolution = package.import_metadata.developer_details["source_resolution"]
-    assert source_resolution["reason"] == "unresolved_custom_node_types"
-    assert source_resolution["ambiguous_node_types"] == [
-        {"node_type": "SharedNode", "package_ids": ["first-pack", "second-pack"]}
-    ]
+    assert source_resolution["reason"] == "github_search_ambiguous_candidate"
+    assert source_resolution["unresolved_node_types"] == ["SharedNode"]
 
 
 def test_raw_comfyui_json_import_resolves_unresolved_custom_node_from_github_url(
@@ -761,6 +757,11 @@ def test_raw_comfyui_json_import_resolves_unresolved_custom_node_from_github_url
         json.dumps(graph).encode("utf-8"),
         original_filename="manual-node.json",
         allow_unverified_community_preparation=True,
+    )
+    package = store.with_engine_unrecognized_nodes(
+        package,
+        missing_node_types=["ManualNode"],
+        reason="engine_unrecognized_node_types",
     )
 
     resolved = store.resolve_custom_nodes_from_github_urls(
@@ -804,6 +805,12 @@ def test_raw_comfyui_json_import_keeps_unresolved_github_failures_actionable(
     package = store.preview_archive(
         json.dumps(graph).encode("utf-8"),
         original_filename="manual-node.json",
+        allow_unverified_community_preparation=True,
+    )
+    package = store.with_engine_unrecognized_nodes(
+        package,
+        missing_node_types=["ManualNode"],
+        reason="engine_unrecognized_node_types",
     )
 
     resolved = store.resolve_custom_nodes_from_github_urls(
@@ -813,9 +820,10 @@ def test_raw_comfyui_json_import_keeps_unresolved_github_failures_actionable(
     )
 
     assert resolved.import_metadata is not None
-    assert resolved.import_metadata.status == "missing_custom_nodes"
+    assert resolved.import_metadata.status == "engine_unrecognized_nodes"
     details = resolved.import_metadata.developer_details["source_resolution"]
     assert details["reason"] == "user_github_url_resolution_failed"
+    assert details["unresolved_node_types"] == ["ManualNode"]
     assert details["failed_custom_nodes"] == [
         {
             "node_type": "ManualNode",
@@ -865,9 +873,14 @@ def test_raw_comfyui_json_import_auto_resolves_high_confidence_github_candidate(
         custom_node_github_resolver=resolver,
     )
 
-    package = store.preview_archive(
+    preview = store.preview_archive(
         json.dumps({"1": {"class_type": "ManualNode", "inputs": {}}}).encode("utf-8"),
         original_filename="manual-node.json",
+        allow_unverified_community_preparation=True,
+    )
+    package = store.resolve_missing_engine_nodes_automatically(
+        preview,
+        missing_node_types=["ManualNode"],
         allow_unverified_community_preparation=True,
     )
 
@@ -882,7 +895,7 @@ def test_raw_comfyui_json_import_auto_resolves_high_confidence_github_candidate(
     assert record.source_repo_url == "https://github.com/example/comfyui-manual"
 
 
-def test_raw_comfyui_json_import_returns_medium_github_candidate_for_approval(
+def test_raw_comfyui_json_import_auto_resolves_medium_github_candidate(
     tmp_path: Path,
 ) -> None:
     commit_sha = "b" * 40
@@ -930,32 +943,23 @@ def test_raw_comfyui_json_import_returns_medium_github_candidate_for_approval(
         ),
         custom_node_github_resolver=resolver,
     )
-    package = store.preview_archive(
+    preview = store.preview_archive(
         json.dumps({"1": {"class_type": "ManualNode", "inputs": {}}}).encode("utf-8"),
         original_filename="manual-node.json",
         allow_unverified_community_preparation=True,
     )
-
-    assert package.import_metadata is not None
-    assert package.import_metadata.status == "missing_custom_nodes"
-    details = package.import_metadata.developer_details["source_resolution"]
-    assert details["mode"] == "candidate_approval"
-    assert details["candidate"]["candidate_id"] == "candidate-medium"
-    assert "source" in details["candidate"]
-    assert fetcher.urls == []
-
-    resolved = store.resolve_custom_nodes_from_approved_candidate(
-        package,
-        candidate_id="candidate-medium",
+    package = store.resolve_missing_engine_nodes_automatically(
+        preview,
+        missing_node_types=["ManualNode"],
         allow_unverified_community_preparation=True,
     )
 
+    assert package.import_metadata is not None
+    assert package.import_metadata.status == "needs_input_setup"
     assert fetcher.urls == [source.source_url]
-    assert resolved.import_metadata is not None
-    assert resolved.import_metadata.status == "needs_input_setup"
-    record = resolved.custom_nodes[0]
+    record = package.custom_nodes[0]
     assert record.included is True
-    assert record.resolution_method == "github_search_approved"
+    assert record.resolution_method == "github_search_auto"
 
 
 def test_raw_comfyui_json_import_prefers_moss_tts_over_generic_comfyui_repo(
@@ -1028,9 +1032,14 @@ def test_raw_comfyui_json_import_prefers_moss_tts_over_generic_comfyui_repo(
         custom_node_github_resolver=importer_module.DefaultGitHubCustomNodeUrlResolver(),
     )
 
-    package = store.preview_archive(
+    preview = store.preview_archive(
         json.dumps(_moss_tts_graph()).encode("utf-8"),
         original_filename="comfyui_graph.json",
+        allow_unverified_community_preparation=True,
+    )
+    package = store.resolve_missing_engine_nodes_automatically(
+        preview,
+        missing_node_types=["MossTTSGenerate", "MossTTSModelLoader"],
         allow_unverified_community_preparation=True,
     )
 
@@ -1102,17 +1111,21 @@ def test_raw_comfyui_json_import_does_not_recommend_generic_comfyui_candidate(
         custom_node_github_resolver=importer_module.DefaultGitHubCustomNodeUrlResolver(),
     )
 
-    package = store.preview_archive(
+    preview = store.preview_archive(
         json.dumps(_moss_tts_graph()).encode("utf-8"),
         original_filename="comfyui_graph.json",
         allow_unverified_community_preparation=True,
     )
+    package = store.resolve_missing_engine_nodes_automatically(
+        preview,
+        missing_node_types=["MossTTSGenerate", "MossTTSModelLoader"],
+        allow_unverified_community_preparation=True,
+    )
 
     assert package.import_metadata is not None
-    assert package.import_metadata.status == "missing_custom_nodes"
+    assert package.import_metadata.status == "engine_unrecognized_nodes"
     details = package.import_metadata.developer_details["source_resolution"]
     assert details["mode"] == "manual_url"
-    assert details["package_id"] == "comfyui-moss-tts"
     assert details["candidate"]["repo"] == "avatar-graph-comfyui"
     assert details["candidate"]["confidence"] == "low"
     assert details["candidate"]["specific_match_score"] == 0
@@ -2736,7 +2749,7 @@ def test_import_store_recovers_missing_bundled_custom_node_source_from_registry(
     assert record.source_archive_subdir == "repo-root"
 
 
-def test_import_store_preserves_medium_github_candidate_for_missing_bundled_source(
+def test_import_store_auto_resolves_medium_github_candidate_for_missing_bundled_source(
     tmp_path: Path,
 ) -> None:
     commit_sha = "c" * 40
@@ -2801,26 +2814,13 @@ def test_import_store_preserves_medium_github_candidate_for_missing_bundled_sour
         allow_unverified_community_preparation=True,
     )
 
-    assert fetcher.urls == []
-    assert package.import_metadata is not None
-    assert package.import_metadata.status == "missing_custom_nodes"
-    details = package.import_metadata.developer_details["source_resolution"]
-    assert details["mode"] == "candidate_approval"
-    assert details["candidate"]["candidate_id"] == "candidate-jps"
-
-    resolved = store.resolve_custom_nodes_from_approved_candidate(
-        package,
-        candidate_id="candidate-jps",
-        allow_unverified_community_preparation=True,
-    )
-
     assert fetcher.urls == [source.source_url]
-    assert resolved.import_metadata is not None
-    assert resolved.import_metadata.status == "needs_input_setup"
-    assert all(node.id != "comfyui_jps-nodes" for node in resolved.custom_nodes)
-    record = next(node for node in resolved.custom_nodes if node.id == "github-example-comfyui-jps")
+    assert package.import_metadata is not None
+    assert package.import_metadata.status == "needs_input_setup"
+    assert all(node.id != "comfyui_jps-nodes" for node in package.custom_nodes)
+    record = next(node for node in package.custom_nodes if node.id == "github-example-comfyui-jps")
     assert record.included is True
-    assert record.resolution_method == "github_search_approved"
+    assert record.resolution_method == "github_search_auto"
     assert record.source_cache_ref == f"{source_digest}/source"
 
 

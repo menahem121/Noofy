@@ -21,6 +21,9 @@ from uuid import uuid4
 import httpx
 
 from app.diagnostics import DiagnosticsSink
+from app.runtime.dependencies.custom_nodes import (
+    CUSTOM_NODE_WORKSPACE_MANIFEST_FILENAME,
+)
 from app.runtime.dependencies.accelerator_policy import (
     unsupported_accelerator_message,
     unsupported_accelerator_module,
@@ -186,12 +189,16 @@ class RunnerSmokeTester:
                 await self.process_supervisor.stop(spec.runner_id)
 
         try:
+            execution_fixture = self._execution_fixture(
+                capsule_lock, prepared_workspace
+            )
             report = await self._run_started_runner_checks(
                 capsule_lock,
                 handle.descriptor.base_url,
                 dependency_env=dependency_env,
-                execution_fixture=self._execution_fixture(
-                    capsule_lock, prepared_workspace
+                execution_fixture=execution_fixture,
+                graph_node_types=_prepared_workspace_graph_node_types(
+                    prepared_workspace
                 ),
             )
         finally:
@@ -217,6 +224,7 @@ class RunnerSmokeTester:
         *,
         dependency_env: SmokeStageResult,
         execution_fixture: SmokeExecutionFixture | None,
+        graph_node_types: Sequence[str],
     ) -> SmokeTestReport:
         runner_health = SmokeStageResult(status=SmokeStageStatus.PASSED)
         custom_node_import = _custom_node_not_required_stage(capsule_lock)
@@ -227,7 +235,9 @@ class RunnerSmokeTester:
 
         object_info: Mapping[str, object] | None = None
         required_node_types = _required_object_info_node_types(
-            capsule_lock, execution_fixture
+            capsule_lock,
+            execution_fixture,
+            graph_node_types,
         )
         if required_node_types:
             try:
@@ -244,7 +254,7 @@ class RunnerSmokeTester:
                             status=SmokeStageStatus.FAILED,
                             message=f"Could not read runner node metadata: {exc}",
                         )
-                        if execution_fixture is not None
+                        if execution_fixture is not None or graph_node_types
                         else workflow_execution
                     ),
                 )
@@ -258,6 +268,25 @@ class RunnerSmokeTester:
                     runner_health=runner_health,
                     workflow_execution=workflow_execution,
                 )
+
+        missing_graph_nodes = _missing_node_types(
+            object_info or {},
+            graph_node_types,
+        )
+        if missing_graph_nodes:
+            return SmokeTestReport(
+                dependency_env=dependency_env,
+                custom_node_import=custom_node_import,
+                runner_health=runner_health,
+                workflow_execution=SmokeStageResult(
+                    status=SmokeStageStatus.FAILED,
+                    message="This workflow uses nodes that the current engine does not recognize.",
+                    details={
+                        "reason": "engine_unrecognized_node_types",
+                        "missing_node_types": missing_graph_nodes,
+                    },
+                ),
+            )
 
         if execution_fixture is None:
             return SmokeTestReport(
@@ -473,8 +502,10 @@ def _object_info_failure_stage(
 def _required_object_info_node_types(
     capsule_lock: CapsuleLock,
     execution_fixture: SmokeExecutionFixture | None,
+    graph_node_types: Sequence[str] = (),
 ) -> list[str]:
     required = _custom_node_types(capsule_lock)
+    required.extend(str(node_type) for node_type in graph_node_types)
     if execution_fixture is not None:
         required.extend(
             str(node_type) for node_type in execution_fixture.required_node_types
@@ -502,6 +533,25 @@ def _missing_node_types(
             if str(node_type) not in available
         }
     )
+
+
+def _prepared_workspace_graph_node_types(
+    prepared_workspace: PreparedRuntimeWorkspace,
+) -> list[str]:
+    manifest_path = (
+        prepared_workspace.runner_workspace_path
+        / CUSTOM_NODE_WORKSPACE_MANIFEST_FILENAME
+    )
+    if not manifest_path.exists():
+        return []
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    node_types = manifest.get("graph_node_types")
+    if not isinstance(node_types, list):
+        return []
+    return sorted({str(node_type) for node_type in node_types if str(node_type)})
 
 
 def _custom_node_execution_details(

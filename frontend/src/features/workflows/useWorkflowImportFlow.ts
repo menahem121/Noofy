@@ -120,6 +120,7 @@ function shouldCommitWithoutModelBlocking(importResult: WorkflowImportResponse) 
 export function importNeedsCustomNodeResolution(importResult: WorkflowImportResponse) {
   const resolution = importResult.custom_node_resolution;
   if (!resolution) return false;
+  if (resolution.status === "engine_unrecognized_nodes") return false;
   if (resolution.mode === "manual_url" || resolution.mode === "candidate_approval") return true;
   if (["missing_custom_nodes", "needs_comfyui_update"].includes(resolution.status)) return true;
   if (resolution.candidate) return true;

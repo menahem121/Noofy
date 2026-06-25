@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SidebarProvider } from "../app/AppLayout";
-import { RuntimeStatusProvider } from "../app/RuntimeStatusProvider";
+import { RuntimeStatusProvider, type RuntimeHealthState } from "../app/RuntimeStatusProvider";
 import { PENDING_IMPORTED_SETUP_STORAGE_KEY } from "../home/pendingSetupBanners";
 import { dashboardDraftKey } from "../dashboard-builder/dashboardBuilderContent";
 import { WorkflowLibraryProvider } from "../home/WorkflowLibraryProvider";
@@ -361,9 +361,16 @@ describe("WorkflowsPage", () => {
     vi.clearAllMocks();
   });
 
-  function renderPage(options: { initialSearchQuery?: string } = {}) {
+  function renderPage(options: {
+    initialSearchQuery?: string;
+    runtimeState?: Partial<RuntimeHealthState>;
+    skipInitialRefresh?: boolean;
+  } = {}) {
     return render(
-      <RuntimeStatusProvider>
+      <RuntimeStatusProvider
+        initialRuntimeState={options.runtimeState}
+        skipInitialRefresh={options.skipInitialRefresh}
+      >
         <WorkflowLibraryProvider>
           <SidebarProvider>
             <WorkflowsPage
@@ -395,6 +402,69 @@ describe("WorkflowsPage", () => {
 
     expect(screen.queryByText("Native Text")).not.toBeInTheDocument();
     expect(screen.getByText("Cleanup Flow")).toBeInTheDocument();
+  });
+
+  it("disables workflow import when the backend is unreachable", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.reject(new Error("backend offline"));
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse({ cpu: null, memory: null, vram: null }));
+      if (url.endsWith("/api/workflows")) return Promise.resolve(jsonResponse(workflows));
+      if (url.endsWith("/api/workflow-icons")) return Promise.resolve(jsonResponse({ icons: [] }));
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+    renderPage({
+      runtimeState: {
+        backendStatus: "unreachable",
+        engineStatus: "offline",
+        hasKnownState: true,
+      },
+      skipInitialRefresh: true,
+    });
+
+    const importButton = await screen.findByRole("button", { name: "Import Workflow" });
+
+    expect(importButton).toBeDisabled();
+  });
+
+  it("keeps workflow import enabled while the managed engine is starting", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) {
+        return Promise.resolve(jsonResponse({
+          mode: "managed",
+          reachable: false,
+          base_url: "http://127.0.0.1:8188",
+          repo_dir: "",
+          managed_process_running: false,
+          sidecar_starting: true,
+          pid: null,
+          error: null,
+          environment: null,
+          crash_count: 0,
+          restart_attempt: 0,
+          max_restart_attempts: 3,
+          uptime_seconds: 0,
+          last_crash_at: null,
+        }));
+      }
+      if (url.endsWith("/api/resources")) return Promise.resolve(jsonResponse({ cpu: null, memory: null, vram: null }));
+      if (url.endsWith("/api/workflows")) return Promise.resolve(jsonResponse(workflows));
+      if (url.endsWith("/api/workflow-icons")) return Promise.resolve(jsonResponse({ icons: [] }));
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+    renderPage({
+      runtimeState: {
+        backendStatus: "reachable",
+        engineStatus: "starting",
+        hasKnownState: true,
+      },
+      skipInitialRefresh: true,
+    });
+
+    const importButton = await screen.findByRole("button", { name: "Import Workflow" });
+
+    expect(importButton).not.toBeDisabled();
   });
 
   it("shows quick category tabs only for categories in the current library", async () => {

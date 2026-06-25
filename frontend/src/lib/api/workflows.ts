@@ -937,6 +937,16 @@ export function resolveImportCustomNodesFromUrls(
   );
 }
 
+export function resolveWorkflowCustomNodesFromUrls(
+  workflowId: string,
+  urlsByNodeType: Record<string, string>,
+) {
+  return postJson<Record<string, unknown>>(
+    `/workflows/${encodeURIComponent(workflowId)}/custom-nodes/resolve-from-urls`,
+    { urls_by_node_type: urlsByNodeType },
+  );
+}
+
 export function approveImportCustomNodeCandidate(
   importSessionId: string,
   candidateId: string,
