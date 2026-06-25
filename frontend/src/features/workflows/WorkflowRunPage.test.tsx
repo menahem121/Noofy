@@ -1,11 +1,11 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { StrictMode, useEffect, useState, type ComponentProps, type ReactNode } from "react";
+import { StrictMode, useEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ResourceStatusProvider } from "../app/ResourceStatusProvider";
-import { RuntimeStatusProvider, type RuntimeHealthState } from "../app/RuntimeStatusProvider";
+import { RuntimeStatusProvider, useRuntimeStatus, type RuntimeHealthState } from "../app/RuntimeStatusProvider";
 import { WorkflowTabsProvider, WorkflowTabsRouteProvider, useWorkflowTabs, type WorkflowTabRuntimeState } from "../app/WorkflowTabs";
 import { splitDiagnosticLogs, WorkflowRunPage } from "./WorkflowRunPage";
 import { __resetWorkflowUserStateCacheForTests } from "../../lib/useWorkflowUserState";
@@ -855,6 +855,46 @@ function WorkflowRuntimeSeeder({
   return <>{children}</>;
 }
 
+function BackendRestartRunPageHarness() {
+  const runtimeStatus = useRuntimeStatus();
+  const workflowTabs = useWorkflowTabs();
+  const seededRef = useRef(false);
+  useEffect(() => {
+    if (seededRef.current) return;
+    seededRef.current = true;
+    runtimeStatus.setRuntimeFromResponse({ ...readyRuntime, backend_session_id: "bs-old" } as RuntimeHealthState["runtime"]);
+    workflowTabs.setWorkflowRuntime("text_to_image_v0", {
+      activeJobId: "job-old",
+      activeJobStatus: "queued",
+      activeJobProgress: {
+        job_id: "job-old",
+        status: "queued",
+        value: null,
+        max: null,
+        current_node: null,
+        message: "Preparing old workflow...",
+      },
+      handleSource: "runner_start_queue",
+      queueId: null,
+    });
+  }, [runtimeStatus, workflowTabs]);
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => runtimeStatus.setRuntimeFromResponse({ ...readyRuntime, backend_session_id: "bs-new" } as RuntimeHealthState["runtime"])}
+      >
+        Simulate backend restart
+      </button>
+      <WorkflowRunPage
+        workflowId="text_to_image_v0"
+        onBack={vi.fn()}
+        onNavigate={vi.fn()}
+      />
+    </>
+  );
+}
+
 function WorkflowTabSwitchRunHarness() {
   const [activeWorkflowId, setActiveWorkflowId] = useState("first-workflow");
   return (
@@ -1271,6 +1311,51 @@ describe("WorkflowRunPage", () => {
     expect(await screen.findByRole("main", { name: /workflow dashboard canvas/i })).toBeInTheDocument();
     expect(screen.queryByRole("dialog", { name: "Reload this workflow" })).not.toBeInTheDocument();
     expect(reloadPage).not.toHaveBeenCalled();
+  });
+
+  it("clears stale run-page state and reconnects after the backend session changes", async () => {
+    let statusCalls = 0;
+    let packageCalls = 0;
+    mockConfiguredDashboardFetch(fetchMock, readyRuntime, configuredPackageData, null, (url) => {
+      if (url.endsWith("/api/workflows/text_to_image_v0/status")) {
+        statusCalls += 1;
+        return undefined;
+      }
+      if (url.endsWith("/api/workflows/text_to_image_v0/package")) {
+        packageCalls += 1;
+        return undefined;
+      }
+      return undefined;
+    });
+
+    render(
+      <RuntimeStatusProvider initialRuntimeState={readyRuntimeState} skipInitialRefresh>
+        <ResourceStatusProvider initialSnapshot={resourceSnapshot} skipInitialRefresh>
+          <WorkflowTabsProvider>
+            <BackendRestartRunPageHarness />
+          </WorkflowTabsProvider>
+        </ResourceStatusProvider>
+      </RuntimeStatusProvider>,
+    );
+
+    expect(await screen.findByRole("main", { name: /workflow dashboard canvas/i })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(window.sessionStorage.getItem("noofy.workflowRunHandles.v1")).toContain("job-old");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Simulate backend restart" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("The app restarted. Run this workflow again when ready.")).toBeInTheDocument();
+    });
+    expect(screen.queryByRole("dialog", { name: "Reload this workflow" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Preparing old workflow...")).not.toBeInTheDocument();
+    expect(window.sessionStorage.getItem("noofy.workflowRunHandles.v1")).toBeNull();
+    expect(window.sessionStorage.getItem("noofy.activeRunWorkflows.v1")).toBeNull();
+    await waitFor(() => {
+      expect(statusCalls).toBeGreaterThan(1);
+      expect(packageCalls).toBeGreaterThan(1);
+    });
   });
 
   it("opens the CivitAI LoRA modal and searches through the Noofy backend only", async () => {

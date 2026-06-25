@@ -66,7 +66,12 @@ import { ThreeDViewer } from "../three-d/ThreeDViewer";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
 import { useRuntimeStatus } from "../app/RuntimeStatusProvider";
 import { useOptionalWorkflowTabs } from "../app/WorkflowTabs";
-import { loadWorkflowRunHandle, vanishedRunRecoveryMessage, type WorkflowRunHandleSnapshot } from "../app/sessionRestore";
+import {
+  clearWorkflowRunHandle,
+  loadWorkflowRunHandle,
+  vanishedRunRecoveryMessage,
+  type WorkflowRunHandleSnapshot,
+} from "../app/sessionRestore";
 import { CanvasDashboardView, type CanvasActionBarPosition } from "./CanvasDashboardView";
 import { WorkflowActionBar, type WorkflowActionBarRunState } from "./WorkflowActionBar";
 import { GallerySaveAction } from "./GallerySaveAction";
@@ -293,6 +298,8 @@ export function WorkflowRunPage({
   const requirementsLoadSequenceRef = useRef(0);
   const missingWorkflowNotifiedRef = useRef<string | null>(null);
   const activeWorkflowIdRef = useRef(workflowId);
+  const handledBackendSessionRecoverySeqRef = useRef<number | null>(null);
+  const runSessionGenerationRef = useRef(0);
   activeWorkflowIdRef.current = workflowId;
 
   useEffect(() => {
@@ -625,6 +632,36 @@ export function WorkflowRunPage({
   }, [workflowId, runtimeStatus.refreshRuntime]);
 
   useEffect(() => {
+    const recovery = runtimeStatus.backendSessionRecovery;
+    if (!recovery || handledBackendSessionRecoverySeqRef.current === recovery.sequence) return;
+    handledBackendSessionRecoverySeqRef.current = recovery.sequence;
+    runSessionGenerationRef.current += 1;
+
+    invalidateWorkflowRunPageCache(workflowId);
+    clearWorkflowRunHandle(workflowId);
+    workflowTabs?.clearWorkflowRuntime(workflowId);
+    trackedRunPollInFlightRef.current.clear();
+    runtimeResultRecoveryInFlightRef.current = null;
+    cancelRunSubmissions();
+    clearRunComparisonInputSource();
+    clearLivePreview();
+    trackedRunsRef.current = [];
+    setStoredWorkflowRunHandle(null);
+    setTrackedRuns([]);
+    setFailedTrackedRuns([]);
+    setFailedRunSummaryOpen(false);
+    setWorkflowCancelConfirmation(null);
+    setFailureDialog(null);
+    setInputErrorDialog(null);
+    setRunPreparationDialog(null);
+    setState((current) => resetRunPageStateAfterBackendSessionRecovery(current));
+
+    void loadRequirements().finally(() => {
+      runtimeStatus.acknowledgeBackendSessionRecovery(recovery.sequence);
+    });
+  }, [runtimeStatus.backendSessionRecovery?.sequence, workflowId]);
+
+  useEffect(() => {
     if (state.firstLoadedWorkflowId !== workflowId || state.packageLoadErrorStatus !== 404) {
       return;
     }
@@ -656,10 +693,13 @@ export function WorkflowRunPage({
     if (runtimeResultRecoveryInFlightRef.current === jobId) return undefined;
 
     runtimeResultRecoveryInFlightRef.current = jobId;
+    const recoveryGeneration = runSessionGenerationRef.current;
+    const recoveryStillCurrent = () =>
+      activeWorkflowIdRef.current === workflowId && runSessionGenerationRef.current === recoveryGeneration;
     const recover = async () => {
       for (let attempt = 0; attempt < runtimeResultRecoveryMaxAttempts; attempt += 1) {
         const result = await fetchJobResult(jobId);
-        if (activeWorkflowIdRef.current !== workflowId) return;
+        if (!recoveryStillCurrent()) return;
         if (isEngineJob(result)) {
           if (isTrackableJob(result)) {
             setSubmittedJob(result);
@@ -706,13 +746,13 @@ export function WorkflowRunPage({
             error: null,
           }));
           await wait(runtimeResultRecoveryRetryMs);
-          if (activeWorkflowIdRef.current !== workflowId) return;
+          if (!recoveryStillCurrent()) return;
           continue;
         }
         handleRecoveredRuntimeResult(result);
         return;
       }
-      if (activeWorkflowIdRef.current !== workflowId) return;
+      if (!recoveryStillCurrent()) return;
       setState((current) => ({
         ...current,
         progress: terminalRuntimeProgress,
@@ -721,7 +761,7 @@ export function WorkflowRunPage({
     };
     recover()
       .catch((error) => {
-        if (activeWorkflowIdRef.current !== workflowId) return;
+        if (!recoveryStillCurrent()) return;
         setState((current) => ({
           ...current,
           error: error instanceof Error ? error.message : "Could not load the completed workflow result.",
@@ -736,10 +776,11 @@ export function WorkflowRunPage({
 
   function startRunPreparationStatusPolling() {
     let stopped = false;
+    const runGeneration = runSessionGenerationRef.current;
     const poll = async () => {
       try {
         const statusResponse = await fetchWorkflowStatus(workflowId);
-        if (stopped) return;
+        if (stopped || runSessionGenerationRef.current !== runGeneration) return;
         setState((current) => ({ ...current, workflowStatus: statusResponse }));
         setRunPreparationDialog(runPreparationDialogFromStatus(statusResponse));
       } catch {
@@ -907,6 +948,9 @@ export function WorkflowRunPage({
     const queueingBehindActiveRun =
       trackedRunsRef.current.some(isTrackedRunActive) || isActiveWorkflowProgress(displayedProgress);
     beginRunSubmission();
+    const runGeneration = runSessionGenerationRef.current;
+    const runStillCurrent = () =>
+      activeWorkflowIdRef.current === workflowId && runSessionGenerationRef.current === runGeneration;
     if (!queueingBehindActiveRun) {
       clearLivePreview();
       resolveRunComparisonInputSource(packageDataForWorkflow, allControls, submittedValuesSnapshot);
@@ -941,6 +985,12 @@ export function WorkflowRunPage({
           output_preferences_snapshot: outputPreferencesSnapshot,
         });
 
+        if (!runStillCurrent()) {
+          stopPreparationTracking();
+          finishRunSubmission();
+          return;
+        }
+
         if (!isEngineJob(response)) {
           stopPreparationTracking();
           finishRunSubmission();
@@ -967,6 +1017,10 @@ export function WorkflowRunPage({
       void pollTrackedRunsDue(true);
     } catch (error) {
       stopPreparationTracking();
+      if (!runStillCurrent()) {
+        finishRunSubmission();
+        return;
+      }
       const message = error instanceof Error ? error.message : String(error);
       runtimeStatus.markActionFailure(error);
       void runtimeStatus.refreshRuntime({ force: true, silent: false });
@@ -1290,11 +1344,15 @@ export function WorkflowRunPage({
 
   async function pollTrackedRun(run: TrackedRun) {
     const handle = trackedRunHandle(run);
+    const runGeneration = runSessionGenerationRef.current;
+    const pollStillCurrent = () =>
+      activeWorkflowIdRef.current === workflowId && runSessionGenerationRef.current === runGeneration;
     try {
       const previousPreview = livePreviewRef.current;
       const progress = await fetchJobProgress(handle, {
         sincePreviewSequence: previousPreview?.handle === handle ? previousPreview.sequence : null,
       });
+      if (!pollStillCurrent()) return;
       if (progress.status === "unknown") {
         handleVanishedTrackedRun(run);
         return;
@@ -1316,6 +1374,7 @@ export function WorkflowRunPage({
         if (progress.status === "failed") {
           try {
             const result = await fetchJobResult(handle);
+            if (!pollStillCurrent()) return;
             if (isWorkflowValidationResult(result)) {
               const message = workflowValidationErrorMessage(result);
               upsertTrackedRun(trackedRunWithStatus(nextRun, "failed", message));
@@ -1332,6 +1391,7 @@ export function WorkflowRunPage({
       }
 
       const result = await fetchJobResult(trackedRunHandle(nextRun));
+      if (!pollStillCurrent()) return;
       if (isEngineJob(result)) {
         setSubmittedJob(result);
         if (isTrackableJob(result)) {
@@ -2480,6 +2540,21 @@ export function WorkflowRunPage({
       {workflowRefreshDialogElement}
     </AppLayout>
   );
+}
+
+function resetRunPageStateAfterBackendSessionRecovery(current: RunPageState): RunPageState {
+  return {
+    ...current,
+    workflowStatus: null,
+    modelSummaryLoading: false,
+    validationLoading: false,
+    job: null,
+    progress: null,
+    result: null,
+    error: null,
+    packageLoadError: null,
+    packageLoadErrorStatus: null,
+  };
 }
 
 type WorkflowCustomNodeResolution = NonNullable<WorkflowImportResponse["custom_node_resolution"]>;

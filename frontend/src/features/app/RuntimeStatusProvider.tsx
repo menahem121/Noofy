@@ -21,6 +21,8 @@ export interface RuntimeHealthState {
 interface RuntimeStatusContextValue extends RuntimeHealthState {
   statusView: AppStatusView;
   pageRefreshRequired: boolean;
+  backendSessionRecovery: BackendSessionRecoveryState | null;
+  acknowledgeBackendSessionRecovery: (sequence?: number) => void;
   refreshPage: () => void;
   refreshRuntime: (options?: RefreshRuntimeOptions) => Promise<RuntimeStatus | null>;
   setRuntimeFromResponse: (runtime: RuntimeStatus | null) => void;
@@ -31,6 +33,13 @@ export interface RefreshRuntimeOptions {
   force?: boolean;
   silent?: boolean;
   maxAgeMs?: number;
+}
+
+export interface BackendSessionRecoveryState {
+  sequence: number;
+  previousBackendSessionId: string;
+  backendSessionId: string;
+  detectedAt: number;
 }
 
 const DEFAULT_MAX_AGE_MS = 10_000;
@@ -68,11 +77,13 @@ export function RuntimeStatusProvider({
     ...initialRuntimeState,
   });
   const [pageRefreshRequired, setPageRefreshRequired] = useState(false);
+  const [backendSessionRecovery, setBackendSessionRecovery] = useState<BackendSessionRecoveryState | null>(null);
   const requestSeqRef = useRef(0);
   const latestRequestSeqRef = useRef(0);
   const inFlightRef = useRef<Promise<RuntimeStatus | null> | null>(null);
   const stateRef = useRef(state);
   const backendSessionIdRef = useRef<string | null>(null);
+  const backendSessionRecoverySeqRef = useRef(0);
   const refreshPage = useCallback(() => reloadPage(), [reloadPage]);
 
   useEffect(() => {
@@ -92,8 +103,25 @@ export function RuntimeStatusProvider({
       return;
     }
     backendSessionIdRef.current = backendSessionId;
+    const sequence = backendSessionRecoverySeqRef.current + 1;
+    backendSessionRecoverySeqRef.current = sequence;
     setPageRefreshRequired(true);
+    setBackendSessionRecovery({
+      sequence,
+      previousBackendSessionId: previous,
+      backendSessionId,
+      detectedAt: Date.now(),
+    });
     recordBackendSessionRestart(backendSessionId);
+  }, []);
+
+  const acknowledgeBackendSessionRecovery = useCallback((sequence?: number) => {
+    setPageRefreshRequired(false);
+    setBackendSessionRecovery((current) => {
+      if (!current) return current;
+      if (sequence !== undefined && current.sequence !== sequence) return current;
+      return null;
+    });
   }, []);
 
   const setRuntimeFromResponse = useCallback((runtime: RuntimeStatus | null) => {
@@ -187,12 +215,23 @@ export function RuntimeStatusProvider({
       ...state,
       statusView: runtimeStatusView(state),
       pageRefreshRequired,
+      backendSessionRecovery,
+      acknowledgeBackendSessionRecovery,
       refreshPage,
       refreshRuntime,
       setRuntimeFromResponse,
       markActionFailure,
     }),
-    [markActionFailure, pageRefreshRequired, refreshPage, refreshRuntime, setRuntimeFromResponse, state],
+    [
+      acknowledgeBackendSessionRecovery,
+      backendSessionRecovery,
+      markActionFailure,
+      pageRefreshRequired,
+      refreshPage,
+      refreshRuntime,
+      setRuntimeFromResponse,
+      state,
+    ],
   );
 
   return <RuntimeStatusContext.Provider value={value}>{children}</RuntimeStatusContext.Provider>;

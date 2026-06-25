@@ -29,6 +29,18 @@ interface WorkflowRunHandlesMarker {
   handles: Record<string, WorkflowRunHandleSnapshot>;
 }
 
+export function loadRestartRecoveryWorkflowIds(): string[] {
+  if (!hasRecentBackendSessionRestart()) return [];
+  const workflowIds = new Set<string>();
+  for (const workflowId of loadActiveRunWorkflowIds()) {
+    workflowIds.add(workflowId);
+  }
+  for (const workflowId of loadWorkflowRunHandleWorkflowIds()) {
+    workflowIds.add(workflowId);
+  }
+  return [...workflowIds];
+}
+
 export function recordBackendSessionRestart(backendSessionId: string) {
   try {
     window.sessionStorage.setItem(
@@ -103,27 +115,16 @@ export function clearWorkflowRunHandle(workflowId: string) {
   }
 }
 
-export function loadRestartRecoveryNotices(): Record<string, string> {
-  if (!hasRecentBackendSessionRestart()) return {};
+export function clearAllWorkflowRunHandles() {
   try {
-    const raw = window.sessionStorage.getItem(ACTIVE_RUN_WORKFLOWS_STORAGE_KEY);
-    if (!raw) return {};
-    const marker = JSON.parse(raw) as Partial<ActiveRunWorkflowsMarker>;
-    if (
-      !Array.isArray(marker.workflowIds)
-      || typeof marker.updatedAt !== "number"
-      || Date.now() - marker.updatedAt > RESTART_MARKER_MAX_AGE_MS
-    ) {
-      return {};
-    }
-    return Object.fromEntries(
-      marker.workflowIds
-        .filter((workflowId): workflowId is string => typeof workflowId === "string" && Boolean(workflowId.trim()))
-        .map((workflowId) => [workflowId, APP_RESTARTED_RUN_MESSAGE]),
-    );
+    window.sessionStorage.removeItem(WORKFLOW_RUN_HANDLES_STORAGE_KEY);
   } catch {
-    return {};
+    // Storage cleanup should not affect workflow navigation.
   }
+}
+
+export function loadRestartRecoveryNotices(): Record<string, string> {
+  return recoveryNoticesForWorkflowIds(loadRestartRecoveryWorkflowIds());
 }
 
 export function vanishedRunRecoveryMessage() {
@@ -136,6 +137,12 @@ export function clearBackendSessionRestartMarker() {
   } catch {
     // Recovery copy remains valid even when storage cleanup is unavailable.
   }
+}
+
+export function clearBackendSessionRecoveryStorage() {
+  clearBackendSessionRestartMarker();
+  clearActiveRunWorkflowIds();
+  clearAllWorkflowRunHandles();
 }
 
 export function hasRecentBackendSessionRestart() {
@@ -152,6 +159,48 @@ export function hasRecentBackendSessionRestart() {
   } catch {
     return false;
   }
+}
+
+function clearActiveRunWorkflowIds() {
+  try {
+    window.sessionStorage.removeItem(ACTIVE_RUN_WORKFLOWS_STORAGE_KEY);
+  } catch {
+    // Recovery copy remains valid even when storage cleanup is unavailable.
+  }
+}
+
+function loadActiveRunWorkflowIds(): string[] {
+  try {
+    const raw = window.sessionStorage.getItem(ACTIVE_RUN_WORKFLOWS_STORAGE_KEY);
+    if (!raw) return [];
+    const marker = JSON.parse(raw) as Partial<ActiveRunWorkflowsMarker>;
+    if (
+      !Array.isArray(marker.workflowIds)
+      || typeof marker.updatedAt !== "number"
+      || Date.now() - marker.updatedAt > RESTART_MARKER_MAX_AGE_MS
+    ) {
+      return [];
+    }
+    return marker.workflowIds.filter((workflowId): workflowId is string =>
+      typeof workflowId === "string" && Boolean(workflowId.trim()),
+    );
+  } catch {
+    return [];
+  }
+}
+
+function loadWorkflowRunHandleWorkflowIds(): string[] {
+  try {
+    return Object.keys(loadWorkflowRunHandlesMarker().handles);
+  } catch {
+    return [];
+  }
+}
+
+function recoveryNoticesForWorkflowIds(workflowIds: string[]) {
+  return Object.fromEntries(
+    workflowIds.map((workflowId) => [workflowId, APP_RESTARTED_RUN_MESSAGE]),
+  );
 }
 
 function loadWorkflowRunHandlesMarker(): WorkflowRunHandlesMarker {

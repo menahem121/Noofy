@@ -7,6 +7,7 @@ import {
   WorkflowTabsRouteProvider,
   WorkflowTabsTopBar,
 } from "./WorkflowTabs";
+import { RuntimeStatusProvider, useRuntimeStatus } from "./RuntimeStatusProvider";
 
 function Harness({ activeWorkflowId = "wf-1" }: { activeWorkflowId?: string | null }) {
   const tabs = useWorkflowTabs();
@@ -91,6 +92,59 @@ function Harness({ activeWorkflowId = "wf-1" }: { activeWorkflowId?: string | nu
       <span data-testid="recovery-notice">{tabs.recoveryNoticeByWorkflowId["wf-1"] ?? "none"}</span>
       <WorkflowTabsTopBar />
     </WorkflowTabsRouteProvider>
+  );
+}
+
+const readyRuntime = {
+  mode: "managed",
+  reachable: true,
+  base_url: "http://127.0.0.1:8188",
+  repo_dir: "/tmp/ComfyUI",
+  managed_process_running: true,
+  sidecar_starting: false,
+  pid: 123,
+  error: null,
+  environment: { prepared: true },
+  crash_count: 0,
+  restart_attempt: 0,
+  max_restart_attempts: 3,
+  uptime_seconds: 10,
+  last_crash_at: null,
+} as const;
+
+function BackendSessionHarness() {
+  const runtimeStatus = useRuntimeStatus();
+  const tabs = useWorkflowTabs();
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => runtimeStatus.setRuntimeFromResponse({ ...readyRuntime, backend_session_id: "bs-old" })}
+      >
+        Adopt old session
+      </button>
+      <button
+        type="button"
+        onClick={() =>
+          tabs.setWorkflowRuntime("wf-1", {
+            activeJobId: "job-old",
+            activeJobStatus: "queued",
+            handleSource: "runner_start_queue",
+          })
+        }
+      >
+        Set stale runtime
+      </button>
+      <button
+        type="button"
+        onClick={() => runtimeStatus.setRuntimeFromResponse({ ...readyRuntime, backend_session_id: "bs-new" })}
+      >
+        Restart backend
+      </button>
+      <span data-testid="page-refresh-required">{String(runtimeStatus.pageRefreshRequired)}</span>
+      <span data-testid="active-job">{tabs.runtimeByWorkflowId["wf-1"]?.activeJobId ?? "none"}</span>
+      <span data-testid="recovery-notice">{tabs.recoveryNoticeByWorkflowId["wf-1"] ?? "none"}</span>
+    </>
   );
 }
 
@@ -198,6 +252,20 @@ describe("WorkflowTabs", () => {
       "noofy.activeRunWorkflows.v1",
       JSON.stringify({ workflowIds: ["wf-1"], updatedAt: Date.now() }),
     );
+    window.sessionStorage.setItem(
+      "noofy.workflowRunHandles.v1",
+      JSON.stringify({
+        handles: {
+          "wf-1": {
+            workflowId: "wf-1",
+            jobId: "job-from-old-backend",
+            queueId: null,
+            status: "running",
+            updatedAt: Date.now(),
+          },
+        },
+      }),
+    );
 
     render(
       <WorkflowTabsProvider>
@@ -210,6 +278,37 @@ describe("WorkflowTabs", () => {
     );
     expect(window.sessionStorage.getItem("noofy.activeRunWorkflows.v1")).toBeNull();
     expect(window.sessionStorage.getItem("noofy.sessionRestart.v1")).toBeNull();
+    expect(window.sessionStorage.getItem("noofy.workflowRunHandles.v1")).toBeNull();
+  });
+
+  it("clears live run handles and acknowledges recovery when the backend session changes", async () => {
+    render(
+      <RuntimeStatusProvider skipInitialRefresh>
+        <WorkflowTabsProvider>
+          <BackendSessionHarness />
+        </WorkflowTabsProvider>
+      </RuntimeStatusProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Adopt old session" }));
+    fireEvent.click(screen.getByRole("button", { name: "Set stale runtime" }));
+
+    await waitFor(() => {
+      expect(window.sessionStorage.getItem("noofy.workflowRunHandles.v1")).toContain("job-old");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Restart backend" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("recovery-notice")).toHaveTextContent(
+        "The app restarted. Run this workflow again when ready.",
+      );
+    });
+    expect(screen.getByTestId("active-job")).toHaveTextContent("none");
+    expect(screen.getByTestId("page-refresh-required")).toHaveTextContent("false");
+    expect(window.sessionStorage.getItem("noofy.activeRunWorkflows.v1")).toBeNull();
+    expect(window.sessionStorage.getItem("noofy.sessionRestart.v1")).toBeNull();
+    expect(window.sessionStorage.getItem("noofy.workflowRunHandles.v1")).toBeNull();
   });
 
   it("heartbeats a newly held lease immediately and clears a lease the backend no longer knows", async () => {

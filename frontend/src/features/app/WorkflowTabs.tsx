@@ -8,10 +8,14 @@ import {
   type JobProgress,
   type JobStatus,
 } from "../../lib/api/noofyApi";
+import { invalidateWorkflowRunPageCache } from "../workflows/workflowRunPageCache";
+import { useOptionalRuntimeStatus } from "./RuntimeStatusProvider";
 import {
-  clearBackendSessionRestartMarker,
+  APP_RESTARTED_RUN_MESSAGE,
+  clearBackendSessionRecoveryStorage,
   clearWorkflowRunHandle,
-  loadRestartRecoveryNotices,
+  hasRecentBackendSessionRestart,
+  loadRestartRecoveryWorkflowIds,
   storeWorkflowRunHandle,
   storeActiveRunWorkflowIds,
   vanishedRunRecoveryMessage,
@@ -74,11 +78,22 @@ const WorkflowTabsContext = createContext<WorkflowTabsContextValue | null>(null)
 const WorkflowTabsRouterContext = createContext<WorkflowTabsRouterContextValue | null>(null);
 
 export function WorkflowTabsProvider({ children }: { children: ReactNode }) {
+  const runtimeStatus = useOptionalRuntimeStatus();
+  const initialRestartRecoveryWorkflowIdsRef = useRef<string[] | null>(null);
+  if (initialRestartRecoveryWorkflowIdsRef.current === null) {
+    initialRestartRecoveryWorkflowIdsRef.current = loadRestartRecoveryWorkflowIds();
+  }
   const [tabs, setTabs] = useState<WorkflowTab[]>(() => loadStoredTabs());
   const [runtimeByWorkflowId, setRuntimeByWorkflowId] = useState<Record<string, WorkflowTabRuntimeState>>({});
   const [recoveryNoticeByWorkflowId, setRecoveryNoticeByWorkflowId] = useState<Record<string, string>>(
-    () => loadRestartRecoveryNotices(),
+    () => recoveryNoticesForWorkflowIds(initialRestartRecoveryWorkflowIdsRef.current ?? []),
   );
+  const runtimeByWorkflowIdRef = useRef(runtimeByWorkflowId);
+  const handledBackendSessionRecoverySeqRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    runtimeByWorkflowIdRef.current = runtimeByWorkflowId;
+  }, [runtimeByWorkflowId]);
 
   useEffect(() => {
     try {
@@ -101,8 +116,39 @@ export function WorkflowTabsProvider({ children }: { children: ReactNode }) {
   }, [runtimeByWorkflowId]);
 
   useEffect(() => {
-    clearBackendSessionRestartMarker();
+    const recoveredWorkflowIds = initialRestartRecoveryWorkflowIdsRef.current ?? [];
+    if (recoveredWorkflowIds.length > 0 || hasRecentBackendSessionRestart()) {
+      for (const workflowId of recoveredWorkflowIds) {
+        invalidateWorkflowRunPageCache(workflowId);
+      }
+      clearBackendSessionRecoveryStorage();
+    }
   }, []);
+
+  useEffect(() => {
+    const recovery = runtimeStatus?.backendSessionRecovery;
+    if (!recovery || handledBackendSessionRecoverySeqRef.current === recovery.sequence) return;
+    handledBackendSessionRecoverySeqRef.current = recovery.sequence;
+
+    const affectedWorkflowIds = uniqueWorkflowIds([
+      ...loadRestartRecoveryWorkflowIds(),
+      ...sessionOwnedWorkflowRuntimeIds(runtimeByWorkflowIdRef.current),
+    ]);
+    clearBackendSessionRecoveryStorage();
+
+    if (affectedWorkflowIds.length > 0) {
+      for (const workflowId of affectedWorkflowIds) {
+        invalidateWorkflowRunPageCache(workflowId);
+      }
+      setRuntimeByWorkflowId((current) => removeRuntimeStateForWorkflows(current, affectedWorkflowIds));
+      setRecoveryNoticeByWorkflowId((current) => ({
+        ...current,
+        ...recoveryNoticesForWorkflowIds(affectedWorkflowIds),
+      }));
+    }
+
+    runtimeStatus.acknowledgeBackendSessionRecovery(recovery.sequence);
+  }, [runtimeStatus?.backendSessionRecovery, runtimeStatus?.acknowledgeBackendSessionRecovery]);
 
   const openWorkflowTab = useCallback((workflowId: string, workflowName?: string) => {
     const now = Date.now();
@@ -362,6 +408,49 @@ function hasActiveRuntimeHandle(runtime: WorkflowTabRuntimeState) {
       runtime.activeJobStatus &&
       activeJobStatuses.has(runtime.activeJobStatus),
   );
+}
+
+function hasSessionOwnedRuntimeState(runtime: WorkflowTabRuntimeState) {
+  return Boolean(
+    runtime.activeJobId
+      || runtime.queueId
+      || runtime.runnerLeaseId
+      || runtime.runnerId
+      || runtime.handleSource
+      || runtime.activeJobProgress?.job_id,
+  );
+}
+
+function sessionOwnedWorkflowRuntimeIds(runtimeByWorkflowId: Record<string, WorkflowTabRuntimeState>) {
+  return Object.entries(runtimeByWorkflowId)
+    .filter(([, runtime]) => hasSessionOwnedRuntimeState(runtime))
+    .map(([workflowId]) => workflowId);
+}
+
+function removeRuntimeStateForWorkflows(
+  runtimeByWorkflowId: Record<string, WorkflowTabRuntimeState>,
+  workflowIds: string[],
+) {
+  const workflowIdSet = new Set(workflowIds);
+  let changed = false;
+  const next = { ...runtimeByWorkflowId };
+  for (const workflowId of workflowIdSet) {
+    if (workflowId in next) {
+      delete next[workflowId];
+      changed = true;
+    }
+  }
+  return changed ? next : runtimeByWorkflowId;
+}
+
+function recoveryNoticesForWorkflowIds(workflowIds: string[]) {
+  return Object.fromEntries(
+    workflowIds.map((workflowId) => [workflowId, APP_RESTARTED_RUN_MESSAGE]),
+  );
+}
+
+function uniqueWorkflowIds(workflowIds: string[]) {
+  return [...new Set(workflowIds.filter((workflowId) => Boolean(workflowId.trim())))];
 }
 
 function workflowRunHandleSnapshotFromRuntime(runtime: WorkflowTabRuntimeState) {

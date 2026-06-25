@@ -294,7 +294,19 @@ describe("RuntimeStatusProvider", () => {
       backendSessionId: "bs-third",
     });
     expect(result.current.pageRefreshRequired).toBe(true);
+    expect(result.current.backendSessionRecovery).toMatchObject({
+      sequence: 2,
+      previousBackendSessionId: "bs-second",
+      backendSessionId: "bs-third",
+    });
     expect(result.current.backendStatus).toBe("reachable");
+
+    act(() => {
+      result.current.acknowledgeBackendSessionRecovery(result.current.backendSessionRecovery?.sequence);
+    });
+
+    expect(result.current.pageRefreshRequired).toBe(false);
+    expect(result.current.backendSessionRecovery).toBeNull();
   });
 
   it("adopts the first runtime session without marking a freshly loaded page stale", async () => {
