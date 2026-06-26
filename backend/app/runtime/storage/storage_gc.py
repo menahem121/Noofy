@@ -612,7 +612,8 @@ class RuntimeStorageGarbageCollector:
                 artifact.status == "quarantined"
                 and _transaction_has_payload(artifact.path)
                 and (
-                    artifact.size_bytes >= self.config.transaction_compaction_bytes
+                    _transaction_payload_size(artifact.path)
+                    >= self.config.transaction_compaction_bytes
                     or aggressive
                 )
             ):
@@ -1436,6 +1437,20 @@ def _transaction_has_payload(path: Path) -> bool:
     return False
 
 
+def _transaction_payload_size(path: Path) -> int:
+    size = 0
+    for name in (
+        "model-views",
+        "model-blobs",
+        "dependency-envs",
+        "runner-workspaces",
+    ):
+        payload = path / name
+        if payload.exists():
+            size += _path_file_size(payload)
+    return size
+
+
 def _compact_transaction_payload(path: Path) -> None:
     removed: list[dict[str, object]] = []
     for name in (
@@ -1490,6 +1505,25 @@ def _path_size(path: Path) -> int:
             return 0
     total = 0
     for child in path.rglob("*"):
+        try:
+            total += child.lstat().st_size
+        except OSError:
+            continue
+    return total
+
+
+def _path_file_size(path: Path) -> int:
+    if not path.exists() and not path.is_symlink():
+        return 0
+    if path.is_file() or path.is_symlink():
+        try:
+            return path.lstat().st_size
+        except OSError:
+            return 0
+    total = 0
+    for child in path.rglob("*"):
+        if child.is_dir() and not child.is_symlink():
+            continue
         try:
             total += child.lstat().st_size
         except OSError:

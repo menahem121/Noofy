@@ -382,7 +382,11 @@ def required_models_from_comfyui_workflow(
     models: list[RequiredModel] = []
     seen: set[tuple[str | None, str | None, str, str]] = set()
     source_urls_by_target: dict[tuple[str, str], list[str]] = {}
+    property_models_by_target: dict[tuple[str, str], RequiredModel] = {}
     for node in _iter_comfyui_workflow_nodes(comfyui_workflow):
+        node_id = _node_id_string(node.get("id"))
+        node_type = optional_string_field(node, "type")
+        active_widget_targets = _comfyui_workflow_node_widget_model_targets(node)
         properties = node.get("properties")
         if not isinstance(properties, dict):
             continue
@@ -400,39 +404,35 @@ def required_models_from_comfyui_workflow(
                 entry.get("source_urls"),
                 fallback=entry.get("url"),
             )
-            if source_urls and (folder, filename) not in source_urls_by_target:
-                source_urls_by_target[(folder, filename)] = list(source_urls)
-    for selector in _iter_comfyui_workflow_widget_model_selectors(comfyui_workflow):
-        node_id, node_type, input_name, folder, model_type, filename, source_urls = selector
-        key = (node_id, input_name, folder, filename)
-        if key in seen:
-            continue
-        seen.add(key)
-        if source_urls and (folder, filename) not in source_urls_by_target:
-            source_urls_by_target[(folder, filename)] = list(source_urls)
-        models.append(
-            RequiredModel(
-                folder=folder,
-                filename=filename,
-                node_id=node_id,
-                node_type=node_type,
-                input_name=input_name,
-                source_url=source_urls[0] if source_urls else None,
-                source_urls=list(source_urls),
-                model_type=model_type,
-                verification_level=ModelVerificationLevel.FILENAME_ONLY,
-                identity_verified_by_exporter=False,
-                bundled=False,
-                asset_ownership=AssetOwnership.EXTERNAL_REFERENCE,
-            )
-        )
+            target = (folder, filename)
+            if active_widget_targets and target not in active_widget_targets:
+                continue
+            if source_urls and target not in source_urls_by_target:
+                source_urls_by_target[target] = list(source_urls)
+            if target not in property_models_by_target:
+                property_models_by_target[target] = RequiredModel(
+                    folder=folder,
+                    filename=filename,
+                    node_id=node_id,
+                    node_type=node_type,
+                    input_name=None,
+                    source_url=source_urls[0] if source_urls else None,
+                    source_urls=list(source_urls),
+                    verification_level=ModelVerificationLevel.FILENAME_ONLY,
+                    identity_verified_by_exporter=False,
+                    bundled=False,
+                    asset_ownership=AssetOwnership.EXTERNAL_REFERENCE,
+                )
+    graph_targets: set[tuple[str, str]] = set()
     for selector in _iter_comfyui_graph_model_selectors(comfyui_graph or {}):
         node_id, node_type, input_name, folder, model_type, filename, graph_source_urls = selector
         key = (node_id, input_name, folder, filename)
         if key in seen:
             continue
         seen.add(key)
-        source_urls = graph_source_urls or source_urls_by_target.get((folder, filename), [])
+        target = (folder, filename)
+        graph_targets.add(target)
+        source_urls = graph_source_urls or source_urls_by_target.get(target, [])
         models.append(
             RequiredModel(
                 folder=folder,
@@ -449,6 +449,42 @@ def required_models_from_comfyui_workflow(
                 asset_ownership=AssetOwnership.EXTERNAL_REFERENCE,
             )
         )
+    for selector in _iter_comfyui_workflow_widget_model_selectors(comfyui_workflow):
+        node_id, node_type, input_name, folder, model_type, filename, source_urls = selector
+        target = (folder, filename)
+        if target in graph_targets:
+            continue
+        key = (node_id, input_name, folder, filename)
+        if key in seen:
+            continue
+        seen.add(key)
+        if source_urls and target not in source_urls_by_target:
+            source_urls_by_target[target] = list(source_urls)
+        models.append(
+            RequiredModel(
+                folder=folder,
+                filename=filename,
+                node_id=node_id,
+                node_type=node_type,
+                input_name=input_name,
+                source_url=source_urls[0] if source_urls else None,
+                source_urls=list(source_urls),
+                model_type=model_type,
+                verification_level=ModelVerificationLevel.FILENAME_ONLY,
+                identity_verified_by_exporter=False,
+                bundled=False,
+                asset_ownership=AssetOwnership.EXTERNAL_REFERENCE,
+            )
+        )
+    represented_targets = {(model.folder, model.filename) for model in models}
+    for target, property_model in property_models_by_target.items():
+        if target in represented_targets:
+            continue
+        key = (property_model.node_id, None, property_model.folder, property_model.filename)
+        if key in seen:
+            continue
+        seen.add(key)
+        models.append(property_model)
     return models
 
 
@@ -542,6 +578,37 @@ def _iter_comfyui_workflow_widget_model_selectors(
                 filename=filename,
             )
             yield node_id, node_type, input_name, folder, model_type, filename, source_urls
+
+
+def _comfyui_workflow_node_widget_model_targets(
+    node: dict[str, Any],
+) -> set[tuple[str, str]]:
+    node_type = optional_string_field(node, "type")
+    if not node_type:
+        return set()
+    widget_values = node.get("widgets_values")
+    if not isinstance(widget_values, list):
+        return set()
+    targets: set[tuple[str, str]] = set()
+    for input_name, value in _ui_widget_values_by_input(node_type, widget_values):
+        ultralytics_selector = _ultralytics_detector_selector(
+            node_type,
+            input_name,
+            value,
+        )
+        if ultralytics_selector is not None:
+            folder, _model_type, filename = ultralytics_selector
+            targets.add((folder, filename))
+            continue
+        selector = KNOWN_GRAPH_MODEL_SELECTOR_INPUTS.get((node_type, input_name))
+        if selector is None:
+            continue
+        filename = _safe_graph_model_selector_filename(value)
+        if filename is None:
+            continue
+        folder, _model_type = selector
+        targets.add((folder, filename))
+    return targets
 
 
 def _ultralytics_detector_selector(

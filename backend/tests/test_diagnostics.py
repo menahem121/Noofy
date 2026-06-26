@@ -163,6 +163,25 @@ def test_log_store_emits_warning_and_error_events_to_console_logger(caplog) -> N
     ]
 
 
+def test_log_store_keeps_stale_runtime_gc_warning_out_of_console(caplog) -> None:
+    caplog.set_level(logging.INFO, logger="noofy.events")
+    store = LogStore()
+
+    event = store.add(
+        "warning",
+        "Stale runtime artifacts detected for installed workflow",
+        "runtime.storage_gc",
+        workflow_id="workflow-1",
+        details={
+            "reason_code": "stale_runtime_artifacts_detected",
+            "invalid_model_reference_count": 2,
+        },
+    )
+
+    assert store.list_events(limit=1).events == [event]
+    assert [record for record in caplog.records if record.name == "noofy.events"] == []
+
+
 def test_workflow_model_download_failures_emit_actionable_console_details(caplog) -> None:
     caplog.set_level(logging.INFO, logger="noofy.events")
     store = LogStore()

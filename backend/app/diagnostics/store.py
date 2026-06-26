@@ -25,6 +25,12 @@ INFO_EVENT_SOURCE_PREFIXES = (
 NOISY_INFO_MESSAGES = {
     "Gallery save progress",
 }
+NOISY_CONSOLE_EVENTS = {
+    (
+        "runtime.storage_gc",
+        "Stale runtime artifacts detected for installed workflow",
+    ),
+}
 CONSOLE_DETAIL_KEYS = (
     "runner_id",
     "queue_id",
@@ -159,6 +165,8 @@ def _emit_console_event(event: DiagnosticEvent) -> None:
 
 
 def _should_emit_console_event(event: DiagnosticEvent) -> bool:
+    if (event.source, event.message) in NOISY_CONSOLE_EVENTS:
+        return False
     level = str(event.level)
     if level in {"warning", "error"}:
         return True

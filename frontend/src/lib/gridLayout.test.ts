@@ -4,6 +4,7 @@ import {
   findAvailableLayout,
   findNearestAvailableLayout,
   findNearestAvailablePosition,
+  findNearestAvailablePositionWithinRows,
   fitLayout,
   layoutsOverlap,
   type GridItemLayout,
@@ -147,5 +148,40 @@ describe("findNearestAvailablePosition", () => {
     expect(result.w).toBe(3);
     expect(result.h).toBe(2);
     expect(layoutsOverlap(result, items[0].layout)).toBe(false);
+  });
+});
+
+describe("findNearestAvailablePositionWithinRows", () => {
+  it("clamps the desired position to the bottom row that still fits the item", () => {
+    const desired: GridItemLayout = { x: 0, y: 50, w: 4, h: 3 };
+
+    expect(findNearestAvailablePositionWithinRows("item", desired, [], 12, 10)).toEqual({
+      x: 0,
+      y: 7,
+      w: 4,
+      h: 3,
+    });
+  });
+
+  it("chooses a visible free cell instead of falling below the bounded rows", () => {
+    const desired: GridItemLayout = { x: 0, y: 7, w: 4, h: 3 };
+    const items = [{ id: "blocker", layout: { x: 0, y: 7, w: 12, h: 3 } }];
+
+    expect(findNearestAvailablePositionWithinRows("item", desired, items, 12, 10)).toEqual({
+      x: 0,
+      y: 4,
+      w: 4,
+      h: 3,
+    });
+  });
+
+  it("returns null when no visible row can accept the item", () => {
+    const desired: GridItemLayout = { x: 0, y: 0, w: 12, h: 2 };
+    const items = [
+      { id: "a", layout: { x: 0, y: 0, w: 12, h: 2 } },
+      { id: "b", layout: { x: 0, y: 2, w: 12, h: 2 } },
+    ];
+
+    expect(findNearestAvailablePositionWithinRows("item", desired, items, 12, 4)).toBeNull();
   });
 });

@@ -24,8 +24,8 @@ import {
 
 import { saveDashboard } from "../../lib/api/noofyApi";
 import {
-  findAvailableLayout,
   findNearestAvailablePosition,
+  findNearestAvailablePositionWithinRows,
   fitLayout,
   layoutsOverlap,
   type GridItemLayout,
@@ -272,12 +272,11 @@ export function DashboardBuilderLayoutPage({
 
     const desiredLayout = layoutFromPointer(event, item);
     if (!desiredLayout) return;
-    const previewLayout = findAvailableLayout(
-      item.id,
-      desiredLayout,
-      topLevelDashboardItems(currentSchema).map((candidate) => ({ id: candidate.id, layout: dashboardItemLayout(candidate) })),
-      currentSchema.layout.gridColumns,
-    );
+    const previewLayout = resolveDropLayout(item.id, desiredLayout, currentSchema);
+    if (!previewLayout) {
+      setDragPreview(null);
+      return;
+    }
 
     setDragPreview((current) => {
       if (
@@ -296,7 +295,10 @@ export function DashboardBuilderLayoutPage({
   function isPointerInsideCanvas(event: PointerEventLocation): boolean {
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return false;
-    return event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom;
+    const frameRect = canvasRef.current?.closest(".layout-canvas")?.getBoundingClientRect();
+    const frameHasBounds = frameRect && frameRect.height > 0;
+    const visibleBottom = frameHasBounds ? Math.min(rect.bottom, frameRect.bottom) : rect.bottom;
+    return event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= visibleBottom;
   }
 
   function clearDragState() {
@@ -309,13 +311,8 @@ export function DashboardBuilderLayoutPage({
       const item = topLevelDashboardItems(current).find((candidate) => candidate.id === itemId);
       if (!item) return current;
 
-      const fitted = fitLayout(desiredLayout, current.layout.gridColumns);
-      const layout = findAvailableLayout(
-        itemId,
-        fitted,
-        topLevelDashboardItems(current).map((candidate) => ({ id: candidate.id, layout: dashboardItemLayout(candidate) })),
-        current.layout.gridColumns,
-      );
+      const layout = resolveDropLayout(itemId, desiredLayout, current);
+      if (!layout) return current;
 
       const nextSchema = setDashboardItemLayout(current, itemId, layout);
       schemaRef.current = nextSchema;
@@ -331,10 +328,82 @@ export function DashboardBuilderLayoutPage({
     const baseLayout = dashboardItemLayout(item) ?? defaultLayoutForTopLevelItem(item);
     const currentSchema = schemaRef.current;
     const fitted = fitLayout(baseLayout, currentSchema.layout.gridColumns);
-    return layoutFromCanvasPointer(event, fitted, canvas, {
+    const layout = layoutFromCanvasPointer(event, fitted, canvas, {
       columns: currentSchema.layout.gridColumns,
       rowHeight: currentSchema.layout.rowHeight,
     });
+    return layout ? fitLayoutToVisibleCanvas(layout, currentSchema) : null;
+  }
+
+  function resolveDropLayout(
+    itemId: string,
+    desiredLayout: DashboardWidgetLayout,
+    currentSchema: DashboardSchema,
+    { fitDimensions = true }: { fitDimensions?: boolean } = {},
+  ): DashboardWidgetLayout | null {
+    const rows = visibleCanvasRows(currentSchema);
+    const desired = fitDimensions
+      ? fitLayout(desiredLayout, currentSchema.layout.gridColumns)
+      : desiredLayout;
+    const fitted = fitLayoutToVisibleCanvas(
+      desired,
+      currentSchema,
+      rows,
+    );
+    const items = topLevelDashboardItems(currentSchema).map((candidate) => ({
+      id: candidate.id,
+      layout: dashboardItemLayout(candidate),
+    }));
+    if (rows === null) {
+      return findNearestAvailablePosition(itemId, fitted, items, currentSchema.layout.gridColumns);
+    }
+    return findNearestAvailablePositionWithinRows(itemId, fitted, items, currentSchema.layout.gridColumns, rows);
+  }
+
+  function fitLayoutToVisibleCanvas(
+    layout: DashboardWidgetLayout,
+    currentSchema: DashboardSchema,
+    rows = visibleCanvasRows(currentSchema),
+  ): DashboardWidgetLayout {
+    if (rows === null) return layout;
+    const maxY = Math.max(0, rows - layout.h);
+    return {
+      ...layout,
+      x: Math.min(Math.max(0, layout.x), Math.max(0, currentSchema.layout.gridColumns - layout.w)),
+      y: Math.min(Math.max(0, layout.y), maxY),
+    };
+  }
+
+  function fitResizedLayoutToVisibleCanvas(
+    layout: DashboardWidgetLayout,
+    currentSchema: DashboardSchema,
+  ): DashboardWidgetLayout {
+    const rows = visibleCanvasRows(currentSchema);
+    if (rows === null) return layout;
+    const minH = layout.minH ?? 2;
+    const maxH = Math.max(minH, rows - layout.y);
+    return fitLayoutToVisibleCanvas(
+      {
+        ...layout,
+        h: Math.min(layout.h, maxH),
+      },
+      currentSchema,
+      rows,
+    );
+  }
+
+  function visibleCanvasRows(currentSchema: DashboardSchema): number | null {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+    const surfaceRect = canvas.getBoundingClientRect();
+    const frame = canvas.closest(".layout-canvas") as HTMLElement | null;
+    const frameRect = frame?.getBoundingClientRect();
+    const visibleHeight = frame
+      ? frame.clientHeight || frameRect?.height || surfaceRect.height
+      : canvas.clientHeight || surfaceRect.height;
+    if (!Number.isFinite(visibleHeight) || visibleHeight <= 0) return null;
+    const scrollTop = frame?.scrollTop ?? 0;
+    return Math.max(1, Math.floor((scrollTop + visibleHeight) / currentSchema.layout.rowHeight));
   }
 
   function removeItem(itemId: string) {
@@ -381,25 +450,23 @@ export function DashboardBuilderLayoutPage({
       const moveState = moveStateRef.current;
       if (!moveState) return;
       const currentSchema = schemaRef.current;
-      const candidate = fitMovedLayoutPosition(
-        moveLayoutFromPointerDelta({
-          startLayout: moveState.startLayout,
-          startClientX: moveState.startClientX,
-          startClientY: moveState.startClientY,
-          clientX: pointerEvent.clientX,
-          clientY: pointerEvent.clientY,
-          canvas: canvasRef.current,
-          columns: currentSchema.layout.gridColumns,
-          rowHeight: currentSchema.layout.rowHeight,
-        }),
-        currentSchema.layout.gridColumns,
+      const candidate = fitLayoutToVisibleCanvas(
+        fitMovedLayoutPosition(
+          moveLayoutFromPointerDelta({
+            startLayout: moveState.startLayout,
+            startClientX: moveState.startClientX,
+            startClientY: moveState.startClientY,
+            clientX: pointerEvent.clientX,
+            clientY: pointerEvent.clientY,
+            canvas: canvasRef.current,
+            columns: currentSchema.layout.gridColumns,
+            rowHeight: currentSchema.layout.rowHeight,
+          }),
+          currentSchema.layout.gridColumns,
+        ),
+        currentSchema,
       );
-      const dropLayout = findNearestAvailablePosition(
-        moveState.itemId,
-        candidate,
-        topLevelDashboardItems(currentSchema).map((item) => ({ id: item.id, layout: dashboardItemLayout(item) })),
-        currentSchema.layout.gridColumns,
-      );
+      const dropLayout = resolveDropLayout(moveState.itemId, candidate, currentSchema, { fitDimensions: false }) ?? moveState.dropLayout;
       if (sameGridLayout(candidate, moveState.currentLayout) && sameGridLayout(dropLayout, moveState.dropLayout)) return;
       moveState.currentLayout = candidate;
       moveState.dropLayout = dropLayout;
@@ -462,19 +529,22 @@ export function DashboardBuilderLayoutPage({
       const resizeState = resizeStateRef.current;
       if (!resizeState) return;
       updateSchemaFromUser((current) => {
-        const candidate = fitLayout(
-          resizeLayoutFromPointerDelta({
-            startLayout: resizeState.startLayout,
-            startClientX: resizeState.startClientX,
-            startClientY: resizeState.startClientY,
-            clientX: pointerEvent.clientX,
-            clientY: pointerEvent.clientY,
-            canvas: canvasRef.current,
-            handle: resizeState.handle,
-            columns: current.layout.gridColumns,
-            rowHeight: current.layout.rowHeight,
-          }),
-          current.layout.gridColumns,
+        const candidate = fitResizedLayoutToVisibleCanvas(
+          fitLayout(
+            resizeLayoutFromPointerDelta({
+              startLayout: resizeState.startLayout,
+              startClientX: resizeState.startClientX,
+              startClientY: resizeState.startClientY,
+              clientX: pointerEvent.clientX,
+              clientY: pointerEvent.clientY,
+              canvas: canvasRef.current,
+              handle: resizeState.handle,
+              columns: current.layout.gridColumns,
+              rowHeight: current.layout.rowHeight,
+            }),
+            current.layout.gridColumns,
+          ),
+          current,
         );
         const items = topLevelDashboardItems(current);
         const target = items.find((item) => item.id === resizeState.itemId);

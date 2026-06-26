@@ -4,6 +4,15 @@
   align-items: center;
 }
 
+.notice--neutral {
+  background: rgba(255, 255, 255, 0.045);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.notice--neutral svg {
+  color: var(--text-muted);
+}
+
 /* Keep the leading status icon accent, but let icons inside the row's action
    buttons follow the button's own color instead of the notice accent. */
 .notice--row .primary-button svg,

@@ -1357,4 +1357,127 @@ describe("DashboardBuilderLayoutPage", () => {
     });
     dispatchPointer(window, "pointerup", { clientX: 325, clientY: 160 });
   });
+
+  it("keeps dragged placed widgets inside the visible bottom edge of the canvas", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/workflows/wf-1/dashboard")) {
+        expect(init?.method).toBe("PUT");
+        return Promise.resolve(jsonResponse({ workflow_id: "wf-1", status: "configured", valid: true }));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(
+      <DashboardBuilderLayoutPage
+        workflowId="wf-1"
+        workflowName="Workflow"
+        initialSchema={placedSchema}
+        onBackToWidgets={vi.fn()}
+        onSaveComplete={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    await screen.findByRole("button", { name: /resize prompt from bottom-right/i });
+    const canvasSurface = document.querySelector(".layout-canvas__surface") as HTMLElement;
+    vi.spyOn(canvasSurface, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 1200,
+      bottom: 768,
+      width: 1200,
+      height: 768,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    const promptCell = screen.getByRole("textbox").closest("article")!;
+    dispatchPointer(promptCell, "pointerdown", { clientX: 300, clientY: 96 });
+    dispatchPointer(window, "pointermove", { clientX: 300, clientY: 2000 });
+
+    await waitFor(() => {
+      expect(promptCell).toHaveStyle({ top: "576px" });
+    });
+    dispatchPointer(window, "pointerup", { clientX: 300, clientY: 2000 });
+    expect(promptCell).toHaveStyle({ top: "576px" });
+
+    fireEvent.click(screen.getByRole("button", { name: /save dashboard/i }));
+
+    await waitFor(() => {
+      const putCall = fetchMock.mock.calls.find(([, init]) => (init as RequestInit | undefined)?.method === "PUT");
+      expect(putCall).toBeDefined();
+      const body = JSON.parse((putCall![1] as RequestInit).body as string);
+      expect(body.dashboard.sections[0].controls[0].layout).toEqual({
+        x: 0,
+        y: 18,
+        w: 16,
+        h: 6,
+        min_w: 5,
+        min_h: 4,
+      });
+    });
+  });
+
+  it("drops tray widgets onto the nearest visible free cell when the target cell is occupied near the bottom", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+    const { layout: _layout, ...unplacedPrompt } = placedSchema.widgets[0];
+    const schema: DashboardSchema = {
+      ...placedSchema,
+      widgets: [
+        {
+          ...unplacedPrompt,
+        },
+        {
+          ...placedSchema.widgets[0],
+          id: "bottom-result",
+          valueId: "bottom-result",
+          binding: { nodeId: "9", inputName: "output_image" },
+          widgetType: "display_image",
+          title: "Bottom result",
+          layout: { x: 0, y: 18, w: 32, h: 6 },
+        },
+      ],
+    };
+
+    render(
+      <DashboardBuilderLayoutPage
+        workflowId="wf-1"
+        workflowName="Workflow"
+        initialSchema={schema}
+        onBackToWidgets={vi.fn()}
+        onSaveComplete={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    await screen.findByRole("main", { name: /dashboard layout canvas/i });
+    const canvasSurface = document.querySelector(".layout-canvas__surface") as HTMLElement;
+    vi.spyOn(canvasSurface, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 1200,
+      bottom: 768,
+      width: 1200,
+      height: 768,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    const trayWidget = screen.getByText("Prompt").closest("article")!;
+    dispatchPointer(trayWidget, "pointerdown", { clientX: 120, clientY: 120 });
+    dispatchPointer(window, "pointermove", { clientX: 300, clientY: 672 });
+    dispatchPointer(window, "pointerup", { clientX: 300, clientY: 672 });
+
+    const promptCell = screen.getByRole("textbox").closest("article")!;
+    expect(promptCell).toHaveStyle({ top: "384px" });
+    expect(promptCell).not.toHaveStyle({ top: "800px" });
+  });
 });

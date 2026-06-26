@@ -6677,6 +6677,49 @@ describe("WorkflowRunPage", () => {
     expect(screen.queryByText("Starting ComfyUI")).not.toBeInTheDocument();
   });
 
+  it("starts a fresh run at zero instead of reusing completed progress", async () => {
+    const runRequest = deferred<Response>();
+    mockConfiguredDashboardFetch(fetchMock, readyRuntime, configuredPackageData, null, (url, init) => {
+      if (url.endsWith("/api/workflows/text_to_image_v0/run") && init?.method === "POST") {
+        return runRequest.promise;
+      }
+      return undefined;
+    });
+
+    renderRunPageWithWorkflowRuntime({
+      activeJobId: null,
+      activeJobStatus: "completed",
+      activeJobProgress: {
+        job_id: "job-done",
+        status: "completed",
+        value: 1,
+        max: 1,
+        current_node: null,
+        message: "Execution completed",
+      },
+      activeJobUpdatedAt: Date.now(),
+      handleSource: null,
+      queueId: null,
+    });
+
+    expect(await screen.findByRole("button", { name: /run workflow/i })).toBeEnabled();
+    await waitFor(() => {
+      expect(window.sessionStorage.getItem("noofy.workflowRunHandles.v1")).toContain("job-done");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
+
+    expect(await screen.findByRole("progressbar", { name: "Workflow progress" })).toHaveAttribute("aria-valuenow", "0");
+    expect(window.sessionStorage.getItem("noofy.workflowRunHandles.v1")).toBeNull();
+
+    runRequest.resolve(jsonResponse({
+      job_id: "job-fresh",
+      workflow_id: "text_to_image_v0",
+      engine: "comfyui",
+      status: "queued",
+    }));
+  });
+
   it("does not show an offline notice over active workflow preparation", async () => {
     mockConfiguredDashboardFetch(fetchMock, readyRuntime);
 
@@ -7726,6 +7769,47 @@ describe("WorkflowRunPage", () => {
       expect(putCall).toBeDefined();
       const body = JSON.parse((putCall![1] as RequestInit).body as string);
       expect(body.layout_overrides.prompt).toEqual({ x: 0, y: 2, w: 16, h: 6 });
+    });
+  });
+
+  it("keeps edit-layout widget drags inside the visible bottom edge of the canvas", async () => {
+    mockConfiguredDashboardFetch(fetchMock);
+
+    renderRunPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: /workflow options/i }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /edit dashboard layout/i }));
+
+    const canvasSurface = document.querySelector("#canvas-dashboard-surface") as HTMLElement;
+    vi.spyOn(canvasSurface, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 1200,
+      bottom: 768,
+      width: 1200,
+      height: 768,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    const promptCell = screen.getByRole("textbox").closest("article")!;
+    dispatchPointer(promptCell, "pointerdown", { clientX: 300, clientY: 96 });
+    dispatchPointer(window, "pointermove", { clientX: 300, clientY: 2000 });
+
+    await waitFor(() => {
+      expect(promptCell).toHaveStyle({ top: "576px" });
+    });
+    dispatchPointer(window, "pointerup", { clientX: 300, clientY: 2000 });
+
+    expect(promptCell).toHaveStyle({ top: "576px" });
+    fireEvent.click(screen.getByRole("button", { name: /save dashboard/i }));
+
+    await waitFor(() => {
+      const putCall = fetchMock.mock.calls.find(([, init]) => (init as RequestInit | undefined)?.method === "PUT");
+      expect(putCall).toBeDefined();
+      const body = JSON.parse((putCall![1] as RequestInit).body as string);
+      expect(body.layout_overrides.prompt).toEqual({ x: 0, y: 18, w: 16, h: 6 });
     });
   });
 

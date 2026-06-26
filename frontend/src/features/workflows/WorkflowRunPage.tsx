@@ -978,6 +978,9 @@ export function WorkflowRunPage({
     if (queueingBehindActiveRun) {
       setState((current) => ({ ...current, error: null }));
     } else {
+      clearWorkflowRunHandle(workflowId);
+      setStoredWorkflowRunHandle(null);
+      workflowTabs?.clearWorkflowRuntime(workflowId);
       setState((current) => ({
         ...current,
         job: null,

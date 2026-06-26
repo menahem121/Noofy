@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   Download,
   Folder,
+  Info,
   Loader2,
   Package,
   Plus,
@@ -427,7 +428,7 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
       )}
 
       {pageMessage && (
-        <div className="notice notice--row" role="status">
+        <div className="notice notice--success notice--row" role="status">
           <CheckCircle2 size={18} aria-hidden="true" />
           <div>
             <strong>{pageMessage}</strong>
@@ -481,8 +482,8 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
       ) : null}
 
       {(inventory?.summary.missing_count ?? 0) > 0 && (
-        <div className="notice notice--warning notice--row" role="status">
-          <AlertTriangle size={18} aria-hidden="true" />
+        <div className="notice notice--neutral notice--row" role="status">
+          <Info size={18} aria-hidden="true" />
           <div>
             <strong>
               {inventory?.summary.missing_count} model{inventory?.summary.missing_count !== 1 ? "s are" : " is"} needed by installed workflows.

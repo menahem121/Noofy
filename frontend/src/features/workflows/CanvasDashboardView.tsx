@@ -45,6 +45,7 @@ import {
 } from "../../lib/api/noofyApi";
 import {
   findNearestAvailablePosition,
+  findNearestAvailablePositionWithinRows,
   fitLayout,
   layoutsOverlap,
   type GridItemLayout,
@@ -324,18 +325,59 @@ export function CanvasDashboardView({
     return defaultLayoutForWidgetType(item.control.type);
   }
 
-  function resolveMoveDropLayout(controlId: string, candidate: GridItemLayout): GridItemLayout {
-    const fitted = fitMovedLayoutPosition(candidate, DASHBOARD_CANVAS_COLUMNS);
-    return findNearestAvailablePosition(controlId, fitted, canvasItems, DASHBOARD_CANVAS_COLUMNS);
+  function resolveMoveDropLayout(controlId: string, candidate: GridItemLayout): GridItemLayout | null {
+    const fitted = fitLayoutToVisibleCanvas(
+      fitMovedLayoutPosition(candidate, DASHBOARD_CANVAS_COLUMNS),
+    );
+    const rows = visibleCanvasRows();
+    if (rows === null) {
+      return findNearestAvailablePosition(controlId, fitted, canvasItems, DASHBOARD_CANVAS_COLUMNS);
+    }
+    return findNearestAvailablePositionWithinRows(controlId, fitted, canvasItems, DASHBOARD_CANVAS_COLUMNS, rows);
   }
 
   function resolveResizedLayout(controlId: string, candidate: GridItemLayout): GridItemLayout {
     const item = topLevelItems.find((candidateItem) => candidateItem.id === controlId);
-    const fitted = fitLayout(candidate, DASHBOARD_CANVAS_COLUMNS);
+    const fitted = fitResizedLayoutToVisibleCanvas(fitLayout(candidate, DASHBOARD_CANVAS_COLUMNS));
     if (!item) return fitted;
     return layoutCollides(controlId, fitted)
       ? effectiveLayout(item)
       : fitted;
+  }
+
+  function fitLayoutToVisibleCanvas(layout: GridItemLayout): GridItemLayout {
+    const rows = visibleCanvasRows();
+    if (rows === null) return layout;
+    return {
+      ...layout,
+      x: Math.min(Math.max(0, layout.x), Math.max(0, DASHBOARD_CANVAS_COLUMNS - layout.w)),
+      y: Math.min(Math.max(0, layout.y), Math.max(0, rows - layout.h)),
+    };
+  }
+
+  function fitResizedLayoutToVisibleCanvas(layout: GridItemLayout): GridItemLayout {
+    const rows = visibleCanvasRows();
+    if (rows === null) return layout;
+    const minH = layout.minH ?? 2;
+    const maxH = Math.max(minH, rows - layout.y);
+    return fitLayoutToVisibleCanvas({
+      ...layout,
+      h: Math.min(layout.h, maxH),
+    });
+  }
+
+  function visibleCanvasRows(): number | null {
+    const surface = canvasRef.current;
+    if (!surface) return null;
+    const surfaceRect = surface.getBoundingClientRect();
+    const frame = frameRef.current ?? (surface.closest(".layout-canvas") as HTMLElement | null);
+    const frameRect = frame?.getBoundingClientRect();
+    const visibleHeight = frame
+      ? frame.clientHeight || frameRect?.height || surfaceRect.height
+      : surface.clientHeight || surfaceRect.height;
+    if (!Number.isFinite(visibleHeight) || visibleHeight <= 0) return null;
+    const scrollTop = frame?.scrollTop ?? 0;
+    return Math.max(1, Math.floor((scrollTop + visibleHeight) / DASHBOARD_CANVAS_ROW_HEIGHT));
   }
 
   function layoutCollides(controlId: string, layout: GridItemLayout): boolean {
@@ -376,15 +418,17 @@ export function CanvasDashboardView({
       if (!moveState) return;
       const deltaColumns = Math.round((pointerEvent.clientX - moveState.startClientX) / moveState.columnWidth);
       const deltaRows = Math.round((pointerEvent.clientY - moveState.startClientY) / DASHBOARD_CANVAS_ROW_HEIGHT);
-      const candidate = fitMovedLayoutPosition(
-        {
-          ...moveState.startLayout,
-          x: Math.max(0, Math.min(moveState.startLayout.x + deltaColumns, DASHBOARD_CANVAS_COLUMNS - moveState.startLayout.w)),
-          y: Math.max(0, moveState.startLayout.y + deltaRows),
-        },
-        DASHBOARD_CANVAS_COLUMNS,
+      const candidate = fitLayoutToVisibleCanvas(
+        fitMovedLayoutPosition(
+          {
+            ...moveState.startLayout,
+            x: Math.max(0, Math.min(moveState.startLayout.x + deltaColumns, DASHBOARD_CANVAS_COLUMNS - moveState.startLayout.w)),
+            y: Math.max(0, moveState.startLayout.y + deltaRows),
+          },
+          DASHBOARD_CANVAS_COLUMNS,
+        ),
       );
-      const dropLayout = resolveMoveDropLayout(moveState.controlId, candidate);
+      const dropLayout = resolveMoveDropLayout(moveState.controlId, candidate) ?? moveState.dropLayout;
       if (sameGridLayout(candidate, moveState.currentLayout) && sameGridLayout(dropLayout, moveState.dropLayout)) return;
       moveState.currentLayout = candidate;
       moveState.dropLayout = dropLayout;

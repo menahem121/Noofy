@@ -51,7 +51,9 @@ export function findNearestAvailableLayout(
   items: Array<{ id: string; layout?: GridItemLayout | null }>,
   columns: number,
 ): GridItemLayout {
-  return findNearestAvailableLayoutFromFitted(itemId, fitLayout(desired, columns), items, columns);
+  const fitted = fitLayout(desired, columns);
+  return findNearestAvailableLayoutFromFitted(itemId, fitted, items, columns)
+    ?? fallbackLayoutBelowItems(fitted, items);
 }
 
 export function findNearestAvailablePosition(
@@ -65,7 +67,24 @@ export function findNearestAvailablePosition(
     x: clamp(desired.x, 0, Math.max(0, columns - desired.w)),
     y: Math.max(0, desired.y),
   };
-  return findNearestAvailableLayoutFromFitted(itemId, positioned, items, columns);
+  return findNearestAvailableLayoutFromFitted(itemId, positioned, items, columns)
+    ?? fallbackLayoutBelowItems(positioned, items);
+}
+
+export function findNearestAvailablePositionWithinRows(
+  itemId: string,
+  desired: GridItemLayout,
+  items: Array<{ id: string; layout?: GridItemLayout | null }>,
+  columns: number,
+  rows: number,
+): GridItemLayout | null {
+  const maxY = Math.max(0, rows - desired.h);
+  const positioned = {
+    ...desired,
+    x: clamp(desired.x, 0, Math.max(0, columns - desired.w)),
+    y: clamp(desired.y, 0, maxY),
+  };
+  return findNearestAvailableLayoutFromFitted(itemId, positioned, items, columns, rows);
 }
 
 function findNearestAvailableLayoutFromFitted(
@@ -73,14 +92,17 @@ function findNearestAvailableLayoutFromFitted(
   fitted: GridItemLayout,
   items: Array<{ id: string; layout?: GridItemLayout | null }>,
   columns: number,
-): GridItemLayout {
+  rows?: number,
+): GridItemLayout | null {
   if (!hasLayoutCollision(itemId, fitted, items)) return fitted;
 
   const maxY = items.reduce(
     (max, item) => (item.layout ? Math.max(max, item.layout.y + item.layout.h) : max),
     0,
   );
-  const searchMaxY = Math.max(maxY + fitted.h + 40, fitted.y + fitted.h + 40);
+  const searchMaxY = rows === undefined
+    ? Math.max(maxY + fitted.h + 40, fitted.y + fitted.h + 40)
+    : Math.max(0, rows - fitted.h);
   let best: GridItemLayout | null = null;
   let bestScore: LayoutCandidateScore | null = null;
 
@@ -97,7 +119,18 @@ function findNearestAvailableLayoutFromFitted(
     }
   }
 
-  return best ?? { ...fitted, x: 0, y: maxY + 1 };
+  return best;
+}
+
+function fallbackLayoutBelowItems(
+  fitted: GridItemLayout,
+  items: Array<{ id: string; layout?: GridItemLayout | null }>,
+): GridItemLayout {
+  const maxY = items.reduce(
+    (max, item) => (item.layout ? Math.max(max, item.layout.y + item.layout.h) : max),
+    0,
+  );
+  return { ...fitted, x: 0, y: maxY + 1 };
 }
 
 function hasLayoutCollision(
