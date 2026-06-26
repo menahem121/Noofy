@@ -22,6 +22,7 @@ MEMORY_FAILURE_MESSAGE = (
 FinishMemorySampling = Callable[[str], Awaitable[None]]
 RecordMemoryObservation = Callable[[JobResult], None]
 MaybeRetryAfterMemoryCleanup = Callable[[JobResult], Awaitable[EngineJob | None]]
+RecordRuntimeMaterializations = Callable[[str], None]
 
 
 class RunResultService:
@@ -49,6 +50,7 @@ class RunResultService:
         workflow_run_queue_service: WorkflowRunQueueService | None = None,
         request_run_dispatch: Callable[[str], None] | None = None,
         progress_estimator: WorkflowProgressEstimator | None = None,
+        record_runtime_materializations: RecordRuntimeMaterializations | None = None,
     ) -> None:
         self.job_service = job_service
         self.log_store = log_store
@@ -64,6 +66,7 @@ class RunResultService:
         self.workflow_run_queue_service = workflow_run_queue_service
         self.request_run_dispatch = request_run_dispatch
         self.progress_estimator = progress_estimator
+        self.record_runtime_materializations = record_runtime_materializations
         self._terminal_locks: dict[str, asyncio.Lock] = {}
         self._terminal_outcomes: dict[str, JobResult | EngineJob] = {}
         self._suppressed_library_history_job_ids: set[str] = set()
@@ -101,6 +104,7 @@ class RunResultService:
             mark_job_finished = getattr(self.job_service, "mark_job_finished", None)
             if callable(mark_job_finished):
                 mark_job_finished(result.job_id)
+            self._record_runtime_materializations(result)
             await self.finish_memory_sampling(result.job_id)
             self.record_memory_observation(result)
             suppress_library_history = result.job_id in self._suppressed_library_history_job_ids
@@ -125,6 +129,24 @@ class RunResultService:
             if self.request_run_dispatch is not None:
                 self.request_run_dispatch("job_finalized")
             return outcome
+
+    def _record_runtime_materializations(self, result: JobResult) -> None:
+        if self.record_runtime_materializations is None:
+            return
+        workflow_id = self.job_workflows.get(result.job_id)
+        if workflow_id is None:
+            return
+        try:
+            self.record_runtime_materializations(workflow_id)
+        except Exception as exc:
+            self.log_store.add(
+                "warning",
+                "Workflow-installed model bundle usage could not be recorded after run",
+                "runs.result_service",
+                job_id=result.job_id,
+                workflow_id=workflow_id,
+                details={"error": str(exc), "error_type": type(exc).__name__},
+            )
 
     def _public_terminal_result(self, result: JobResult) -> JobResult:
         if result.status != "failed" or not likely_memory_error(result.error):

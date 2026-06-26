@@ -379,13 +379,10 @@ def required_models_from_comfyui_workflow(
     *,
     comfyui_graph: dict[str, Any] | None = None,
 ) -> list[RequiredModel]:
-    graph_bindings = _comfyui_graph_model_bindings(comfyui_graph or {})
     models: list[RequiredModel] = []
     seen: set[tuple[str | None, str | None, str, str]] = set()
     source_urls_by_target: dict[tuple[str, str], list[str]] = {}
     for node in _iter_comfyui_workflow_nodes(comfyui_workflow):
-        node_id = _node_id_string(node.get("id"))
-        node_type = optional_string_field(node, "type")
         properties = node.get("properties")
         if not isinstance(properties, dict):
             continue
@@ -405,33 +402,6 @@ def required_models_from_comfyui_workflow(
             )
             if source_urls and (folder, filename) not in source_urls_by_target:
                 source_urls_by_target[(folder, filename)] = list(source_urls)
-            graph_node_id, input_name = _matching_graph_model_binding(
-                graph_bindings,
-                node_id=node_id,
-                node_type=node_type,
-                filename=filename,
-            )
-            resolved_node_id = graph_node_id or node_id
-            key = (resolved_node_id, input_name, folder, filename)
-            if key in seen:
-                continue
-            seen.add(key)
-            models.append(
-                RequiredModel(
-                    folder=folder,
-                    filename=filename,
-                    node_id=resolved_node_id,
-                    node_type=node_type,
-                    input_name=input_name,
-                    source_url=source_urls[0] if source_urls else None,
-                    source_urls=source_urls,
-                    model_type=_model_type_from_workflow_model(folder, node_type),
-                    verification_level=ModelVerificationLevel.FILENAME_ONLY,
-                    identity_verified_by_exporter=False,
-                    bundled=False,
-                    asset_ownership=AssetOwnership.EXTERNAL_REFERENCE,
-                )
-            )
     for selector in _iter_comfyui_workflow_widget_model_selectors(comfyui_workflow):
         node_id, node_type, input_name, folder, model_type, filename, source_urls = selector
         key = (node_id, input_name, folder, filename)
@@ -480,42 +450,6 @@ def required_models_from_comfyui_workflow(
             )
         )
     return models
-
-
-def _comfyui_graph_model_bindings(
-    comfyui_graph: dict[str, Any],
-) -> dict[tuple[str | None, str], list[tuple[str, str]]]:
-    bindings: dict[tuple[str | None, str], list[tuple[str, str]]] = {}
-    for raw_node_id, raw_node in comfyui_graph.items():
-        if not isinstance(raw_node, dict):
-            continue
-        node_id = str(raw_node_id)
-        node_type = optional_string_field(raw_node, "class_type")
-        inputs = raw_node.get("inputs")
-        if not isinstance(inputs, dict):
-            continue
-        for input_name, value in inputs.items():
-            if not isinstance(input_name, str) or not isinstance(value, str):
-                continue
-            bindings.setdefault((node_type, value), []).append((node_id, input_name))
-    return bindings
-
-
-def _matching_graph_model_binding(
-    graph_bindings: dict[tuple[str | None, str], list[tuple[str, str]]],
-    *,
-    node_id: str | None,
-    node_type: str | None,
-    filename: str,
-) -> tuple[str | None, str | None]:
-    candidates = graph_bindings.get((node_type, filename), [])
-    if not candidates:
-        return None, None
-    if node_id:
-        for graph_node_id, input_name in candidates:
-            if graph_node_id == node_id or graph_node_id.endswith(f":{node_id}"):
-                return graph_node_id, input_name
-    return candidates[0]
 
 
 def _iter_comfyui_graph_model_selectors(
@@ -714,13 +648,6 @@ def _safe_graph_model_selector_filename(value: Any) -> str | None:
     if Path(filename).suffix.casefold() not in MODEL_SELECTOR_EXTENSIONS:
         return None
     return filename
-
-
-def _model_type_from_workflow_model(folder: str, node_type: str | None) -> str:
-    normalized_node = (node_type or "").casefold()
-    if "backgroundremoval" in normalized_node or folder == "background_removal":
-        return "background_removal"
-    return folder
 
 
 def _node_id_string(value: Any) -> str | None:

@@ -29,6 +29,9 @@ from app.runtime.storage.storage_gc import (
     RuntimeStorageGcConfig,
     RuntimeStorageRoots,
 )
+from app.runtime.storage.materialized_models import (
+    record_workflow_runtime_model_bundles,
+)
 from app.runtime.runners.supervisor import RunnerDescriptor, RunnerKind, RunnerStatus
 
 
@@ -686,6 +689,107 @@ def test_rebuildable_non_view_materialization_can_be_cleaned(
     assert not legacy.exists()
     assert any(
         decision.path == legacy
+        and decision.action is RuntimeStorageGcAction.DELETE
+        for decision in result.decisions
+    )
+
+
+def test_runtime_model_bundle_usage_manifest_is_recorded_and_merged(
+    tmp_path: Path,
+) -> None:
+    materialized = tmp_path / "materialized"
+    bundle = materialized / "moss-tts"
+    bundle.mkdir(parents=True)
+    (bundle / "model.safetensors").write_bytes(b"model")
+    (materialized / "views").mkdir()
+
+    stamped = record_workflow_runtime_model_bundles(
+        materialized,
+        workflow_id="workflow-a",
+        capsule_fingerprint="capsule-a",
+        log_store=LogStore(),
+    )
+    record_workflow_runtime_model_bundles(
+        materialized,
+        workflow_id="workflow-b",
+        capsule_fingerprint="capsule-b",
+        log_store=LogStore(),
+    )
+
+    manifest = json.loads((bundle / ".noofy-materialization.json").read_text(encoding="utf-8"))
+    assert stamped == [bundle]
+    assert manifest["owner"] == "noofy"
+    assert manifest["artifact_type"] == "workflow_installed_model_bundle"
+    assert manifest["rebuildable"] is True
+    assert manifest["referenced_workflows"] == ["workflow-a", "workflow-b"]
+    assert manifest["capsule_fingerprints"] == ["capsule-a", "capsule-b"]
+    assert not (materialized / "views" / ".noofy-materialization.json").exists()
+
+
+def test_manifested_runtime_model_bundle_kept_until_no_workflow_references_it(
+    tmp_path: Path,
+) -> None:
+    roots = _roots(tmp_path)
+    bundle = roots.model_materialized_dir / "moss-tts"
+    bundle.mkdir()
+    (bundle / ".noofy-materialization.json").write_text(
+        json.dumps(
+            {
+                "owner": "noofy",
+                "rebuildable": True,
+                "referenced_workflows": ["workflow-a"],
+                "capsule_fingerprints": ["capsule-a"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (bundle / "model.safetensors").write_bytes(b"model")
+
+    kept = RuntimeStorageGarbageCollector(
+        roots=roots,
+        install_states=[_state("capsule-a")],
+        log_store=LogStore(),
+    ).collect_garbage(aggressive=True)
+
+    assert bundle.exists()
+    assert any(
+        decision.path == bundle
+        and decision.action is RuntimeStorageGcAction.SKIP_REFERENCED
+        and decision.referenced_workflows == ("capsule-a",)
+        for decision in kept.decisions
+    )
+
+    removed = RuntimeStorageGarbageCollector(
+        roots=roots,
+        install_states=[],
+        log_store=LogStore(),
+    ).collect_garbage(aggressive=True)
+
+    assert not bundle.exists()
+    assert any(
+        decision.path == bundle
+        and decision.action is RuntimeStorageGcAction.DELETE
+        for decision in removed.decisions
+    )
+
+
+def test_aggressive_gc_removes_unreferenced_custom_node_cache(
+    tmp_path: Path,
+) -> None:
+    roots = _roots(tmp_path)
+    cache = roots.custom_node_cache_dir / "orphan-node"
+    cache.mkdir()
+    (cache / "node.py").write_text("x = 1\n", encoding="utf-8")
+
+    result = RuntimeStorageGarbageCollector(
+        roots=roots,
+        install_states=[],
+        log_store=LogStore(),
+    ).collect_garbage(aggressive=True)
+
+    assert not cache.exists()
+    assert any(
+        decision.path == cache
         and decision.action is RuntimeStorageGcAction.DELETE
         for decision in result.decisions
     )

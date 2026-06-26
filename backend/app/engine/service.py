@@ -67,6 +67,9 @@ from app.runtime.memory.resource_monitor import SystemResourceObserver, build_re
 from app.runtime.runners.runner_coordinator import RunnerProcessCoordinator
 from app.runtime.runners.lifecycle_service import WorkflowRunnerLifecycleService
 from app.runtime.storage.maintenance import RuntimeStorageMaintenanceService
+from app.runtime.storage.materialized_models import (
+    record_workflow_runtime_model_bundles,
+)
 from app.runtime.storage.storage_gc import RuntimeStorageGarbageCollector, RuntimeStorageRoots
 from app.runtime.runners.supervisor import (
     CORE_RUNNER_ID,
@@ -274,6 +277,7 @@ class EngineService:
             workflow_run_queue_service=self.workflow_run_queue_service,
             request_run_dispatch=self.run_lifecycle_service.request_dispatch,
             progress_estimator=self.progress_estimator,
+            record_runtime_materializations=self._record_workflow_runtime_model_bundle_usage,
         )
         self.run_orchestrator: RunOrchestrator = run_orchestrator or RunOrchestrator(
             workflow_loader=self.workflow_loader,
@@ -594,6 +598,7 @@ class EngineService:
             result = maintenance_service.run(
                 reason="workflow_removed",
                 workflow_id=workflow_id,
+                force_aggressive=True,
             )
         bytes_deleted = result.gc_result.bytes_deleted if result is not None else 0
         decision_count = (
@@ -631,6 +636,29 @@ class EngineService:
             log_store=self.log_store,
             model_reference_validator=validator,
         )
+
+    def _record_workflow_runtime_model_bundle_usage(self, workflow_id: str) -> None:
+        maintenance_service = self.runtime_storage_maintenance_service
+        materialized_dir = (
+            maintenance_service.roots.model_materialized_dir
+            if maintenance_service is not None
+            else settings.paths.model_materialized_dir
+        )
+        try:
+            record_workflow_runtime_model_bundles(
+                materialized_dir,
+                workflow_id=workflow_id,
+                capsule_fingerprint=self._capsule_fingerprint_for_workflow(workflow_id),
+                log_store=self.log_store,
+            )
+        except Exception as exc:
+            self.log_store.add(
+                "warning",
+                "Workflow-installed model bundle usage could not be recorded",
+                "runtime.storage_gc",
+                workflow_id=workflow_id,
+                details={"error": str(exc), "error_type": type(exc).__name__},
+            )
 
     def run_runtime_storage_maintenance(
         self,
@@ -866,13 +894,16 @@ class EngineService:
         try:
             return await self.workflow_runner_lifecycle_service.prepare_workflow(workflow_id)
         finally:
+            self._record_workflow_runtime_model_bundle_usage(workflow_id)
             self.run_runtime_storage_maintenance(
                 reason="prepare_workflow",
                 workflow_id=workflow_id,
             )
 
     async def start_workflow_runner(self, workflow_id: str) -> dict[str, object]:
-        return await self.workflow_runner_lifecycle_service.start_workflow_runner(workflow_id)
+        result = await self.workflow_runner_lifecycle_service.start_workflow_runner(workflow_id)
+        self._record_workflow_runtime_model_bundle_usage(workflow_id)
+        return result
 
     async def _ensure_workflow_runner_for_run(
         self, package: WorkflowPackage, queue_id: str | None = None
@@ -1156,6 +1187,7 @@ class EngineService:
                 workflow_id
             )
         finally:
+            self._record_workflow_runtime_model_bundle_usage(workflow_id)
             self.run_runtime_storage_maintenance(
                 reason=reason,
                 workflow_id=workflow_id,

@@ -28,6 +28,7 @@ from app.runtime.dependencies.isolation import (
 )
 from app.runtime.models.model_gc import model_reference_cleanup_policy
 from app.runtime.runners.supervisor import RunnerDescriptor, RunnerStatus
+from app.runtime.storage.materialized_models import MATERIALIZATION_MANIFEST_NAME
 from app.workflows.package import WorkflowPackage
 
 ModelReferenceValidator = Callable[[list[InstalledModelReference]], list[str]]
@@ -393,7 +394,10 @@ class RuntimeStorageGarbageCollector:
         artifacts.extend(self._model_blob_artifacts(referenced_model_blobs))
         artifacts.extend(self._model_view_artifacts(referenced_model_views))
         artifacts.extend(
-            self._non_view_model_materialization_artifacts(referenced_model_views)
+            self._non_view_model_materialization_artifacts(
+                referenced_model_views,
+                workflow_for_state=workflow_for_state,
+            )
         )
         artifacts.extend(self._transaction_artifacts())
         artifacts.extend(
@@ -740,6 +744,21 @@ class RuntimeStorageGarbageCollector:
                 artifact.size_bytes,
                 refs,
             )
+        if artifact.kind in {
+            RuntimeStorageArtifactKind.WHEEL_CACHE_ENTRY,
+            RuntimeStorageArtifactKind.CUSTOM_NODE_SOURCE_CACHE_ENTRY,
+            RuntimeStorageArtifactKind.PACKAGE_ARCHIVE,
+        }:
+            if aggressive:
+                return RuntimeStorageGcDecision(
+                    artifact.kind,
+                    artifact.path,
+                    RuntimeStorageGcAction.DELETE,
+                    "unreferenced runtime cache removed during aggressive cleanup",
+                    artifact.size_bytes,
+                    refs,
+                )
+            return None
         if (
             artifact.kind is RuntimeStorageArtifactKind.MODEL_BLOB
             and artifact.path.is_relative_to(self.roots.model_blobs_dir)
@@ -961,7 +980,10 @@ class RuntimeStorageGarbageCollector:
         return artifacts
 
     def _non_view_model_materialization_artifacts(
-        self, refs: dict[Path, set[str]]
+        self,
+        refs: dict[Path, set[str]],
+        *,
+        workflow_for_state: dict[str, str],
     ) -> list[RuntimeStorageArtifactMetadata]:
         artifacts: list[RuntimeStorageArtifactMetadata] = []
         if not self.roots.model_materialized_dir.exists():
@@ -969,8 +991,11 @@ class RuntimeStorageGarbageCollector:
         for path in sorted(self.roots.model_materialized_dir.iterdir()):
             if path.name == "views" or not (path.exists() or path.is_symlink()):
                 continue
-            workflows = set(refs.get(path, set()))
             metadata = _read_non_view_materialization_metadata(path)
+            workflows = set(refs.get(path, set()))
+            workflows.update(
+                _active_manifest_workflow_refs(metadata, workflow_for_state)
+            )
             rebuildable = metadata.get("rebuildable") is True
             noofy_owned = metadata.get("owner") == "noofy"
             if _refs_include_runner(workflows):
@@ -1358,7 +1383,7 @@ def _read_json(path: Path) -> dict[str, object]:
 
 def _read_non_view_materialization_metadata(path: Path) -> dict[str, object]:
     for manifest_name in (
-        ".noofy-materialization.json",
+        MATERIALIZATION_MANIFEST_NAME,
         "noofy-materialization.json",
         "manifest.json",
     ):
@@ -1366,6 +1391,31 @@ def _read_non_view_materialization_metadata(path: Path) -> dict[str, object]:
         if payload:
             return payload
     return {}
+
+
+def _active_manifest_workflow_refs(
+    metadata: dict[str, object],
+    workflow_for_state: dict[str, str],
+) -> set[str]:
+    active_workflows = set(workflow_for_state.values())
+    workflows = {
+        workflow_id
+        for workflow_id in _string_list(metadata.get("referenced_workflows"))
+        if workflow_id in active_workflows
+    }
+    for capsule_fingerprint in _string_list(metadata.get("capsule_fingerprints")):
+        workflow_id = workflow_for_state.get(capsule_fingerprint)
+        if workflow_id is not None:
+            workflows.add(workflow_id)
+    return workflows
+
+
+def _string_list(value: object) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str) and item]
 
 
 def _transaction_has_payload(path: Path) -> bool:

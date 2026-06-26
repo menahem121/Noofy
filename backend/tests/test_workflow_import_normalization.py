@@ -90,6 +90,92 @@ def test_required_models_from_api_graph_known_model_selector_without_properties(
     assert model.model_type == "background_removal"
 
 
+def test_required_models_ignore_stale_properties_models() -> None:
+    workflow = {
+        "nodes": [
+            {
+                "id": 70,
+                "type": "UNETLoader",
+                "properties": {
+                    "models": [
+                        {
+                            "directory": "diffusion_models",
+                            "name": "flux-2-klein-base-4b.safetensors",
+                            "url": "https://example.test/flux-2-klein-base-4b.safetensors",
+                        }
+                    ]
+                },
+                "widgets_values": ["flux-2-klein-4b-fp8.safetensors", "default"],
+            },
+            {
+                "id": 71,
+                "type": "CLIPLoader",
+                "properties": {
+                    "models": [
+                        {
+                            "directory": "text_encoders",
+                            "name": "qwen_3_4b.safetensors",
+                            "url": "https://example.test/qwen_3_4b.safetensors",
+                        }
+                    ]
+                },
+                "widgets_values": [
+                    "qwen_3_4b_fp4_flux2.safetensors",
+                    "flux2",
+                    "default",
+                ],
+            },
+            {
+                "id": 72,
+                "type": "VAELoader",
+                "properties": {
+                    "models": [
+                        {
+                            "directory": "vae",
+                            "name": "flux2-vae.safetensors",
+                            "url": "https://example.test/flux2-vae.safetensors",
+                        }
+                    ]
+                },
+                "widgets_values": ["flux2-vae.safetensors"],
+            },
+        ]
+    }
+    graph = {
+        "75:70": {
+            "class_type": "UNETLoader",
+            "inputs": {"unet_name": "flux-2-klein-4b-fp8.safetensors"},
+        },
+        "75:71": {
+            "class_type": "CLIPLoader",
+            "inputs": {"clip_name": "qwen_3_4b_fp4_flux2.safetensors"},
+        },
+        "75:72": {
+            "class_type": "VAELoader",
+            "inputs": {"vae_name": "flux2-vae.safetensors"},
+        },
+    }
+
+    models = required_models_from_comfyui_workflow(workflow, comfyui_graph=graph)
+
+    targets = {(model.folder, model.filename) for model in models}
+    assert targets == {
+        ("diffusion_models", "flux-2-klein-4b-fp8.safetensors"),
+        ("text_encoders", "qwen_3_4b_fp4_flux2.safetensors"),
+        ("vae", "flux2-vae.safetensors"),
+    }
+    assert all(
+        model.source_urls == []
+        for model in models
+        if model.filename == "flux-2-klein-4b-fp8.safetensors"
+    )
+    assert any(
+        model.source_urls == ["https://example.test/flux2-vae.safetensors"]
+        for model in models
+        if model.filename == "flux2-vae.safetensors"
+    )
+
+
 @pytest.mark.parametrize(
     ("node_type", "input_name", "filename", "folder", "model_type"),
     [
