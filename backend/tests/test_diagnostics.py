@@ -163,6 +163,39 @@ def test_log_store_emits_warning_and_error_events_to_console_logger(caplog) -> N
     ]
 
 
+def test_workflow_model_download_failures_emit_actionable_console_details(caplog) -> None:
+    caplog.set_level(logging.INFO, logger="noofy.events")
+    store = LogStore()
+
+    store.add(
+        "warning",
+        "Required model download failed",
+        "workflow.models",
+        workflow_id="workflow-1",
+        details={
+            "folder": "checkpoints",
+            "filename": "model.safetensors",
+            "error": (
+                "Failed to fetch https://example.invalid/model.safetensors?token=secret "
+                "into /Users/alice/Noofy Models/checkpoints/model.safetensors"
+            ),
+        },
+    )
+
+    messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "noofy.events"
+    ]
+    assert messages == [
+        "warning workflow.models: Required model download failed "
+        "workflow=workflow-1 folder=checkpoints filename=model.safetensors "
+        "error='Failed to fetch "
+        "https://example.invalid/model.safetensors?token=[redacted] into "
+        "/Users/alice/Noofy Models/checkpoints/model.safetensors'"
+    ]
+
+
 def test_log_store_does_not_emit_routine_debug_or_uncurated_info(caplog) -> None:
     caplog.set_level(logging.INFO, logger="noofy.events")
     store = LogStore()

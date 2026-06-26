@@ -1994,6 +1994,43 @@ def test_memory_admission_reuses_same_runner_model_residency_for_changed_executi
     assert ownership["same_warm_runner_model_residency_signature"] == "sha256:model-a"
 
 
+def test_memory_admission_reuses_same_runner_model_residency_without_resident_telemetry() -> None:
+    estimate = build_workflow_memory_estimate(
+        WorkflowMemoryEstimateRequest(
+            workflow_id="workflow-a",
+            declared_memory_class=RunnerMemoryClass.GPU_LIGHT,
+            model_residency_signature="sha256:model-a",
+            execution_profile_signature="sha256:execution-a",
+        )
+    )
+    warm_core = RunnerMemorySnapshot(
+        runner_id="core",
+        kind=RunnerKind.CORE_COMFYUI,
+        memory_class=RunnerMemoryClass.GPU_LIGHT,
+        status=RunnerStatus.IDLE,
+        last_workflow_id="workflow-a",
+        model_residency_signature="sha256:model-a",
+        execution_profile_signature="sha256:execution-a",
+    )
+
+    decision = decide_memory_admission(
+        MemoryAdmissionRequest(
+            workflow_estimate=estimate,
+            machine_snapshot=_machine(total_vram_mb=12_000, free_vram_mb=8_000),
+            selected_runner=warm_core,
+            resident_runners=[warm_core],
+        )
+    )
+
+    assert decision.action is MemoryDecisionAction.REUSE_RUNNER
+    assert decision.reason_code == "same_runner_model_residency_reuse"
+    assert decision.developer_details["memory_ownership"]["same_warm_runner_id"] == "core"
+    assert (
+        decision.developer_details["same_runner_incremental_estimated_vram_mb"]
+        == estimate.estimated_peak_vram_mb
+    )
+
+
 def test_memory_admission_reuses_same_runner_model_residency_even_under_high_pressure() -> None:
     estimate = build_workflow_memory_estimate(
         WorkflowMemoryEstimateRequest(

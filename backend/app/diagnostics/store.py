@@ -40,6 +40,11 @@ CONSOLE_DETAIL_KEYS = (
     "model_count",
     "error_type",
 )
+WORKFLOW_MODEL_CONSOLE_DETAIL_KEYS = (
+    "folder",
+    "filename",
+    "error",
+)
 
 
 class DiagnosticsSink(Protocol):
@@ -180,7 +185,12 @@ def _format_console_event(event: DiagnosticEvent) -> str:
         fields.append(f"workflow={_console_value(event.workflow_id)}")
     if event.job_id:
         fields.append(f"job={_console_value(event.job_id)}")
-    for key in CONSOLE_DETAIL_KEYS:
+    detail_keys = CONSOLE_DETAIL_KEYS
+    if event.source == "workflow.models" and event.message.startswith(
+        "Required model "
+    ):
+        detail_keys = (*CONSOLE_DETAIL_KEYS, *WORKFLOW_MODEL_CONSOLE_DETAIL_KEYS)
+    for key in detail_keys:
         if key not in event.details:
             continue
         value = event.details[key]

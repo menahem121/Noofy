@@ -3496,6 +3496,8 @@ def _selected_runner_reuse_allowed(
         RunnerStatus.CO_RESIDENT,
     }:
         return False
+    if estimate.recent_memory_error:
+        return False
     if not _same_runner_model_residency_matches(runner, estimate):
         return False
     if estimate.local_evidence is not None:
@@ -3503,6 +3505,11 @@ def _selected_runner_reuse_allowed(
             return False
         if estimate.local_evidence.successful_runs > 0:
             return True
+    if (
+        runner.model_residency_signature is not None
+        and estimate.model_residency_signature is not None
+    ):
+        return True
     return _runner_resident_vram_mb(runner) is not None
 
 

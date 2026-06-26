@@ -1441,6 +1441,8 @@ class EngineService:
     # ------------------------------------------------------------------
 
     def _sync_core_runner_runtime_process(self, runtime_status: Any | None = None) -> None:
+        if self.runner_supervisor is None:
+            return
         pid = getattr(runtime_status, "pid", None)
         if pid is None:
             managed_process_pid = getattr(self.runtime_manager, "managed_process_pid", None)
