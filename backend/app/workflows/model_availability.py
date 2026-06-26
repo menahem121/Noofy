@@ -48,7 +48,7 @@ DOWNLOAD_STATE_UPDATE_INTERVAL_SECONDS = 1.0
 PROVIDER_RATE_LIMIT_DOWNLOAD_ATTEMPTS = 3
 PROVIDER_RATE_LIMIT_RETRY_BASE_SECONDS = 1.0
 PROVIDER_RATE_LIMIT_RETRY_MAX_SECONDS = 10.0
-DEFAULT_MODEL_DOWNLOAD_CONCURRENCY = 3
+DEFAULT_MODEL_DOWNLOAD_CONCURRENCY = settings.model_download_max_concurrency
 DEFAULT_MODEL_VERIFICATION_CONCURRENCY = 3
 # Network/remote filesystem types where parallel full-file hashing tends to hurt
 # (high latency, flaky I/O). Verification is clamped to serial on these roots.
@@ -1037,6 +1037,7 @@ class ModelAvailabilityService:
                 details={
                     "folder": model.folder,
                     "filename": model.filename,
+                    "error": self.provider_resolver.sanitize_message(str(exc)),
                 },
             )
             return self._failed_download_outcome(
@@ -1060,6 +1061,7 @@ class ModelAvailabilityService:
                 details={
                     "folder": model.folder,
                     "filename": model.filename,
+                    "error": self.provider_resolver.sanitize_message(str(exc)),
                 },
             )
             return self._failed_download_outcome(
@@ -1083,6 +1085,7 @@ class ModelAvailabilityService:
                 details={
                     "folder": model.folder,
                     "filename": model.filename,
+                    "error": self.provider_resolver.sanitize_message(str(exc)),
                 },
             )
             return self._failed_download_outcome(
@@ -1617,6 +1620,9 @@ class ModelAvailabilityService:
             transaction = self._begin_download_transaction(model)
             try:
                 provider = _provider_from_url(url)
+                source_index = index + 1
+                source_count = len(urls)
+                stream_completed = False
                 transaction.write_state(
                     status="downloading",
                     source_url=url,
@@ -1624,6 +1630,19 @@ class ModelAvailabilityService:
                     bytes_downloaded=transaction.part_path.stat().st_size
                     if transaction.part_path.exists()
                     else 0,
+                )
+                self.log_store.add(
+                    "info",
+                    "Required model source download started",
+                    "workflow.models",
+                    details={
+                        "folder": model.folder,
+                        "filename": model.filename,
+                        "provider": provider,
+                        "source_host": urlparse(url).hostname,
+                        "source_index": source_index,
+                        "source_count": source_count,
+                    },
                 )
 
                 last_state_update_at = time.monotonic()
@@ -1666,6 +1685,7 @@ class ModelAvailabilityService:
                     cancel_event=cancel_event,
                     model=model,
                 )
+                stream_completed = True
                 stream_duration_seconds = max(
                     time.monotonic() - stream_started_at,
                     0.000001,
@@ -1676,8 +1696,12 @@ class ModelAvailabilityService:
                     "Required model source download completed",
                     "workflow.models",
                     details={
+                        "folder": model.folder,
+                        "filename": model.filename,
                         "provider": provider,
                         "source_host": urlparse(url).hostname,
+                        "source_index": source_index,
+                        "source_count": source_count,
                         "size_bytes": streamed_size_bytes,
                         "duration_seconds": round(stream_duration_seconds, 3),
                         "average_bytes_per_second": round(
@@ -1746,6 +1770,15 @@ class ModelAvailabilityService:
                 if transaction.part_path.exists():
                     transaction.part_path.unlink()
                 status_code = exc.response.status_code
+                self._log_required_model_source_failure(
+                    model,
+                    url,
+                    exc,
+                    source_index=index + 1,
+                    source_count=len(urls),
+                    status_code=status_code,
+                    final_source=index == len(urls) - 1,
+                )
                 if status_code == 401:
                     last_error = ProviderAuthenticationRequired(
                         "A provider API key is required or the saved key is invalid."
@@ -1775,6 +1808,15 @@ class ModelAvailabilityService:
                 last_error = exc
                 if transaction.part_path.exists():
                     transaction.part_path.unlink()
+                if not stream_completed:
+                    self._log_required_model_source_failure(
+                        model,
+                        url,
+                        exc,
+                        source_index=index + 1,
+                        source_count=len(urls),
+                        final_source=index == len(urls) - 1,
+                    )
             finally:
                 self._cleanup_transaction(transaction.transaction_dir)
         if isinstance(
@@ -1783,6 +1825,36 @@ class ModelAvailabilityService:
         ):
             raise last_error
         raise ModelAvailabilityError(f"All model sources failed: {last_error}")
+
+    def _log_required_model_source_failure(
+        self,
+        model: RequiredModel,
+        url: str,
+        exc: Exception,
+        *,
+        source_index: int,
+        source_count: int,
+        final_source: bool,
+        status_code: int | None = None,
+    ) -> None:
+        safe_error = self.provider_resolver.sanitize_message(str(exc))
+        details: dict[str, object] = {
+            "folder": model.folder,
+            "filename": model.filename,
+            "provider": _provider_from_url(url),
+            "source_host": urlparse(url).hostname,
+            "source_index": source_index,
+            "source_count": source_count,
+            "error": safe_error,
+        }
+        if status_code is not None:
+            details["status_code"] = status_code
+        self.log_store.add(
+            "warning" if final_source else "info",
+            "Required model source download failed",
+            "workflow.models",
+            details=details,
+        )
 
     async def _stream_model_source_with_rate_limit_retry(
         self,
@@ -2476,16 +2548,20 @@ def _hugging_face_search_terms(model: RequiredModel) -> list[str]:
         "model",
     }
     useful_tokens = [token for token in tokens if token not in stop_tokens]
+    generic_filename = _looks_like_generic_provider_filename(filename, tokens)
     terms = [filename, stem]
+    base_term: str | None = None
     if useful_tokens:
-        terms.append(" ".join(useful_tokens[:5]))
-        terms.append("-".join(useful_tokens[:5]))
+        base_term = " ".join(useful_tokens[:5])
+        terms.append(base_term)
     if "v1" in tokens and "5" in tokens:
         terms.extend(["stable diffusion v1 5", "stable-diffusion-v1-5"])
     if "sd15" in tokens or "sd1" in tokens:
         terms.extend(["stable diffusion 1.5", "stable-diffusion-v1-5"])
-    if _model_sha256(model) is not None and _looks_like_generic_provider_filename(filename, tokens):
+    if _model_sha256(model) is not None and generic_filename:
         terms.extend(_hugging_face_context_search_terms(model, useful_tokens))
+    if base_term and not generic_filename:
+        terms.extend(_hugging_face_model_name_search_terms(useful_tokens[:5]))
     unique: list[str] = []
     for term in terms:
         term = term.strip(" ._-")
@@ -2495,6 +2571,22 @@ def _hugging_face_search_terms(model: RequiredModel) -> list[str]:
         if len(unique) >= HUGGING_FACE_SEARCH_TERM_LIMIT:
             break
     return unique
+
+
+def _hugging_face_model_name_search_terms(tokens: list[str]) -> list[str]:
+    terms: list[str] = []
+    # Filename stems often end with artifact details such as precision, variant,
+    # or format words. Search progressively shorter model-name prefixes before
+    # provider/package qualifiers; candidate acceptance still requires exact
+    # file identity.
+    for length in range(len(tokens) - 1, 1, -1):
+        prefix = " ".join(tokens[:length])
+        if not prefix or prefix in terms:
+            continue
+        terms.append(prefix)
+        terms.append(f"{prefix} comfyui")
+        terms.append(f"{prefix} repackaged")
+    return terms
 
 
 def _looks_like_generic_provider_filename(filename: str, tokens: list[str]) -> bool:

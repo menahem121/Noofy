@@ -47,6 +47,11 @@ class Settings:
     noofy_bundled_resource_dir: str | None = os.environ.get("NOOFY_BUNDLED_RESOURCE_DIR")
     noofy_runtime_update_repo: str | None = os.environ.get("NOOFY_RUNTIME_UPDATE_REPO")
     comfyui_max_restart_attempts: int = int(os.environ.get("COMFYUI_MAX_RESTART_ATTEMPTS", "3"))
+    # Max model files downloaded in parallel. Default serially because provider
+    # APIs and multi-GB file hosts are more likely to throttle parallel imports.
+    model_download_max_concurrency: int = int(
+        os.environ.get("MODEL_DOWNLOAD_MAX_CONCURRENCY", "1")
+    )
     # Max models hashed in parallel during verification. Set to 1 to force fully serial
     # verification (e.g. on slow/network/removable model storage).
     model_verification_max_concurrency: int = int(

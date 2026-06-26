@@ -10,9 +10,14 @@ from fastapi.testclient import TestClient
 from app import main as main_module
 from app.composition import ApiServices
 from app.diagnostics import LogStore
-from app.engine.models import RequiredModelSummary
+from app.engine.models import (
+    ImportModelDownloadProgressItem,
+    ModelDownloadSummary,
+    RequiredModelSummary,
+)
 from app.engine.service import EngineService
 from app.main import create_app
+from app.models.ownership import ModelOwnershipStore
 from app.runtime.runners.supervisor import RunnerSupervisor
 from app.source_policy import SourcePolicy
 from app.workflows import model_availability as availability_module
@@ -22,6 +27,7 @@ from app.workflows.import_orchestrator import (
     ImportSessionExpiredError,
     WorkflowImportOrchestrator,
     _ImportModelDownloadJob,
+    _PendingWorkflowImport,
 )
 from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.model_availability import ModelAvailabilityService
@@ -1178,6 +1184,143 @@ def test_pending_import_session_stays_alive_during_active_download(tmp_path) -> 
 
     assert service._pending_import_or_raise(session_id) is pending
     assert session_id in service._pending_workflow_imports
+
+
+@pytest.mark.anyio
+async def test_import_download_job_marks_partial_successes_as_downloaded(
+    tmp_path,
+) -> None:
+    model_root = tmp_path / "Noofy Models"
+    ownership = ModelOwnershipStore(tmp_path / "settings" / "model-ownership.json")
+    package = WorkflowPackage(
+        metadata=WorkflowMetadata(
+            id="partial_download_workflow",
+            name="Partial download workflow",
+            version="0.1.0",
+        ),
+        engine="comfyui",
+        required_models=[
+            RequiredModel(
+                folder="diffusion_models",
+                filename="missing.safetensors",
+                size_bytes=117,
+                verification_level="filename_size",
+            ),
+            RequiredModel(
+                folder="text_encoders",
+                filename="downloaded.safetensors",
+                size_bytes=87,
+                verification_level="filename_size",
+            ),
+        ],
+        comfyui_graph={},
+    )
+
+    class PartialAvailabilityService:
+        noofy_models_dir = model_root
+
+        async def download_missing(self, package, **kwargs):  # type: ignore[no-untyped-def]
+            downloaded = model_root / "text_encoders" / "downloaded.safetensors"
+            downloaded.parent.mkdir(parents=True)
+            downloaded.write_bytes(b"downloaded")
+            return ModelDownloadSummary(
+                workflow_id=package.metadata.id,
+                status="completed_with_errors",
+                user_facing_message="Some downloads failed.",
+                downloaded_count=1,
+                failed_count=1,
+                model_summary=RequiredModelSummary(
+                    workflow_id=package.metadata.id,
+                    total_count=2,
+                    available_count=1,
+                    possible_match_count=0,
+                    missing_count=0,
+                    needs_manual_download_count=1,
+                    ready_to_run=False,
+                    models=[],
+                ),
+            )
+
+    orchestrator = WorkflowImportOrchestrator(
+        imported_package_store=FakePackageStore(package),
+        workflow_library_service=object(),  # type: ignore[arg-type]
+        model_availability_service=PartialAvailabilityService(),  # type: ignore[arg-type]
+        log_store=LogStore(),
+        model_ownership_store=ownership,
+    )
+    now = datetime.now(UTC)
+    job = _ImportModelDownloadJob(
+        job_id="download-job-1",
+        import_session_id="import-session-1",
+        workflow_id=package.metadata.id,
+        cancel_event=asyncio.Event(),
+        task=None,
+        status="queued",
+        user_facing_message="Model download is queued.",
+        started_at=now,
+        updated_at=now,
+        total_models=2,
+    )
+    orchestrator._pending_workflow_imports["import-session-1"] = _PendingWorkflowImport(
+        data=b"archive",
+        original_filename=None,
+        allow_unverified_community_preparation=False,
+        package=package,
+        created_at=now,
+        updated_at=now,
+        active_download_job_id=job.job_id,
+    )
+    orchestrator._import_model_download_jobs[job.job_id] = job
+
+    await orchestrator._run_import_model_download_job(job.job_id)
+
+    assert job.status == "completed_with_errors"
+    assert ownership.origin_for_model("text_encoders/downloaded.safetensors") == "downloaded"
+    assert ownership.origin_for_model("diffusion_models/missing.safetensors") is None
+
+
+@pytest.mark.anyio
+async def test_import_download_status_points_terminal_failure_at_failed_model() -> None:
+    orchestrator = object.__new__(WorkflowImportOrchestrator)
+    now = datetime.now(UTC)
+    job = _ImportModelDownloadJob(
+        job_id="download-job-1",
+        import_session_id="import-session-1",
+        workflow_id="workflow-1",
+        cancel_event=asyncio.Event(),
+        task=None,
+        status="completed_with_errors",
+        user_facing_message="Some downloads failed.",
+        started_at=now,
+        updated_at=now,
+        total_models=2,
+        current_model_filename="encoder.safetensors",
+        current_model_index=2,
+        models={
+            "diffusion_models/longcat.safetensors": ImportModelDownloadProgressItem(
+                requirement_id="diffusion_models/longcat.safetensors",
+                filename="longcat.safetensors",
+                status="needs_manual_download",
+                status_label="Needs manual download",
+                total_bytes=117,
+                message="Noofy could not find a reliable automatic download source.",
+            ),
+            "text_encoders/encoder.safetensors": ImportModelDownloadProgressItem(
+                requirement_id="text_encoders/encoder.safetensors",
+                filename="encoder.safetensors",
+                status="succeeded",
+                status_label="Downloaded",
+                bytes_downloaded=87,
+                total_bytes=87,
+            ),
+        },
+    )
+
+    status = orchestrator._import_download_job_status(job)
+
+    assert status.current_model_filename == "longcat.safetensors"
+    assert status.current_model_index == 1
+    assert status.status == "completed_with_errors"
 
 
 def test_staged_import_download_commit_and_cancel_endpoints(monkeypatch) -> None:

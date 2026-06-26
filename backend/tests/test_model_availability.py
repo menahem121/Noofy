@@ -945,7 +945,12 @@ async def test_parallel_provider_rate_limit_fails_only_that_model(
 ) -> None:
     payload = b"unrelated-model"
     noofy_root = tmp_path / "Noofy Models"
-    service = _service(noofy_root=noofy_root, max_parallel_downloads=2)
+    log_store = LogStore()
+    service = _service(
+        noofy_root=noofy_root,
+        log_store=log_store,
+        max_parallel_downloads=2,
+    )
     retry_delays: list[float] = []
 
     async def fake_stream(url: str, part_path: Path, **kwargs: object) -> None:
@@ -994,6 +999,16 @@ async def test_parallel_provider_rate_limit_fails_only_that_model(
     assert (noofy_root / "checkpoints" / "unrelated.safetensors").read_bytes() == payload
     assert not (noofy_root / "checkpoints" / "rate-limited.safetensors").exists()
     assert retry_delays == [1.0, 2.0]
+    source_failure = next(
+        event
+        for event in log_store.list_events(limit=50).events
+        if event.message == "Required model source download failed"
+    )
+    assert source_failure.details["folder"] == "checkpoints"
+    assert source_failure.details["filename"] == "rate-limited.safetensors"
+    assert source_failure.details["provider"] == "hugging_face"
+    assert source_failure.details["source_host"] == "huggingface.co"
+    assert source_failure.details["status_code"] == 429
 
 
 @pytest.mark.anyio
@@ -1692,6 +1707,89 @@ async def test_download_resolves_hugging_face_exact_filename_and_size(
     assert result.downloaded_count == 1
     assert "https://huggingface.co/api/models/creator/repo" in fetched_urls
     assert (noofy_root / "checkpoints" / "hf-model.safetensors").read_bytes() == payload
+
+
+@pytest.mark.anyio
+async def test_download_resolves_hugging_face_model_when_precision_suffix_hides_repo(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"longcat-image-bf16"
+    sha = hashlib.sha256(payload).hexdigest()
+    noofy_root = tmp_path / "Noofy Models"
+    searched_terms: list[str] = []
+    streamed_urls: list[str] = []
+
+    async def fake_fetch_json(
+        method: str,
+        url: str,
+        params: dict[str, str],
+        headers: dict[str, str],
+    ) -> object:
+        assert method == "GET"
+        if "/by-hash/" in url:
+            return {"files": []}
+        if url == "https://huggingface.co/api/models":
+            searched_terms.append(params["search"])
+            if params["search"] == "longcat image":
+                return [
+                    {"modelId": "meituan-longcat/LongCat-Image"},
+                    {"modelId": "meituan-longcat/LongCat-Image-Edit"},
+                    {"modelId": "stduhpf/LongCat-Image-Edit-gguf"},
+                    {"modelId": "vantagewithai/LongCat-Image-Edit-ComfyUI"},
+                ]
+            if params["search"] == "longcat image comfyui":
+                return [{"modelId": "TalmajM/LongCat-Image_ComfyUI_repackaged"}]
+            return []
+        assert params == {"blobs": "true"}
+        if url != "https://huggingface.co/api/models/TalmajM/LongCat-Image_ComfyUI_repackaged":
+            return {"siblings": []}
+        return {
+            "siblings": [
+                {
+                    "rfilename": "split_files/diffusion_models/longcat_image_bf16.safetensors",
+                    "size": len(payload),
+                    "lfs": {"sha256": sha, "size": len(payload)},
+                }
+            ],
+        }
+
+    async def fake_stream(url: str, part_path: Path, **kwargs: object) -> None:
+        streamed_urls.append(url)
+        part_path.parent.mkdir(parents=True, exist_ok=True)
+        part_path.write_bytes(payload)
+
+    service = _service(
+        noofy_root=noofy_root,
+        provider_resolver=ProviderModelResolver(
+            api_key_resolver=lambda provider: None,
+            fetch_json=fake_fetch_json,
+        ),
+    )
+    monkeypatch.setattr(availability_module, "_stream_url", fake_stream)
+
+    result = await service.download_missing(
+        _package(
+            [
+                RequiredModel(
+                    folder="diffusion_models",
+                    filename="longcat_image_bf16.safetensors",
+                    checksum=f"sha256:{sha}",
+                    size_bytes=len(payload),
+                    verification_level="sha256_size",
+                )
+            ]
+        )
+    )
+
+    assert "longcat image bf16" in searched_terms
+    assert "longcat image" in searched_terms
+    assert "longcat image comfyui" in searched_terms
+    assert streamed_urls == [
+        "https://huggingface.co/TalmajM/LongCat-Image_ComfyUI_repackaged/resolve/main/split_files/diffusion_models/longcat_image_bf16.safetensors"
+    ]
+    assert result.downloaded_count == 1
+    assert result.failed_count == 0
 
 
 @pytest.mark.anyio

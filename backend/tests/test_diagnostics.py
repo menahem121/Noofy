@@ -215,6 +215,67 @@ def test_workflow_model_download_failures_emit_actionable_console_details(caplog
     ]
 
 
+def test_workflow_model_console_info_includes_provider_and_concurrency_details(caplog) -> None:
+    caplog.set_level(logging.INFO, logger="noofy.events")
+    store = LogStore()
+
+    store.add(
+        "info",
+        "Starting required model downloads",
+        "workflow.models",
+        workflow_id="workflow-1",
+        details={
+            "model_count": 2,
+            "max_parallel_downloads": 1,
+        },
+    )
+    store.add(
+        "info",
+        "Provider model resolver step completed",
+        "workflow.models",
+        details={
+            "folder": "diffusion_models",
+            "filename": "model.safetensors",
+            "provider": "hugging_face",
+            "step": "model_search",
+            "candidate_count": 3,
+            "reliable_candidate_count": 0,
+        },
+    )
+    store.add(
+        "warning",
+        "Required model source download failed",
+        "workflow.models",
+        details={
+            "folder": "text_encoders",
+            "filename": "encoder.safetensors",
+            "provider": "hugging_face",
+            "source_host": "huggingface.co",
+            "source_index": 1,
+            "source_count": 1,
+            "status_code": 429,
+            "error": "Hugging Face is rate limiting downloads; try again later.",
+        },
+    )
+
+    messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "noofy.events"
+    ]
+    assert messages == [
+        "info workflow.models: Starting required model downloads "
+        "workflow=workflow-1 model_count=2 max_parallel_downloads=1",
+        "info workflow.models: Provider model resolver step completed "
+        "folder=diffusion_models filename=model.safetensors provider=hugging_face "
+        "step=model_search candidate_count=3 reliable_candidate_count=0",
+        "warning workflow.models: Required model source download failed "
+        "folder=text_encoders filename=encoder.safetensors provider=hugging_face "
+        "source_host=huggingface.co source_index=1 source_count=1 status_code=429 "
+        "error='Hugging Face is rate limiting downloads; try again later.'",
+    ]
+
+
 def test_log_store_does_not_emit_routine_debug_or_uncurated_info(caplog) -> None:
     caplog.set_level(logging.INFO, logger="noofy.events")
     store = LogStore()

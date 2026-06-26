@@ -138,6 +138,19 @@ def _download_progress_status_label(status: str) -> str:
     }.get(status, status.replace("_", " ").title())
 
 
+MODEL_DOWNLOAD_FAILURE_PROGRESS_STATUSES = {
+    "failed",
+    "download_failed",
+    "verification_failed",
+    "authentication_required",
+    "access_denied",
+    "rate_limited",
+    "hash_mismatch",
+    "not_enough_disk_space",
+    "needs_manual_download",
+}
+
+
 def _requirement_id(model: RequiredModel) -> str:
     return required_model_reference_id(model)
 
@@ -1180,6 +1193,8 @@ class WorkflowImportOrchestrator:
                 cancel_event=job.cancel_event,
             )
             job.model_summary = result.model_summary
+            if result.downloaded_count > 0:
+                self._mark_import_downloads_as_noofy_downloaded(pending.package)
             if result.status == "canceled" or job.cancel_event.is_set():
                 job.status = "canceled"
                 job.user_facing_message = result.user_facing_message
@@ -1189,7 +1204,6 @@ class WorkflowImportOrchestrator:
             else:
                 job.status = "completed"
                 job.user_facing_message = result.user_facing_message
-                self._mark_import_downloads_as_noofy_downloaded(pending.package)
         except Exception:
             job.status = "failed"
             job.user_facing_message = "The model download failed. The partial download was cleaned up safely."
@@ -1247,14 +1261,28 @@ class WorkflowImportOrchestrator:
         percent = None
         if bytes_downloaded is not None and total_bytes:
             percent = min(100.0, round((bytes_downloaded / total_bytes) * 100, 1))
+        current_model_filename = job.current_model_filename
+        current_model_index = job.current_model_index
+        if job.status in {"completed_with_errors", "failed"}:
+            failed_item = next(
+                (
+                    (index, item)
+                    for index, item in enumerate(items, start=1)
+                    if item.status in MODEL_DOWNLOAD_FAILURE_PROGRESS_STATUSES
+                ),
+                None,
+            )
+            if failed_item is not None:
+                current_model_index, item = failed_item
+                current_model_filename = item.filename
         return ImportModelDownloadJobStatus(
             job_id=job.job_id,
             import_session_id=job.import_session_id,
             workflow_id=job.workflow_id,
             status=job.status,  # type: ignore[arg-type]
             user_facing_message=job.user_facing_message,
-            current_model_filename=job.current_model_filename,
-            current_model_index=job.current_model_index,
+            current_model_filename=current_model_filename,
+            current_model_index=current_model_index,
             total_models=job.total_models,
             bytes_downloaded=bytes_downloaded,
             total_bytes=total_bytes,

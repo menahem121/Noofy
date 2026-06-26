@@ -44,12 +44,32 @@ CONSOLE_DETAIL_KEYS = (
     "downloaded_count",
     "failed_count",
     "model_count",
+    "max_parallel_downloads",
+    "required_bytes",
     "error_type",
+    "provider",
+    "step",
+    "source_host",
+    "source_index",
+    "source_count",
+    "attempt",
+    "max_attempts",
+    "delay_seconds",
+    "status_code",
+    "error",
+    "candidate_count",
+    "reliable_candidate_count",
+    "search_term_count",
+    "candidate_repo_count",
+    "inspected_repo_count",
+    "metadata_error_repo_count",
+    "size_bytes",
+    "duration_seconds",
+    "average_bytes_per_second",
 )
 WORKFLOW_MODEL_CONSOLE_DETAIL_KEYS = (
     "folder",
     "filename",
-    "error",
 )
 
 
@@ -194,10 +214,8 @@ def _format_console_event(event: DiagnosticEvent) -> str:
     if event.job_id:
         fields.append(f"job={_console_value(event.job_id)}")
     detail_keys = CONSOLE_DETAIL_KEYS
-    if event.source == "workflow.models" and event.message.startswith(
-        "Required model "
-    ):
-        detail_keys = (*CONSOLE_DETAIL_KEYS, *WORKFLOW_MODEL_CONSOLE_DETAIL_KEYS)
+    if event.source == "workflow.models":
+        detail_keys = (*WORKFLOW_MODEL_CONSOLE_DETAIL_KEYS, *CONSOLE_DETAIL_KEYS)
     for key in detail_keys:
         if key not in event.details:
             continue
