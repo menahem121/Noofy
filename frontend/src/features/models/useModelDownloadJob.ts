@@ -4,6 +4,7 @@ import {
   cancelModelDownload,
   fetchActiveModelDownload,
   fetchModelDownloadStatus,
+  isApiError,
   startModelDownload,
   type ModelDownloadJobStatus,
   type ModelDownloadSelection,
@@ -12,6 +13,14 @@ import { isModelDownloadActive } from "../../lib/modelDownloadProgress";
 
 const ACTIVE_JOB_STORAGE_KEY = "noofy.models.activeDownloadJobId";
 
+function clearStoredDownloadJob() {
+  window.localStorage.removeItem(ACTIVE_JOB_STORAGE_KEY);
+}
+
+function isMissingDownloadJobError(error: unknown) {
+  return isApiError(error) && error.status === 404;
+}
+
 export function useModelDownloadJob(onFinished: () => void) {
   const [downloadJob, setDownloadJob] = useState<ModelDownloadJobStatus | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
@@ -19,16 +28,19 @@ export function useModelDownloadJob(onFinished: () => void) {
 
   useEffect(() => {
     let mounted = true;
-    const storedJobId = window.localStorage.getItem(ACTIVE_JOB_STORAGE_KEY);
-    const load = storedJobId
-      ? fetchModelDownloadStatus(storedJobId).catch(() => fetchActiveModelDownload().then((response) => response.job))
-      : fetchActiveModelDownload().then((response) => response.job);
-    load
+    fetchActiveModelDownload()
+      .then((response) => response.job)
       .then((job) => {
-        if (!mounted || !job) return;
+        if (!mounted) return;
+        if (!job) {
+          clearStoredDownloadJob();
+          return;
+        }
         setDownloadJob(job);
         if (isModelDownloadActive(job.status)) {
           window.localStorage.setItem(ACTIVE_JOB_STORAGE_KEY, job.job_id);
+        } else {
+          clearStoredDownloadJob();
         }
       })
       .catch(() => {
@@ -50,11 +62,17 @@ export function useModelDownloadJob(onFinished: () => void) {
           setDownloadJob(job);
           setDownloadError(null);
           if (!isModelDownloadActive(job.status)) {
-            window.localStorage.removeItem(ACTIVE_JOB_STORAGE_KEY);
+            clearStoredDownloadJob();
             onFinished();
           }
         })
         .catch((error) => {
+          if (isMissingDownloadJobError(error)) {
+            setDownloadJob(null);
+            setDownloadError(null);
+            clearStoredDownloadJob();
+            return;
+          }
           setDownloadError(error instanceof Error ? error.message : "Could not check model download progress.");
         });
     }, 700);
@@ -81,7 +99,7 @@ export function useModelDownloadJob(onFinished: () => void) {
     if (!downloadJob) return;
     try {
       setDownloadJob(await cancelModelDownload(downloadJob.job_id));
-      window.localStorage.removeItem(ACTIVE_JOB_STORAGE_KEY);
+      clearStoredDownloadJob();
     } catch (error) {
       setDownloadError(error instanceof Error ? error.message : "Could not cancel the model download.");
     }
