@@ -1413,7 +1413,7 @@ def build_workflow_memory_estimate(
     ]
     estimate_fields = _estimate_request_fields(request)
     local = request.local_evidence
-    if local is not None and local.has_estimate_evidence:
+    if local is not None and _local_evidence_usable_for_estimate(local):
         settings_match = _local_evidence_matches_request(request, local)
         confidence = RunnerMemoryEstimateConfidence.LOW
         reasons = ["local_memory_evidence", *estimate_reasons]
@@ -1571,10 +1571,12 @@ def summarize_local_memory_observations(
             1 for observation in observations if observation.retry_required
         ),
         observed_peak_vram_mb=_max_optional(
-            observation.peak_vram_mb for observation in observations
+            _trusted_observed_peak_vram_mb(observation)
+            for observation in observations
         ),
         observed_peak_ram_mb=_max_optional(
-            observation.peak_ram_mb for observation in observations
+            _trusted_observed_peak_ram_mb(observation)
+            for observation in observations
         ),
         process_tree_observed_peak_vram_mb=_max_optional(
             observation.process_tree_peak_vram_mb for observation in observations
@@ -4085,6 +4087,79 @@ def _workflow_type_heuristic_factor(workflow_type: str | None) -> float:
 def _max_optional(values: Iterable[int | None]) -> int | None:
     present = [value for value in values if value is not None]
     return max(present) if present else None
+
+
+def _local_evidence_usable_for_estimate(
+    local: LocalMemoryEvidenceSummary,
+) -> bool:
+    return local.has_estimate_evidence and (
+        local.observed_peak_vram_mb is not None
+        or local.observed_peak_ram_mb is not None
+        or local.has_memory_failure
+    )
+
+
+def _trusted_observed_peak_vram_mb(
+    observation: LocalMemoryObservation,
+) -> int | None:
+    return _trusted_observed_peak_mb(
+        observation,
+        peak_mb=observation.peak_vram_mb,
+        system_peak_delta_mb=observation.system_peak_delta_vram_mb,
+        system_delta_reason="system_vram_delta_active_job_window",
+        has_attributed_peak=(
+            observation.process_tree_peak_vram_mb is not None
+            or observation.backend_allocator_peak_vram_mb is not None
+        ),
+    )
+
+
+def _trusted_observed_peak_ram_mb(
+    observation: LocalMemoryObservation,
+) -> int | None:
+    return _trusted_observed_peak_mb(
+        observation,
+        peak_mb=observation.peak_ram_mb,
+        system_peak_delta_mb=observation.system_peak_delta_ram_mb,
+        system_delta_reason="system_ram_delta_active_job_window",
+        has_attributed_peak=observation.process_tree_peak_ram_mb is not None,
+    )
+
+
+def _trusted_observed_peak_mb(
+    observation: LocalMemoryObservation,
+    *,
+    peak_mb: int | None,
+    system_peak_delta_mb: int | None,
+    system_delta_reason: str,
+    has_attributed_peak: bool,
+) -> int | None:
+    if peak_mb is None:
+        return None
+    if observation.outcome is MemoryObservationOutcome.MEMORY_ERROR:
+        return peak_mb
+    if has_attributed_peak:
+        return peak_mb
+    if observation.attribution_quality in {
+        MemoryAttributionQuality.PROCESS_EXACT,
+        MemoryAttributionQuality.PROCESS_TREE,
+        MemoryAttributionQuality.BACKEND_ALLOCATOR,
+        MemoryAttributionQuality.ACTIVE_WINDOW_DELTA,
+    }:
+        return peak_mb
+    if (
+        observation.attribution_quality is MemoryAttributionQuality.SYSTEM_DELTA
+        or system_peak_delta_mb is not None
+        or system_delta_reason in observation.attribution_reasons
+    ):
+        return None
+    if observation.attribution_quality is MemoryAttributionQuality.UNAVAILABLE:
+        return None
+    if observation.attribution_sources or observation.attribution_reasons:
+        return None
+    # Legacy learning records predate attribution fields but already stored a
+    # selected peak. Keep them usable instead of silently discarding history.
+    return peak_mb
 
 
 def _best_attribution_quality(

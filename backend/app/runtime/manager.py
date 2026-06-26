@@ -426,6 +426,11 @@ class RuntimeManager:
     def is_managed_process_running(self) -> bool:
         return self._is_managed_process_running()
 
+    def managed_process_pid(self) -> int | None:
+        if not self._is_managed_process_running():
+            return None
+        return self._process.pid if self._process is not None else None
+
     # ------------------------------------------------------------------
     # Process lifecycle
     # ------------------------------------------------------------------

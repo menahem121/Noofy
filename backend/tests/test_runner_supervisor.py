@@ -472,6 +472,23 @@ def test_supervisor_update_status_returns_new_descriptor() -> None:
     assert supervisor.get_runner(CORE_RUNNER_ID).status is RunnerStatus.READY
 
 
+def test_supervisor_update_runner_process_tracks_pid_without_changing_status() -> None:
+    supervisor = RunnerSupervisor()
+    supervisor.register_core_runner(
+        _core_descriptor().model_copy(update={"status": RunnerStatus.IDLE}),
+        RecordingAdapter(),
+    )
+
+    updated = supervisor.update_runner_process(CORE_RUNNER_ID, pid=4242)
+    cleared = supervisor.update_runner_process(CORE_RUNNER_ID, pid=None)
+
+    assert updated.pid == 4242
+    assert updated.status is RunnerStatus.IDLE
+    assert cleared.pid is None
+    assert cleared.status is RunnerStatus.IDLE
+    assert supervisor.get_runner(CORE_RUNNER_ID).pid is None
+
+
 def test_supervisor_upserts_isolated_runner() -> None:
     supervisor = RunnerSupervisor()
     adapter = RecordingAdapter()

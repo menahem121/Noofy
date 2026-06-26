@@ -14,7 +14,7 @@ export function hardwareWarningPillView(warning: WorkflowHardwareWarning): Hardw
       tooltip: capacityShortfallTooltip(warning),
     };
   }
-  if (warning.severity === "high") {
+  if (warning.severity === "high" && warning.reason_codes.includes("local_memory_error")) {
     return {
       tone: "high",
       label: "Likely too heavy",

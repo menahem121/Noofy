@@ -60,6 +60,44 @@ def test_managed_runtime_selects_free_port_when_unconfigured(tmp_path: Path) -> 
 
 
 @pytest.mark.anyio
+async def test_managed_process_pid_reports_only_running_process(tmp_path: Path) -> None:
+    repo_dir = tmp_path / "ComfyUI"
+    repo_dir.mkdir()
+    (repo_dir / "main.py").write_text("", encoding="utf-8")
+    fake_process = FakeProcess()
+    process_started = False
+
+    async def create_process(*args, **kwargs):
+        nonlocal process_started
+        process_started = True
+        return fake_process
+
+    async def health_check(_: str) -> tuple[bool, str | None]:
+        return process_started, None if process_started else "not reachable"
+
+    manager = RuntimeManager(
+        mode="managed",
+        external_base_url="http://127.0.0.1:8188",
+        repo_dir=repo_dir,
+        python_executable="python3",
+        process_factory=create_process,
+        health_check=health_check,
+        log_store=LogStore(),
+    )
+
+    assert manager.managed_process_pid() is None
+
+    result = await manager.start()
+
+    assert result.status == "started"
+    assert manager.managed_process_pid() == 4321
+
+    fake_process.returncode = 0
+
+    assert manager.managed_process_pid() is None
+
+
+@pytest.mark.anyio
 async def test_managed_start_reports_missing_comfyui_repo(tmp_path: Path) -> None:
     async def unreachable(_: str) -> tuple[bool, str | None]:
         return False, "not reachable"

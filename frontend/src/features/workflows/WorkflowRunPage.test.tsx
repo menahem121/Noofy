@@ -6866,6 +6866,68 @@ describe("WorkflowRunPage", () => {
     expect(screen.queryByText("This workflow cannot run on this machine")).not.toBeInTheDocument();
   });
 
+  it("does not flash a stale preparation failure dialog while retrying a runnable workflow", async () => {
+    window.localStorage.setItem("noofy.prefs", JSON.stringify({ viewMode: "classic" }));
+    const runRequest = deferred<Response>();
+    let statusCalls = 0;
+    const staleFailedStatus = {
+      ...workflowStatus,
+      workflow: { ...workflowStatus.workflow, custom_node_count: 1 },
+      install: {
+        status: "failed",
+        user_facing_message: "Cannot prepare automatically",
+        last_error: "Previous preparation failed.",
+        requires_preparation: true,
+      },
+      can_prepare: true,
+    };
+    mockConfiguredDashboardFetch(fetchMock, readyRuntime, configuredPackageData, null, (url, init) => {
+      if (url.endsWith("/api/workflows/text_to_image_v0/status")) {
+        statusCalls += 1;
+        return jsonResponse(staleFailedStatus);
+      }
+      if (url.endsWith("/api/workflows/text_to_image_v0/run") && init?.method === "POST") {
+        return runRequest.promise;
+      }
+      if (url.endsWith("/api/jobs/job-retry/progress")) {
+        return jsonResponse({
+          job_id: "job-retry",
+          status: "completed",
+          value: 1,
+          max: 1,
+          current_node: null,
+          message: "Execution completed",
+        });
+      }
+      if (url.endsWith("/api/jobs/job-retry/result")) {
+        return jsonResponse({ job_id: "job-retry", status: "completed", outputs: [], error: null });
+      }
+      return undefined;
+    });
+
+    renderRunPage();
+
+    expect(await screen.findByRole("heading", { name: "Inputs" })).toBeInTheDocument();
+    const runButton = screen.getByRole("button", { name: /run workflow/i });
+    expect(runButton).toBeEnabled();
+    fireEvent.click(runButton);
+
+    await waitFor(() => expect(statusCalls).toBeGreaterThan(1));
+    expect(screen.queryByRole("dialog", { name: "Couldn't set up this workflow" })).not.toBeInTheDocument();
+
+    runRequest.resolve(
+      jsonResponse({
+        job_id: "job-retry",
+        workflow_id: "text_to_image_v0",
+        engine: "comfyui",
+        status: "queued",
+      }),
+    );
+
+    expect(await screen.findByText("Result ready.")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Couldn't set up this workflow" })).not.toBeInTheDocument();
+  });
+
   it("renders the classic two-panel dashboard when classic mode is selected", async () => {
     window.localStorage.setItem("noofy.prefs", JSON.stringify({ viewMode: "classic" }));
     mockConfiguredDashboardFetch(fetchMock);

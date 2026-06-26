@@ -1330,6 +1330,7 @@ class EngineService:
             )
 
         comfyui_status = await self.runtime_manager.status()
+        self._sync_core_runner_runtime_process(comfyui_status)
         status = "ok" if comfyui_status.reachable and all(item.valid for item in workflow_summaries) else "degraded"
 
         return BackendHealthReport(
@@ -1341,7 +1342,9 @@ class EngineService:
         )
 
     async def runtime_status(self):
-        return await self.runtime_manager.status()
+        status = await self.runtime_manager.status()
+        self._sync_core_runner_runtime_process(status)
+        return status
 
     def resource_snapshot(self) -> MachineResourceSnapshot:
         cpu_metric = self.resource_observer.cpu_metric()
@@ -1366,10 +1369,14 @@ class EngineService:
         return await self.comfyui_sidecar_service.update_launch_settings(request)
 
     async def start_comfyui(self):
-        return await self.comfyui_sidecar_service.start()
+        result = await self.comfyui_sidecar_service.start()
+        self._sync_core_runner_runtime_process(getattr(result, "comfyui", None))
+        return result
 
     async def stop_comfyui(self):
-        return await self.comfyui_sidecar_service.stop()
+        result = await self.comfyui_sidecar_service.stop()
+        self._sync_core_runner_runtime_process(getattr(result, "comfyui", None))
+        return result
 
     async def bootstrap_comfyui_runtime(self) -> RuntimeBootstrapResult:
         return await self.comfyui_sidecar_service.bootstrap_runtime()
@@ -1432,6 +1439,18 @@ class EngineService:
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
+
+    def _sync_core_runner_runtime_process(self, runtime_status: Any | None = None) -> None:
+        pid = getattr(runtime_status, "pid", None)
+        if pid is None:
+            managed_process_pid = getattr(self.runtime_manager, "managed_process_pid", None)
+            if callable(managed_process_pid):
+                pid = managed_process_pid()
+        try:
+            descriptor = self.runner_supervisor.core_runner()
+        except LookupError:
+            return
+        self.runner_supervisor.update_runner_process(descriptor.runner_id, pid=pid)
 
     def _chain_comfyui_endpoint_change_dispatch(self) -> None:
         previous_callback = self.comfyui_sidecar_service.on_endpoint_changed
@@ -1743,6 +1762,7 @@ class EngineService:
             self.runtime_manager.base_url,
             self.runtime_manager.ws_url,
         )
+        self._sync_core_runner_runtime_process()
 
     def memory_governor_metrics(self) -> dict[str, int]:
         return self.memory_service.memory_governor_metrics()

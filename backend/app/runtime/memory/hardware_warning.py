@@ -234,16 +234,21 @@ def _warning_decision(
     if local_memory_error:
         return HardwareWarningSeverity.HIGH, HardwareWarningConfidence.HIGH, _unique_reasons(reason_codes)
 
+    if matching_local_success:
+        return None
+
     if _strong_capacity_risk(
         estimate=estimate,
         machine_snapshot=machine_snapshot,
         vram_capacity_risk=vram_capacity_risk,
         ram_capacity_risk=ram_capacity_risk,
     ):
-        return HardwareWarningSeverity.HIGH, _advisory_confidence_for_estimate(estimate), _unique_reasons(reason_codes)
-
-    if matching_local_success and not temporary_low and not vram_free_shortfall and not ram_free_shortfall:
-        return None
+        severity = (
+            HardwareWarningSeverity.HIGH
+            if _trusted_estimate_exceeds_capacity(estimate, machine_snapshot)
+            else HardwareWarningSeverity.MEDIUM
+        )
+        return severity, _advisory_confidence_for_estimate(estimate), _unique_reasons(reason_codes)
 
     if (
         related_local_memory_error
@@ -319,6 +324,17 @@ def _combine_local_summaries(
     input_profile_fingerprint: str | None,
 ) -> LocalMemoryEvidenceSummary:
     first = summaries[0]
+    last_success_at = max(
+        (summary.last_success_at for summary in summaries if summary.last_success_at),
+        default=None,
+    )
+    last_memory_error_at = max(
+        (summary.last_memory_error_at for summary in summaries if summary.last_memory_error_at),
+        default=None,
+    )
+    memory_error_runs = sum(_recent_memory_error_runs(summary) for summary in summaries)
+    if _timestamp_at_or_after(last_success_at, last_memory_error_at):
+        memory_error_runs = 0
     return LocalMemoryEvidenceSummary(
         workflow_id=first.workflow_id,
         runner_process_compatibility_key=first.runner_process_compatibility_key,
@@ -326,7 +342,7 @@ def _combine_local_summaries(
         backend=first.backend,
         input_profile_fingerprint=input_profile_fingerprint,
         successful_runs=sum(summary.successful_runs for summary in summaries),
-        memory_error_runs=sum(_recent_memory_error_runs(summary) for summary in summaries),
+        memory_error_runs=memory_error_runs,
         other_failed_runs=sum(summary.other_failed_runs for summary in summaries),
         evictions_required=sum(summary.evictions_required for summary in summaries),
         retries_required=sum(summary.retries_required for summary in summaries),
@@ -350,11 +366,8 @@ def _combine_local_summaries(
         attribution_quality=first.attribution_quality,
         attribution_sources=_unique_strings(source for summary in summaries for source in summary.attribution_sources),
         attribution_reasons=_unique_strings(reason for summary in summaries for reason in summary.attribution_reasons),
-        last_success_at=max((summary.last_success_at for summary in summaries if summary.last_success_at), default=None),
-        last_memory_error_at=max(
-            (summary.last_memory_error_at for summary in summaries if summary.last_memory_error_at),
-            default=None,
-        ),
+        last_success_at=last_success_at,
+        last_memory_error_at=last_memory_error_at,
     )
 
 
@@ -370,13 +383,31 @@ def _warning_estimate(estimate: WorkflowMemoryEstimate) -> WorkflowHardwareWarni
 def _recent_memory_error_runs(summary: LocalMemoryEvidenceSummary) -> int:
     if summary.memory_error_runs == 0 or summary.last_memory_error_at is None:
         return 0
-    try:
-        observed_at = datetime.fromisoformat(summary.last_memory_error_at)
-    except ValueError:
+    observed_at = _parse_timestamp(summary.last_memory_error_at)
+    if observed_at is None:
         return 0
-    if observed_at.tzinfo is None:
-        observed_at = observed_at.replace(tzinfo=UTC)
+    success_at = _parse_timestamp(summary.last_success_at)
+    if success_at is not None and success_at >= observed_at:
+        return 0
     return summary.memory_error_runs if datetime.now(UTC) - observed_at <= LOCAL_MEMORY_ERROR_MAX_AGE else 0
+
+
+def _timestamp_at_or_after(left: str | None, right: str | None) -> bool:
+    left_at = _parse_timestamp(left)
+    right_at = _parse_timestamp(right)
+    return left_at is not None and right_at is not None and left_at >= right_at
+
+
+def _parse_timestamp(value: str | None) -> datetime | None:
+    if value is None:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed
 
 
 def _machine_signal(machine_snapshot: MachineMemorySnapshot | None) -> WorkflowHardwareWarningMachineSignal | None:

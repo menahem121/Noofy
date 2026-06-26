@@ -345,6 +345,7 @@ def create_default_engine_service() -> EngineService:
             ws_url=runtime_manager.ws_url,
             fingerprint=CORE_RUNNER_FINGERPRINT,
             status=RunnerStatus.UNKNOWN,
+            pid=runtime_manager.managed_process_pid(),
         ),
         adapter,
     )
@@ -506,6 +507,10 @@ def create_default_engine_service() -> EngineService:
             CORE_RUNNER_ID,
             runtime_manager.base_url,
             runtime_manager.ws_url,
+        )
+        supervisor.update_runner_process(
+            CORE_RUNNER_ID,
+            pid=runtime_manager.managed_process_pid(),
         )
 
     runtime_manager._on_restart = _reconfigure_adapter

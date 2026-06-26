@@ -531,6 +531,16 @@ class RunnerSupervisor:
         self._notify_state_change("runner_status_changed")
         return new_descriptor
 
+    def update_runner_process(self, runner_id: str, *, pid: int | None) -> RunnerDescriptor:
+        with self._lock:
+            descriptor = self._descriptor_locked(runner_id)
+            if descriptor.pid == pid:
+                return descriptor
+            updated = descriptor.model_copy(update={"pid": pid})
+            self._descriptors[runner_id] = updated
+        self._notify_state_change("runner_process_changed")
+        return updated
+
     def fill_runner_memory_observation(
         self,
         runner_id: str,

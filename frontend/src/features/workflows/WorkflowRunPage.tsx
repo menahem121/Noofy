@@ -784,7 +784,8 @@ export function WorkflowRunPage({
         const statusResponse = await fetchWorkflowStatus(workflowId);
         if (stopped || runSessionGenerationRef.current !== runGeneration) return;
         setState((current) => ({ ...current, workflowStatus: statusResponse }));
-        setRunPreparationDialog(runPreparationDialogFromStatus(statusResponse));
+        const nextDialog = runPreparationDialogFromStatus(statusResponse);
+        setRunPreparationDialog(nextDialog?.failed ? null : nextDialog);
       } catch {
         // Keep the in-progress dialog visible; the run request will surface the real failure.
       }

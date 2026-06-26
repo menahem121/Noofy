@@ -28,3 +28,15 @@ NEW_AGENT_FIRST_ARCHITECTURE_IMPLEMENTATION_PLAN.md
 
 # Generated when running uv manually inside the backend.
 backend/uv.lock
+
+# Playwright
+node_modules/
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+/playwright/.auth/
+tests/
+playwright.config.ts
+package-lock.json
+package.json

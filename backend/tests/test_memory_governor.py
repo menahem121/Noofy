@@ -1555,6 +1555,63 @@ def test_summarize_local_memory_observations_records_success_failure_and_peaks()
         summarize_local_memory_observations([])
 
 
+def test_summarize_local_memory_observations_keeps_successful_system_delta_diagnostic_only() -> None:
+    summary = summarize_local_memory_observations(
+        [
+            LocalMemoryObservation(
+                workflow_id="workflow-a",
+                backend=MemoryBackend.CUDA,
+                outcome=MemoryObservationOutcome.SUCCESS,
+                peak_vram_mb=21_010,
+                peak_ram_mb=9600,
+                system_peak_delta_vram_mb=21_010,
+                system_peak_delta_ram_mb=9600,
+                attribution_quality=MemoryAttributionQuality.UNAVAILABLE,
+                attribution_sources=[
+                    "process_tree_rss",
+                    "gpu_process_attribution_unavailable",
+                    "system_memory_delta",
+                ],
+                attribution_reasons=[
+                    "runner_pid_unavailable",
+                    "system_vram_delta_active_job_window",
+                    "system_ram_delta_active_job_window",
+                ],
+                observed_at="2026-05-03T10:00:00+00:00",
+            )
+        ]
+    )
+
+    assert summary.successful_runs == 1
+    assert summary.observed_peak_vram_mb is None
+    assert summary.observed_peak_ram_mb is None
+    assert summary.system_observed_peak_delta_vram_mb == 21_010
+    assert summary.system_observed_peak_delta_ram_mb == 9600
+    assert summary.attribution_quality is MemoryAttributionQuality.UNAVAILABLE
+
+
+def test_build_workflow_memory_estimate_uses_creator_hint_when_local_success_has_no_trusted_peak() -> None:
+    estimate = build_workflow_memory_estimate(
+        WorkflowMemoryEstimateRequest(
+            workflow_id="workflow-a",
+            creator_observed_peak_vram_mb=13_326,
+            local_evidence=LocalMemoryEvidenceSummary(
+                workflow_id="workflow-a",
+                backend=MemoryBackend.CUDA,
+                successful_runs=3,
+                system_observed_peak_delta_vram_mb=21_010,
+                attribution_quality=MemoryAttributionQuality.UNAVAILABLE,
+                attribution_sources=["system_memory_delta"],
+                attribution_reasons=["system_vram_delta_active_job_window"],
+            ),
+        )
+    )
+
+    assert estimate.source is RunnerMemoryEstimateSource.CREATOR_OBSERVED
+    assert estimate.estimated_peak_vram_mb == 13_326
+    assert estimate.local_evidence is None
+
+
 def test_local_memory_learning_store_persists_machine_local_evidence(tmp_path) -> None:
     store = LocalMemoryLearningStore(tmp_path)
     first = store.record(

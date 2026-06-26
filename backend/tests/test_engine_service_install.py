@@ -90,6 +90,9 @@ class StubRuntimeManager:
     managed_host = "127.0.0.1"
     environment = None
 
+    def managed_process_pid(self) -> int | None:
+        return getattr(self, "managed_pid", None)
+
 
 class StubAdapter:
     def __init__(self) -> None:
@@ -243,6 +246,20 @@ def _passed_smoke_report(*, custom_nodes: bool = False) -> SmokeTestReport:
         runner_health=SmokeStageResult(status=SmokeStageStatus.PASSED),
         workflow_execution=SmokeStageResult(status=SmokeStageStatus.PASSED),
     )
+
+
+def test_engine_service_syncs_core_runner_pid_from_runtime_manager(tmp_path: Path) -> None:
+    service = _build_service(tmp_path)
+
+    service.runtime_manager.managed_pid = 4242
+    service._sync_core_runner_runtime_process()
+
+    assert service.runner_supervisor.core_runner().pid == 4242
+
+    service.runtime_manager.managed_pid = None
+    service._sync_core_runner_runtime_process()
+
+    assert service.runner_supervisor.core_runner().pid is None
 
 
 def _write_workflow_with_capsule(

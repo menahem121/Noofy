@@ -721,7 +721,10 @@ class WorkflowRunnerLifecycleService:
     def get_install_state(self, workflow_id: str) -> dict[str, object]:
         if self.capsule_loader is None or self.capsule_installer is None:
             return self._unsupported_install_payload(workflow_id)
-        package = self.workflow_loader.get_package(workflow_id)
+        try:
+            package = self.workflow_loader.get_package(workflow_id)
+        except KeyError:
+            return self._unsupported_install_payload(workflow_id)
         capsule_lock = self._preparable_capsule_lock(workflow_id)
         if capsule_lock is None:
             return self._unsupported_install_payload(workflow_id)
