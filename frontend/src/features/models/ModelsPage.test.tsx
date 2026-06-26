@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { ModelInventoryResponse } from "../../lib/api/noofyApi";
 import { SidebarProvider } from "../app/AppLayout";
 import { ModelsPage } from "./ModelsPage";
 
@@ -11,7 +12,7 @@ function jsonResponse(data: unknown, status = 200) {
   });
 }
 
-const inventory = {
+const inventory: ModelInventoryResponse = {
   summary: {
     total_count: 4,
     noofy_count: 1,
@@ -187,7 +188,7 @@ function inventoryWithDiskFree(diskFreeBytes: number) {
 describe("ModelsPage", () => {
   const fetchMock = vi.fn();
   const onNavigate = vi.fn();
-  let currentInventory: typeof inventory;
+  let currentInventory: ModelInventoryResponse;
 
   beforeEach(() => {
     vi.stubGlobal("fetch", fetchMock);
@@ -252,6 +253,15 @@ describe("ModelsPage", () => {
       if (url.endsWith("/api/models/loras%2Fstyle.safetensors") && init?.method === "DELETE") {
         return Promise.resolve(jsonResponse({ model_key: "loras/style.safetensors", deleted: true, message: "Deleted" }));
       }
+      if (url.endsWith("/api/models/runtime_model_bundles%2Fmoss-tts") && init?.method === "DELETE") {
+        return Promise.resolve(
+          jsonResponse({
+            model_key: "runtime_model_bundles/moss-tts",
+            deleted: true,
+            message: "Workflow-installed model removed. Noofy may reinstall it if a workflow needs it again.",
+          }),
+        );
+      }
       return Promise.reject(new Error(`Unexpected request: ${url}`));
     });
   });
@@ -294,6 +304,72 @@ describe("ModelsPage", () => {
 
     expect(screen.getByText("Model root")).toBeInTheDocument();
     expect(screen.getByText("/tmp/ComfyUI/models")).toBeInTheDocument();
+  });
+
+  it("shows workflow-installed runtime model bundles as removable models", async () => {
+    vi.stubGlobal("confirm", vi.fn(() => true));
+    currentInventory = {
+      ...inventory,
+      summary: {
+        ...inventory.summary,
+        total_count: inventory.summary.total_count + 1,
+        total_known_size_bytes: inventory.summary.total_known_size_bytes + 17179869184,
+      },
+      models: [
+        ...inventory.models,
+        {
+          model_key: "runtime_model_bundles/moss-tts",
+          filename: "MOSS-TTS",
+          folder: "workflow_installed",
+          model_type: "runtime_bundle",
+          size_bytes: 17179869184,
+          status: "ready",
+          status_label: "Ready",
+          source: "runtime_model_bundle",
+          source_label: "Workflow-installed model",
+          ownership: "runtime_managed",
+          ownership_label: "Managed automatically by Noofy",
+          can_delete: true,
+          delete_unavailable_reason: null,
+          path: "/tmp/.noofy-runtime/data/model-store/materialized/moss-tts",
+          matched_root: "/tmp/.noofy-runtime/data/model-store/materialized",
+          verification_level: null,
+          matched_sha256: null,
+          source_availability: null,
+          message:
+            "Installed by a workflow while it was running. Noofy tracks this storage and manages cleanup automatically. Contains 2 model files.",
+          workflow_usage: [],
+          downloadable_references: [],
+          tag_ids: [],
+        },
+      ],
+    };
+    renderPage();
+
+    expect(await screen.findByText("MOSS-TTS")).toBeInTheDocument();
+    expect(screen.getByText("Workflow-installed model · Workflow-installed")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Filter by source"), { target: { value: "runtime_model_bundle" } });
+
+    expect(screen.getByText("MOSS-TTS")).toBeInTheDocument();
+    expect(screen.queryByText("base.safetensors")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("MOSS-TTS"));
+
+    expect(screen.getByText("Installed by a workflow while it was running. Noofy tracks this storage and manages cleanup automatically. Contains 2 model files.")).toBeInTheDocument();
+    expect(screen.getAllByText("Managed automatically by Noofy").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Reveal location" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Remove workflow-installed model" })).toBeInTheDocument();
+    expect(screen.queryByText("/tmp/.noofy-runtime/data/model-store/materialized")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove workflow-installed model" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/models/runtime_model_bundles%2Fmoss-tts",
+        expect.objectContaining({ method: "DELETE" }),
+      );
+    });
   });
 
   it("refreshes free disk space when the page becomes active again", async () => {

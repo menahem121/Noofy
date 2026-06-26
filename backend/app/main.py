@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -58,6 +59,11 @@ async def _start_comfyui_background(sidecar_service: ComfyUISidecarService) -> N
 async def lifespan(app: FastAPI):
     services = _api_services_for_app(app)
     startup_task: asyncio.Task[None] | None = None
+    start_runtime_storage_idle_maintenance = getattr(
+        services.engine_service, "start_runtime_storage_idle_maintenance", None
+    )
+    if callable(start_runtime_storage_idle_maintenance):
+        start_runtime_storage_idle_maintenance()
     if settings.comfyui_runtime_mode == "managed":
         startup_task = asyncio.create_task(
             _start_comfyui_background(services.comfyui_sidecar_service)
@@ -86,6 +92,7 @@ def create_app(
     model_tag_store: ModelTagStore | None = None,
     model_ownership_store: ModelOwnershipStore | None = None,
     model_download_service: ModelDownloadJobService | None = None,
+    runtime_model_bundle_roots: list[Path] | None = None,
     service_factory: ApiServicesFactory = create_default_api_services,
 ) -> FastAPI:
     if services is not None and any(
@@ -102,6 +109,7 @@ def create_app(
             model_tag_store,
             model_ownership_store,
             model_download_service,
+            runtime_model_bundle_roots,
         )
     ):
         raise ValueError("Pass either services or individual service overrides, not both.")
@@ -119,6 +127,7 @@ def create_app(
             model_tag_store,
             model_ownership_store,
             model_download_service,
+            runtime_model_bundle_roots,
         )
     ):
         if engine_service is None:
@@ -135,6 +144,7 @@ def create_app(
             model_tag_store=model_tag_store,
             model_ownership_store=model_ownership_store,
             model_download_service=model_download_service,
+            runtime_model_bundle_roots=runtime_model_bundle_roots,
         )
 
     app = FastAPI(title="Local AI Workflow Backend", version="0.1.0", lifespan=lifespan)

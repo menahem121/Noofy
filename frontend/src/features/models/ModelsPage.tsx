@@ -39,6 +39,7 @@ import {
   formatBytes,
   hexAlpha,
   MODEL_TYPE_FILTERS,
+  modelDeleteLocationLabel,
   modelFolderPath,
   modelSourceLabel,
   normalizeType,
@@ -289,9 +290,9 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
 
   async function handleDeleteModel(model: ModelInventoryEntry) {
     if (!model.can_delete) return;
-    const locationLabel = model.source === "external_comfyui" ? "the ComfyUI models folder" : "Noofy Models";
+    const locationLabel = modelDeleteLocationLabel(model);
     const confirmed = window.confirm(
-      `Delete ${model.filename} from ${locationLabel}? This removes the file from computer storage and cannot be undone.`,
+      `Delete ${model.filename} from ${locationLabel}? This removes the model storage from this computer and cannot be undone.`,
     );
     if (!confirmed) return;
     setDeleteBusy(true);
@@ -317,14 +318,12 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
     const deleteLabel =
       selectedDeletableModels.length === 1
         ? selectedDeletableModels[0].filename
-        : `${selectedDeletableModels.length} model files`;
-    const selectedSources = new Set(selectedDeletableModels.map((model) => model.source));
+        : `${selectedDeletableModels.length} models`;
+    const selectedLocations = new Set(selectedDeletableModels.map(modelDeleteLocationLabel));
     const locationLabel =
-      selectedSources.size === 1 && selectedSources.has("external_comfyui")
-        ? "the ComfyUI models folder"
-        : selectedSources.size === 1
-          ? "Noofy Models"
-          : "the selected model folders";
+      selectedLocations.size === 1
+        ? Array.from(selectedLocations)[0]
+        : "the selected model locations";
     const skippedLabel =
       selectedBlockedCount > 0
         ? [
@@ -335,7 +334,7 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
     const confirmed = window.confirm(
       [
         `Delete ${deleteLabel} from ${locationLabel}?`,
-        `This removes the file${selectedDeletableModels.length === 1 ? "" : "s"} from computer storage and cannot be undone.`,
+        `This removes the model storage from this computer and cannot be undone.`,
         skippedLabel,
       ]
         .filter(Boolean)

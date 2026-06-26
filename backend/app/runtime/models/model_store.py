@@ -36,6 +36,7 @@ REF_SCHEMA_VERSION = "0.1.0"
 MODEL_VIEW_SCHEMA_VERSION = "0.1.0"
 BLOB_VERIFICATION_SCHEMA_VERSION = 1
 WINDOWS_MAX_MATERIALIZED_PATH_CHARS = 240
+DEFAULT_LARGE_MODEL_COPY_THRESHOLD_BYTES = 1024 * 1024 * 1024
 
 
 async def http_streaming_downloader(
@@ -277,6 +278,7 @@ class ModelStore:
         owned_model_root: Path | None = None,
         symlink_capability: bool | None = None,
         local_model_identity_store: LocalModelIdentityStore | None = None,
+        large_model_copy_threshold_bytes: int = DEFAULT_LARGE_MODEL_COPY_THRESHOLD_BYTES,
     ) -> None:
         self.blobs_dir = blobs_dir
         self.refs_dir = refs_dir
@@ -289,6 +291,7 @@ class ModelStore:
         self.owned_model_root = owned_model_root
         self._symlink_capability = symlink_capability
         self.local_model_identity_store = local_model_identity_store
+        self.large_model_copy_threshold_bytes = large_model_copy_threshold_bytes
         self._lock = threading.Lock()
 
     # ------------------------------------------------------------------
@@ -1059,8 +1062,10 @@ class ModelStore:
             metrics=metrics,
         )
         if reused is not None:
+            self._write_non_view_materialization_manifest(model_lock, blob_path, target)
             return target, reused
         strategy = self._materialize_link_or_copy(blob_path, target)
+        self._write_non_view_materialization_manifest(model_lock, blob_path, target)
         return target, strategy
 
     def _materialize_owned_model(self, model_lock: ModelLock, blob_path: Path) -> Path | None:
@@ -1068,8 +1073,16 @@ class ModelStore:
             return None
         target = self._owned_model_path(model_lock)
         if target.exists() or target.is_symlink():
+            self._remember_local_model_sha256(
+                target,
+                _normalize_sha256(model_lock.sha256),
+            )
             return target
         self._materialize_link_or_copy(blob_path, target)
+        self._remember_local_model_sha256(
+            target,
+            _normalize_sha256(model_lock.sha256),
+        )
         return target
 
     def _owned_model_path(self, model_lock: ModelLock) -> Path:
@@ -1129,6 +1142,15 @@ class ModelStore:
                         "model.store",
                         details={"error": str(exc)},
                     )
+            try:
+                source_size = blob_path.stat().st_size
+            except OSError:
+                source_size = 0
+            if source_size > self.large_model_copy_threshold_bytes:
+                raise ModelDownloadError(
+                    "Large model materialization cannot safely copy hidden bytes; "
+                    "hardlink and symlink materialization both failed."
+                )
             shutil.copy2(blob_path, tmp_target)
             return "copy"
         except BaseException:
@@ -1237,20 +1259,76 @@ class ModelStore:
         materialized_path: Path,
     ) -> str | None:
         if not ref.blob_path:
+            source_result = self._valid_store_source_for_launch(
+                ref,
+                expected_sha256=expected_sha256,
+                materialized_path=materialized_path,
+            )
+            if source_result is None:
+                return None
             return f"model reference missing blob path for {ref.requirement_id}"
         blob_path = Path(ref.blob_path)
         try:
             blob_stat = blob_path.stat()
         except OSError:
+            source_result = self._valid_store_source_for_launch(
+                ref,
+                expected_sha256=expected_sha256,
+                materialized_path=materialized_path,
+            )
+            if source_result is None:
+                return None
             return f"model blob missing for {ref.requirement_id}"
         if ref.size_bytes is not None and blob_stat.st_size != ref.size_bytes:
+            source_result = self._valid_store_source_for_launch(
+                ref,
+                expected_sha256=expected_sha256,
+                materialized_path=materialized_path,
+            )
+            if source_result is None:
+                return None
             return f"model blob size mismatch for {ref.requirement_id}"
         record = self._read_blob_verification(blob_path)
         if record is None or not _blob_verification_matches(
             record, blob_stat, expected_sha256
         ):
+            source_result = self._valid_store_source_for_launch(
+                ref,
+                expected_sha256=expected_sha256,
+                materialized_path=materialized_path,
+            )
+            if source_result is None:
+                return None
             return f"model blob verification record stale or missing for {ref.requirement_id}"
         if _samefile(blob_path, materialized_path):
+            return None
+        if self._cached_target_sha256(
+            materialized_path,
+            comfyui_folder=ref.comfyui_folder,
+            filename=ref.filename,
+        ) == expected_sha256:
+            return None
+        return f"model view file has no valid materialized identity record for {ref.requirement_id}"
+
+    def _valid_store_source_for_launch(
+        self,
+        ref: InstalledModelReference,
+        *,
+        expected_sha256: str,
+        materialized_path: Path,
+    ) -> str | None:
+        if not ref.source_path:
+            return f"model reference missing visible source path for {ref.requirement_id}"
+        source_path = Path(ref.source_path)
+        try:
+            source_stat = source_path.stat()
+        except OSError:
+            return f"visible model source missing for {ref.requirement_id}"
+        if ref.size_bytes is not None and source_stat.st_size != ref.size_bytes:
+            return f"visible model source size mismatch for {ref.requirement_id}"
+        if self._cached_local_source_sha256_for_launch(source_path) != expected_sha256:
+            return f"visible model source identity record stale or missing for {ref.requirement_id}"
+        if _samefile(source_path, materialized_path):
             return None
         if self._cached_target_sha256(
             materialized_path,
@@ -1422,6 +1500,26 @@ class ModelStore:
             self.local_model_identity_store.remember_hash(target, context, sha256)
         except Exception as exc:
             self._log_identity_cache_failure("store", target, exc)
+
+    def _remember_local_model_sha256(self, path: Path, sha256: str) -> None:
+        if self.local_model_identity_store is None:
+            return
+        root = self._local_model_root_for(path)
+        if root is None and self.owned_model_root is not None:
+            owned_root = self.owned_model_root.expanduser().resolve(strict=False)
+            resolved = path.expanduser().resolve(strict=False)
+            try:
+                resolved.relative_to(owned_root)
+                root = self.owned_model_root
+            except ValueError:
+                root = None
+        if root is None:
+            return
+        context = self._local_root_context(path, root)
+        try:
+            self.local_model_identity_store.remember_hash(path, context, sha256)
+        except Exception as exc:
+            self._log_identity_cache_failure("store", path, exc)
 
     def _log_identity_cache_failure(
         self, operation: str, path: Path, exc: Exception
@@ -1693,6 +1791,54 @@ class ModelStore:
         tmp.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
         tmp.replace(target)
 
+    def _write_non_view_materialization_manifest(
+        self,
+        model_lock: ModelLock,
+        blob_path: Path,
+        target: Path,
+    ) -> None:
+        root = _non_view_materialization_root(self.materialized_dir, target)
+        if root is None:
+            return
+        root.mkdir(parents=True, exist_ok=True)
+        manifest_path = root / ".noofy-materialization.json"
+        existing = _read_json_file(manifest_path)
+        entries = (
+            existing.get("entries") if isinstance(existing.get("entries"), list) else []
+        )
+        entry = {
+            "model_id": model_lock.id,
+            "sha256": _normalize_sha256(model_lock.sha256),
+            "size_bytes": model_lock.size_bytes,
+            "comfyui_folder": model_lock.comfyui_folder,
+            "filename": model_lock.filename,
+            "blob_path": str(blob_path),
+            "materialized_path": str(target),
+        }
+        filtered = [
+            item
+            for item in entries
+            if not (
+                isinstance(item, dict)
+                and item.get("comfyui_folder") == model_lock.comfyui_folder
+                and item.get("filename") == model_lock.filename
+            )
+        ]
+        payload = {
+            "schema_version": "0.1.0",
+            "owner": "noofy",
+            "created_by": "ModelStore.materialize",
+            "rebuildable": True,
+            "source_kind": "internal_blob",
+            "entries": [*filtered, entry],
+        }
+        tmp = manifest_path.with_suffix(".json.tmp")
+        tmp.write_text(
+            json.dumps(payload, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        tmp.replace(manifest_path)
+
 
 def probe_symlink_capability(
     probe_dir: Path, *, log_store: DiagnosticsSink | None = None
@@ -1812,6 +1958,24 @@ def _samefile(left: Path, right: Path) -> bool:
 
 def _model_view_conflict_message(comfyui_folder: str, filename: str) -> str:
     return f"Model view has conflicting requirements for {comfyui_folder}/{filename}."
+
+
+def _non_view_materialization_root(materialized_dir: Path, target: Path) -> Path | None:
+    try:
+        relative = target.relative_to(materialized_dir)
+    except ValueError:
+        return None
+    if not relative.parts or relative.parts[0] == "views":
+        return None
+    return materialized_dir / relative.parts[0]
+
+
+def _read_json_file(path: Path) -> dict[str, object]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _model_lock_origins(model_lock: ModelLock) -> set[str]:

@@ -389,36 +389,22 @@ def test_gc_removes_orphan_materialized_model_view_after_retention(
     )
 
 
-def test_large_model_blob_requires_confirmation_before_deletion(tmp_path: Path) -> None:
+def test_internal_model_blob_deletes_without_user_confirmation(tmp_path: Path) -> None:
     roots = _roots(tmp_path)
     blob = _write_model_blob(roots, "b" * 64, b"01234567890")
-    config = RuntimeStorageGcConfig(large_model_confirmation_bytes=10)
 
-    skipped = RuntimeStorageGarbageCollector(
+    result = RuntimeStorageGarbageCollector(
         roots=roots,
         install_states=[],
-        config=config,
         log_store=LogStore(),
     ).collect_garbage(confirm_large_model_deletion=False)
 
-    assert blob.exists()
-    assert any(
-        decision.path == blob
-        and decision.action is RuntimeStorageGcAction.SKIP_LARGE_MODEL_CONFIRMATION
-        for decision in skipped.decisions
-    )
-
-    deleted = RuntimeStorageGarbageCollector(
-        roots=roots,
-        install_states=[],
-        config=config,
-        log_store=LogStore(),
-    ).collect_garbage(confirm_large_model_deletion=True)
-
     assert not blob.exists()
     assert any(
-        decision.path == blob and decision.action is RuntimeStorageGcAction.DELETE
-        for decision in deleted.decisions
+        decision.path == blob
+        and decision.action is RuntimeStorageGcAction.DELETE
+        and "Noofy-owned model blob" in decision.reason
+        for decision in result.decisions
     )
 
 
@@ -442,6 +428,267 @@ def test_model_blob_deletion_removes_verification_record_and_directory(
     assert not blob.exists()
     assert not record.exists()
     assert not blob.parent.exists()
+
+
+def test_internal_blob_duplicate_of_visible_noofy_model_is_reclaimed(
+    tmp_path: Path,
+) -> None:
+    roots = _roots(tmp_path)
+    content = b"visible-copy"
+    blob = _write_model_blob(roots, "d" * 64, content)
+    visible = tmp_path / "Noofy Models" / "checkpoints" / "model.safetensors"
+    visible.parent.mkdir(parents=True)
+    visible.write_bytes(content)
+    view = _write_model_view(roots, "6" * 64, content=content)
+    ref = _model_ref(blob, view / "checkpoints" / "model.safetensors").model_copy(
+        update={"source_path": str(visible)}
+    )
+
+    result = RuntimeStorageGarbageCollector(
+        roots=roots,
+        install_states=[_state("capsule-visible-source", model_references=[ref])],
+        log_store=LogStore(),
+    ).collect_garbage()
+
+    assert visible.exists()
+    assert not blob.parent.exists()
+    assert view.exists()
+    assert any(
+        decision.path == blob
+        and decision.action is RuntimeStorageGcAction.DELETE
+        for decision in result.decisions
+    )
+
+
+def test_internal_blob_backing_visible_symlink_is_retained(
+    tmp_path: Path,
+) -> None:
+    roots = _roots(tmp_path)
+    content = b"visible-symlink"
+    blob = _write_model_blob(roots, "e" * 64, content)
+    visible = tmp_path / "Noofy Models" / "checkpoints" / "model.safetensors"
+    visible.parent.mkdir(parents=True)
+    visible.symlink_to(blob)
+    view = _write_model_view(roots, "7" * 64, content=content)
+    ref = _model_ref(blob, view / "checkpoints" / "model.safetensors").model_copy(
+        update={"source_path": str(visible)}
+    )
+
+    result = RuntimeStorageGarbageCollector(
+        roots=roots,
+        install_states=[_state("capsule-visible-symlink", model_references=[ref])],
+        log_store=LogStore(),
+    ).collect_garbage()
+
+    assert visible.exists()
+    assert blob.exists()
+    assert all(
+        decision.action is not RuntimeStorageGcAction.DELETE
+        for decision in result.decisions
+        if decision.path == blob
+    )
+
+
+def test_gc_compacts_large_recent_quarantined_transaction(tmp_path: Path) -> None:
+    roots = _roots(tmp_path)
+    transaction = roots.install_transactions_dir / "install-large"
+    payload = transaction / "model-views" / "view-a"
+    payload.mkdir(parents=True)
+    (payload / "model.safetensors").write_bytes(b"0123456789")
+    (transaction / "quarantine.json").write_text(
+        json.dumps(
+            {
+                "status": "quarantined",
+                "retain_until": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    (transaction / "transaction.json").write_text(
+        json.dumps({"status": "quarantined"}),
+        encoding="utf-8",
+    )
+
+    result = RuntimeStorageGarbageCollector(
+        roots=roots,
+        install_states=[],
+        config=RuntimeStorageGcConfig(transaction_compaction_bytes=1),
+        log_store=LogStore(),
+    ).collect_garbage()
+
+    assert transaction.exists()
+    assert not (transaction / "model-views").exists()
+    assert (transaction / "payload-cleanup-summary.json").exists()
+    assert any(
+        decision.path == transaction
+        and decision.action is RuntimeStorageGcAction.COMPACT
+        for decision in result.decisions
+    )
+
+
+def test_gc_transaction_cap_compacts_quarantined_payloads(tmp_path: Path) -> None:
+    roots = _roots(tmp_path)
+    transactions: list[Path] = []
+    for name in ("install-old", "install-new"):
+        transaction = roots.install_transactions_dir / name
+        payload = transaction / "model-blobs" / name
+        payload.mkdir(parents=True)
+        (payload / "blob").write_bytes(b"0123456789")
+        (transaction / "quarantine.json").write_text(
+            json.dumps(
+                {
+                    "status": "quarantined",
+                    "retain_until": (
+                        datetime.now(UTC) + timedelta(days=1)
+                    ).isoformat(),
+                }
+            ),
+            encoding="utf-8",
+        )
+        (transaction / "transaction.json").write_text(
+            json.dumps({"status": "quarantined"}),
+            encoding="utf-8",
+        )
+        transactions.append(transaction)
+    _old(transactions[0], days=40)
+
+    result = RuntimeStorageGarbageCollector(
+        roots=roots,
+        install_states=[],
+        config=RuntimeStorageGcConfig(
+            transaction_compaction_bytes=1000,
+            quarantined_transaction_cap_bytes=12,
+        ),
+        log_store=LogStore(),
+    ).collect_garbage()
+
+    assert not (transactions[0] / "model-blobs").exists()
+    assert any(
+        decision.path == transactions[0]
+        and decision.action is RuntimeStorageGcAction.COMPACT
+        and decision.reason == "quarantined transaction cap exceeded"
+        for decision in result.decisions
+    )
+
+
+def test_gc_low_disk_compacts_recent_quarantine(tmp_path: Path) -> None:
+    roots = _roots(tmp_path)
+    transaction = roots.install_transactions_dir / "install-low-disk"
+    payload = transaction / "runner-workspaces" / "workspace"
+    payload.mkdir(parents=True)
+    (payload / "main.py").write_text("print('x')\n", encoding="utf-8")
+    (transaction / "quarantine.json").write_text(
+        json.dumps(
+            {
+                "status": "quarantined",
+                "retain_until": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = RuntimeStorageGarbageCollector(
+        roots=roots,
+        install_states=[],
+        config=RuntimeStorageGcConfig(transaction_compaction_bytes=1000),
+        log_store=LogStore(),
+    ).collect_garbage(aggressive=True)
+
+    assert transaction.exists()
+    assert not (transaction / "runner-workspaces").exists()
+    assert any(
+        decision.path == transaction
+        and decision.action is RuntimeStorageGcAction.COMPACT
+        for decision in result.decisions
+    )
+
+
+def test_stale_ready_state_does_not_protect_invalid_model_view(
+    tmp_path: Path,
+) -> None:
+    roots = _roots(tmp_path)
+    view = _write_model_view(roots, "5" * 64)
+    _old(view)
+    missing_source = tmp_path / "models" / "missing.safetensors"
+    ref = InstalledModelReference(
+        requirement_id="local",
+        comfyui_folder="checkpoints",
+        filename="model.safetensors",
+        verification_level=ModelVerificationLevel.SHA256_SIZE,
+        asset_ownership=AssetOwnership.USER_LOCAL,
+        sha256="sha256:" + ("a" * 64),
+        size_bytes=10,
+        source_path=str(missing_source),
+        materialized_path=str(view / "checkpoints" / "model.safetensors"),
+        materialized_file_verified=True,
+    )
+    state = _state("capsule-stale", model_references=[ref])
+
+    result = RuntimeStorageGarbageCollector(
+        roots=roots,
+        install_states=[state],
+        model_reference_validator=lambda refs: ["local model source missing"],
+        config=RuntimeStorageGcConfig(orphan_model_view_retention_days=0),
+        log_store=LogStore(),
+    ).collect_garbage()
+
+    assert state.status is InstallStatus.READY
+    assert not view.exists()
+    assert any(
+        decision.path == view and decision.action is RuntimeStorageGcAction.DELETE
+        for decision in result.decisions
+    )
+
+
+def test_unknown_non_view_materialization_is_indexed_but_skipped(
+    tmp_path: Path,
+) -> None:
+    roots = _roots(tmp_path)
+    moss = roots.model_materialized_dir / "moss-tts"
+    moss.mkdir()
+    (moss / "model.safetensors").write_bytes(b"unknown")
+    _old(moss)
+
+    result = RuntimeStorageGarbageCollector(
+        roots=roots,
+        install_states=[],
+        log_store=LogStore(),
+    ).collect_garbage(aggressive=True)
+
+    assert moss.exists()
+    assert any(
+        decision.path == moss
+        and decision.action is RuntimeStorageGcAction.SKIP_UNCLASSIFIED
+        for decision in result.decisions
+    )
+
+
+def test_rebuildable_non_view_materialization_can_be_cleaned(
+    tmp_path: Path,
+) -> None:
+    roots = _roots(tmp_path)
+    legacy = roots.model_materialized_dir / "checkpoints"
+    legacy.mkdir()
+    (legacy / ".noofy-materialization.json").write_text(
+        json.dumps({"owner": "noofy", "rebuildable": True}),
+        encoding="utf-8",
+    )
+    (legacy / "model.safetensors").write_bytes(b"cached")
+    _old(legacy)
+
+    result = RuntimeStorageGarbageCollector(
+        roots=roots,
+        install_states=[],
+        config=RuntimeStorageGcConfig(orphan_model_view_retention_days=0),
+        log_store=LogStore(),
+    ).collect_garbage()
+
+    assert not legacy.exists()
+    assert any(
+        decision.path == legacy
+        and decision.action is RuntimeStorageGcAction.DELETE
+        for decision in result.decisions
+    )
 
 
 def test_reference_index_tracks_cache_and_package_archive_metadata(

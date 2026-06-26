@@ -67,7 +67,10 @@ class ApiServices:
 
 
 def create_default_api_services() -> ApiServices:
-    return create_api_services(engine_service=create_default_engine_service())
+    return create_api_services(
+        engine_service=create_default_engine_service(),
+        runtime_model_bundle_roots=[settings.paths.model_materialized_dir],
+    )
 
 
 def create_api_services(
@@ -86,6 +89,7 @@ def create_api_services(
     model_download_service: ModelDownloadJobService | None = None,
     noofy_runtime_update_service: NoofyRuntimeUpdateService | None = None,
     history_service: HistoryService | None = None,
+    runtime_model_bundle_roots: list[Path] | None = None,
 ) -> ApiServices:
     extra_model_paths_config = settings.paths.runtime_store_dir / "settings" / "extra-model-paths.yaml"
 
@@ -193,6 +197,7 @@ def create_api_services(
         ownership_store=ownership,
         log_store=getattr(engine_service, "log_store", None),
         excluded_engine_model_roots=[settings.paths.model_materialized_dir],
+        runtime_model_bundle_roots=runtime_model_bundle_roots,
     )
     api_keys = api_key_service or ApiKeySettingsService(
         metadata_store=ApiKeyMetadataStore(settings.paths.settings_dir / "api-keys.json"),

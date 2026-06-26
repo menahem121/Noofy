@@ -13,17 +13,24 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 
 from app.artifacts import AssetOwnership
 from app.core.paths import NoofyPaths
 from app.diagnostics import DiagnosticsSink
 from app.runtime.dependencies.dependency_lock_store import ResolvedDependencyLockStore
 from app.runtime.install_transactions import INSTALL_QUARANTINE_FILENAME
-from app.runtime.dependencies.isolation import CapsuleLock, InstallState, InstallStatus
+from app.runtime.dependencies.isolation import (
+    CapsuleLock,
+    InstalledModelReference,
+    InstallState,
+    InstallStatus,
+)
 from app.runtime.models.model_gc import model_reference_cleanup_policy
 from app.runtime.runners.supervisor import RunnerDescriptor, RunnerStatus
 from app.workflows.package import WorkflowPackage
+
+ModelReferenceValidator = Callable[[list[InstalledModelReference]], list[str]]
 
 DEFAULT_FAILED_TRANSACTION_RETENTION_DAYS = 7
 DEFAULT_UNREFERENCED_RUNTIME_RETENTION_DAYS = 14
@@ -31,7 +38,17 @@ DEFAULT_ORPHAN_MODEL_VIEW_RETENTION_DAYS = 7
 DEFAULT_WHEEL_CACHE_CAP_BYTES = 5 * 1024 * 1024 * 1024
 DEFAULT_CUSTOM_NODE_SOURCE_CACHE_CAP_BYTES = 2 * 1024 * 1024 * 1024
 DEFAULT_PACKAGE_ARCHIVE_CACHE_CAP_BYTES = 2 * 1024 * 1024 * 1024
-DEFAULT_LARGE_MODEL_CONFIRMATION_BYTES = 1024 * 1024 * 1024
+DEFAULT_TRANSACTION_COMPACTION_BYTES = 512 * 1024 * 1024
+DEFAULT_QUARANTINED_TRANSACTION_CAP_BYTES = 10 * 1024 * 1024 * 1024
+DEFAULT_ORPHAN_MODEL_VIEW_CAP_BYTES = 20 * 1024 * 1024 * 1024
+DEFAULT_NON_VIEW_MATERIALIZATION_CAP_BYTES = 10 * 1024 * 1024 * 1024
+DEFAULT_INTERNAL_MODEL_BLOB_CAP_BYTES = 10 * 1024 * 1024 * 1024
+DEFAULT_DEPENDENCY_ENV_CAP_BYTES = 20 * 1024 * 1024 * 1024
+DEFAULT_RUNNER_WORKSPACE_CAP_BYTES = 5 * 1024 * 1024 * 1024
+DEFAULT_LOW_DISK_FREE_BYTES = 20 * 1024 * 1024 * 1024
+DEFAULT_LOW_DISK_FREE_RATIO = 0.10
+DEFAULT_CRITICAL_DISK_FREE_BYTES = 10 * 1024 * 1024 * 1024
+DEFAULT_CRITICAL_DISK_FREE_RATIO = 0.05
 
 
 class RuntimeStorageArtifactKind(StrEnum):
@@ -39,6 +56,7 @@ class RuntimeStorageArtifactKind(StrEnum):
     RUNNER_WORKSPACE = "runner_workspace"
     MODEL_BLOB = "model_blob"
     MODEL_VIEW = "model_view"
+    NON_VIEW_MODEL_MATERIALIZATION = "non_view_model_materialization"
     TRANSACTION = "transaction"
     WHEEL_CACHE_ENTRY = "wheel_cache_entry"
     CUSTOM_NODE_SOURCE_CACHE_ENTRY = "custom_node_source_cache_entry"
@@ -47,12 +65,13 @@ class RuntimeStorageArtifactKind(StrEnum):
 
 class RuntimeStorageGcAction(StrEnum):
     KEEP = "keep"
+    COMPACT = "compact"
     DELETE = "delete"
     SKIP_ACTIVE_RUNNER = "skip_active_runner"
     SKIP_REFERENCED = "skip_referenced"
     SKIP_RETENTION_WINDOW = "skip_retention_window"
-    SKIP_LARGE_MODEL_CONFIRMATION = "skip_large_model_confirmation"
     SKIP_USER_LOCAL_SOURCE = "skip_user_local_source"
+    SKIP_UNCLASSIFIED = "skip_unclassified"
 
 
 @dataclass(frozen=True)
@@ -65,7 +84,19 @@ class RuntimeStorageGcConfig:
     wheel_cache_cap_bytes: int = DEFAULT_WHEEL_CACHE_CAP_BYTES
     custom_node_source_cache_cap_bytes: int = DEFAULT_CUSTOM_NODE_SOURCE_CACHE_CAP_BYTES
     package_archive_cache_cap_bytes: int = DEFAULT_PACKAGE_ARCHIVE_CACHE_CAP_BYTES
-    large_model_confirmation_bytes: int = DEFAULT_LARGE_MODEL_CONFIRMATION_BYTES
+    transaction_compaction_bytes: int = DEFAULT_TRANSACTION_COMPACTION_BYTES
+    quarantined_transaction_cap_bytes: int = DEFAULT_QUARANTINED_TRANSACTION_CAP_BYTES
+    orphan_model_view_cap_bytes: int = DEFAULT_ORPHAN_MODEL_VIEW_CAP_BYTES
+    non_view_materialization_cap_bytes: int = (
+        DEFAULT_NON_VIEW_MATERIALIZATION_CAP_BYTES
+    )
+    internal_model_blob_cap_bytes: int = DEFAULT_INTERNAL_MODEL_BLOB_CAP_BYTES
+    dependency_env_cap_bytes: int = DEFAULT_DEPENDENCY_ENV_CAP_BYTES
+    runner_workspace_cap_bytes: int = DEFAULT_RUNNER_WORKSPACE_CAP_BYTES
+    low_disk_free_bytes: int = DEFAULT_LOW_DISK_FREE_BYTES
+    low_disk_free_ratio: float = DEFAULT_LOW_DISK_FREE_RATIO
+    critical_disk_free_bytes: int = DEFAULT_CRITICAL_DISK_FREE_BYTES
+    critical_disk_free_ratio: float = DEFAULT_CRITICAL_DISK_FREE_RATIO
     pinned_dependency_env_fingerprints: frozenset[str] = frozenset()
     pinned_runner_workspace_fingerprints: frozenset[str] = frozenset()
     pinned_model_blob_paths: frozenset[str] = frozenset()
@@ -190,11 +221,13 @@ class RuntimeStorageGarbageCollector:
         log_store: DiagnosticsSink,
         runner_descriptors: Iterable[RunnerDescriptor] = (),
         config: RuntimeStorageGcConfig | None = None,
+        model_reference_validator: ModelReferenceValidator | None = None,
     ) -> None:
         self.roots = roots
         self.install_states = list(install_states)
         self.runner_descriptors = list(runner_descriptors)
         self.config = config or RuntimeStorageGcConfig()
+        self.model_reference_validator = model_reference_validator
         self.log_store = log_store
 
     def build_reference_index(self) -> RuntimeStorageReferenceIndex:
@@ -235,9 +268,15 @@ class RuntimeStorageGarbageCollector:
         referenced_model_blobs: dict[Path, set[str]] = {}
         referenced_model_views: dict[Path, set[str]] = {}
         protected_user_sources: set[Path] = set()
+        invalid_model_reference_workflows: dict[str, dict[str, list[str]]] = {}
 
         for state in root_states:
             workflow_id = workflow_for_state[state.capsule_fingerprint]
+            invalid_model_references = self._invalid_model_references_for_gc_root(
+                state
+            )
+            if invalid_model_references:
+                invalid_model_reference_workflows[workflow_id] = invalid_model_references
             if state.dependency_env_fingerprint:
                 referenced_dependency_envs.setdefault(
                     state.dependency_env_fingerprint, set()
@@ -254,13 +293,24 @@ class RuntimeStorageGarbageCollector:
                 }:
                     if policy.source_path is not None:
                         protected_user_sources.add(policy.source_path)
-                if policy.source_path is not None and model_ref.asset_ownership in {
-                    AssetOwnership.NOOFY_DOWNLOADED,
-                    AssetOwnership.NOOFY_IMPORTED,
-                }:
+                ref_invalid = model_ref.requirement_id in invalid_model_references
+                if (
+                    policy.source_path is not None
+                    and model_ref.asset_ownership
+                    in {
+                        AssetOwnership.NOOFY_DOWNLOADED,
+                        AssetOwnership.NOOFY_IMPORTED,
+                    }
+                    and not _ref_has_visible_rebuild_source(
+                        model_ref,
+                        self.roots.model_blobs_dir,
+                    )
+                ):
                     referenced_model_blobs.setdefault(policy.source_path, set()).add(
                         workflow_id
                     )
+                if ref_invalid:
+                    continue
                 if policy.materialized_path is not None:
                     model_view = _model_view_root_for_path(
                         self.roots.model_materialized_dir, policy.materialized_path
@@ -269,6 +319,27 @@ class RuntimeStorageGarbageCollector:
                         referenced_model_views.setdefault(model_view, set()).add(
                             workflow_id
                         )
+                    else:
+                        non_view = _non_view_materialization_root_for_path(
+                            self.roots.model_materialized_dir, policy.materialized_path
+                        )
+                        if non_view is not None:
+                            referenced_model_views.setdefault(non_view, set()).add(
+                                workflow_id
+                            )
+
+        for workflow_id, invalid in invalid_model_reference_workflows.items():
+            self.log_store.add(
+                "warning",
+                "Stale runtime artifacts detected for installed workflow",
+                "runtime.storage_gc",
+                workflow_id=workflow_id,
+                details={
+                    "reason_code": "stale_runtime_artifacts_detected",
+                    "invalid_model_references": invalid,
+                    "invalid_model_reference_count": len(invalid),
+                },
+            )
 
         for runner in self.runner_descriptors:
             if not _runner_protects_artifacts(runner):
@@ -289,6 +360,11 @@ class RuntimeStorageGarbageCollector:
                     / f"model-view-{_safe_fingerprint(runner.model_view_fingerprint)}",
                     set(),
                 ).add(workflow_id)
+            model_root = _runner_workspace_model_materialization_root(
+                self.roots.model_materialized_dir, runner
+            )
+            if model_root is not None:
+                referenced_model_views.setdefault(model_root, set()).add(workflow_id)
 
         referenced_wheels = self._referenced_wheel_cache_paths(
             referenced_dependency_envs
@@ -316,6 +392,9 @@ class RuntimeStorageGarbageCollector:
         )
         artifacts.extend(self._model_blob_artifacts(referenced_model_blobs))
         artifacts.extend(self._model_view_artifacts(referenced_model_views))
+        artifacts.extend(
+            self._non_view_model_materialization_artifacts(referenced_model_views)
+        )
         artifacts.extend(self._transaction_artifacts())
         artifacts.extend(
             self._cache_entry_artifacts(
@@ -349,31 +428,88 @@ class RuntimeStorageGarbageCollector:
 
         return RuntimeStorageReferenceIndex(artifacts=artifacts)
 
+    def _invalid_model_references_for_gc_root(
+        self, state: InstallState
+    ) -> dict[str, list[str]]:
+        if self.model_reference_validator is None or not state.model_references:
+            return {}
+        invalid: dict[str, list[str]] = {}
+        for model_ref in state.model_references:
+            try:
+                ref_errors = self.model_reference_validator([model_ref])
+            except Exception as exc:
+                self.log_store.add(
+                    "warning",
+                    "Runtime storage GC could not validate installed model reference",
+                    "runtime.storage_gc",
+                    details={
+                        "capsule_fingerprint": state.capsule_fingerprint,
+                        "requirement_id": model_ref.requirement_id,
+                        "error": str(exc),
+                        "error_type": type(exc).__name__,
+                    },
+                )
+                continue
+            if ref_errors:
+                invalid[model_ref.requirement_id] = ref_errors
+        return invalid
+
     def collect_garbage(
         self,
         *,
         dry_run: bool = False,
         confirm_large_model_deletion: bool = False,
+        aggressive: bool = False,
         now: datetime | None = None,
     ) -> RuntimeStorageGcResult:
         now = now or datetime.now(UTC)
         index = self.build_reference_index()
         decisions: list[RuntimeStorageGcDecision] = []
         bytes_deleted = 0
+        applied_paths: set[Path] = set()
 
         for artifact in index.artifacts:
             decision = self._retention_decision(
                 artifact,
                 now=now,
-                confirm_large_model_deletion=confirm_large_model_deletion,
+                aggressive=aggressive,
             )
             if decision is None:
                 continue
             deleted = self._apply_decision(decision, dry_run=dry_run)
             bytes_deleted += deleted
             decisions.append(decision)
+            if decision.action in {
+                RuntimeStorageGcAction.DELETE,
+                RuntimeStorageGcAction.COMPACT,
+            }:
+                applied_paths.add(decision.path)
 
         for cap_kind, cap_bytes in (
+            (
+                RuntimeStorageArtifactKind.TRANSACTION,
+                self.config.quarantined_transaction_cap_bytes,
+            ),
+            (
+                RuntimeStorageArtifactKind.MODEL_VIEW,
+                self.config.orphan_model_view_cap_bytes,
+            ),
+            (
+                RuntimeStorageArtifactKind.NON_VIEW_MODEL_MATERIALIZATION,
+                self.config.non_view_materialization_cap_bytes,
+            ),
+            (
+                RuntimeStorageArtifactKind.MODEL_BLOB,
+                self.config.internal_model_blob_cap_bytes,
+            ),
+            (
+                RuntimeStorageArtifactKind.DEPENDENCY_ENV,
+                self.config.dependency_env_cap_bytes,
+            ),
+            (
+                RuntimeStorageArtifactKind.RUNNER_WORKSPACE,
+                self.config.runner_workspace_cap_bytes,
+            ),
             (
                 RuntimeStorageArtifactKind.WHEEL_CACHE_ENTRY,
                 self.config.wheel_cache_cap_bytes,
@@ -387,11 +523,23 @@ class RuntimeStorageGarbageCollector:
                 self.config.package_archive_cache_cap_bytes,
             ),
         ):
-            cap_decisions = self._cap_decisions(index.by_kind(cap_kind), cap_bytes)
+            cap_decisions = self._cap_decisions(
+                [
+                    artifact
+                    for artifact in index.by_kind(cap_kind)
+                    if artifact.path not in applied_paths
+                ],
+                cap_bytes,
+            )
             for decision in cap_decisions:
                 deleted = self._apply_decision(decision, dry_run=dry_run)
                 bytes_deleted += deleted
                 decisions.append(decision)
+                if decision.action in {
+                    RuntimeStorageGcAction.DELETE,
+                    RuntimeStorageGcAction.COMPACT,
+                }:
+                    applied_paths.add(decision.path)
 
         if decisions:
             self.log_store.add(
@@ -400,6 +548,8 @@ class RuntimeStorageGarbageCollector:
                 "runtime.storage_gc",
                 details={
                     "dry_run": dry_run,
+                    "aggressive": aggressive,
+                    "large_model_confirmation_ignored": confirm_large_model_deletion,
                     "decisions": [
                         {
                             "path": str(decision.path),
@@ -421,7 +571,7 @@ class RuntimeStorageGarbageCollector:
         artifact: RuntimeStorageArtifactMetadata,
         *,
         now: datetime,
-        confirm_large_model_deletion: bool,
+        aggressive: bool,
     ) -> RuntimeStorageGcDecision | None:
         refs = tuple(sorted(artifact.referenced_workflows))
         if artifact.protected:
@@ -454,7 +604,32 @@ class RuntimeStorageGarbageCollector:
                 refs,
             )
         if artifact.kind is RuntimeStorageArtifactKind.TRANSACTION:
+            if (
+                artifact.status == "quarantined"
+                and _transaction_has_payload(artifact.path)
+                and (
+                    artifact.size_bytes >= self.config.transaction_compaction_bytes
+                    or aggressive
+                )
+            ):
+                return RuntimeStorageGcDecision(
+                    artifact.kind,
+                    artifact.path,
+                    RuntimeStorageGcAction.COMPACT,
+                    "quarantined transaction payload exceeds runtime retention policy",
+                    artifact.size_bytes,
+                    refs,
+                )
             retain_until = artifact.developer_details.get("retain_until")
+            if aggressive and artifact.status in {"quarantined", "stale"}:
+                return RuntimeStorageGcDecision(
+                    artifact.kind,
+                    artifact.path,
+                    RuntimeStorageGcAction.DELETE,
+                    "low-disk cleanup removed quarantined transaction",
+                    artifact.size_bytes,
+                    refs,
+                )
             if isinstance(retain_until, str):
                 parsed = _parse_datetime(retain_until)
                 if parsed is not None and parsed > now:
@@ -491,7 +666,7 @@ class RuntimeStorageGarbageCollector:
             RuntimeStorageArtifactKind.DEPENDENCY_ENV,
             RuntimeStorageArtifactKind.RUNNER_WORKSPACE,
         }:
-            if not _older_than(
+            if not aggressive and not _older_than(
                 artifact.last_used_at or artifact.created_at,
                 now,
                 self.config.unreferenced_runtime_retention_days,
@@ -513,7 +688,7 @@ class RuntimeStorageGarbageCollector:
                 refs,
             )
         if artifact.kind is RuntimeStorageArtifactKind.MODEL_VIEW:
-            if not _older_than(
+            if not aggressive and not _older_than(
                 artifact.last_used_at or artifact.created_at,
                 now,
                 self.config.orphan_model_view_retention_days,
@@ -534,22 +709,41 @@ class RuntimeStorageGarbageCollector:
                 artifact.size_bytes,
                 refs,
             )
-        if (
-            artifact.kind is RuntimeStorageArtifactKind.MODEL_BLOB
-            and artifact.path.is_relative_to(self.roots.model_blobs_dir)
-        ):
-            if (
-                artifact.size_bytes >= self.config.large_model_confirmation_bytes
-                and not confirm_large_model_deletion
+        if artifact.kind is RuntimeStorageArtifactKind.NON_VIEW_MODEL_MATERIALIZATION:
+            if artifact.status != "rebuildable_unreferenced":
+                return RuntimeStorageGcDecision(
+                    artifact.kind,
+                    artifact.path,
+                    RuntimeStorageGcAction.SKIP_UNCLASSIFIED,
+                    "non-view materialization ownership or rebuildability is not proven",
+                    artifact.size_bytes,
+                    refs,
+                )
+            if not aggressive and not _older_than(
+                artifact.last_used_at or artifact.created_at,
+                now,
+                self.config.orphan_model_view_retention_days,
             ):
                 return RuntimeStorageGcDecision(
                     artifact.kind,
                     artifact.path,
-                    RuntimeStorageGcAction.SKIP_LARGE_MODEL_CONFIRMATION,
-                    "large model blob requires explicit cleanup confirmation",
+                    RuntimeStorageGcAction.SKIP_RETENTION_WINDOW,
+                    "rebuildable non-view materialization retention window has not expired",
                     artifact.size_bytes,
                     refs,
                 )
+            return RuntimeStorageGcDecision(
+                artifact.kind,
+                artifact.path,
+                RuntimeStorageGcAction.DELETE,
+                "rebuildable non-view materialization is unreferenced",
+                artifact.size_bytes,
+                refs,
+            )
+        if (
+            artifact.kind is RuntimeStorageArtifactKind.MODEL_BLOB
+            and artifact.path.is_relative_to(self.roots.model_blobs_dir)
+        ):
             return RuntimeStorageGcDecision(
                 artifact.kind,
                 artifact.path,
@@ -565,7 +759,12 @@ class RuntimeStorageGarbageCollector:
         artifacts: list[RuntimeStorageArtifactMetadata],
         cap_bytes: int,
     ) -> list[RuntimeStorageGcDecision]:
-        total = sum(artifact.size_bytes for artifact in artifacts)
+        cap_artifacts = [
+            artifact
+            for artifact in artifacts
+            if _artifact_counts_toward_cap(artifact, self.roots)
+        ]
+        total = sum(artifact.size_bytes for artifact in cap_artifacts)
         if total <= cap_bytes:
             return []
         decisions: list[RuntimeStorageGcDecision] = []
@@ -573,18 +772,32 @@ class RuntimeStorageGarbageCollector:
         reclaimed = 0
         candidates = [
             artifact
-            for artifact in artifacts
+            for artifact in cap_artifacts
             if not artifact.protected and not artifact.referenced_workflows
         ]
         for artifact in sorted(
             candidates, key=lambda item: item.last_used_at or item.created_at or ""
         ):
+            action = RuntimeStorageGcAction.DELETE
+            reason = "runtime storage cap exceeded"
+            if artifact.kind in {
+                RuntimeStorageArtifactKind.WHEEL_CACHE_ENTRY,
+                RuntimeStorageArtifactKind.CUSTOM_NODE_SOURCE_CACHE_ENTRY,
+                RuntimeStorageArtifactKind.PACKAGE_ARCHIVE,
+            }:
+                reason = "cache LRU cap exceeded"
+            if (
+                artifact.kind is RuntimeStorageArtifactKind.TRANSACTION
+                and _transaction_has_payload(artifact.path)
+            ):
+                action = RuntimeStorageGcAction.COMPACT
+                reason = "quarantined transaction cap exceeded"
             decisions.append(
                 RuntimeStorageGcDecision(
                     artifact.kind,
                     artifact.path,
-                    RuntimeStorageGcAction.DELETE,
-                    "cache LRU cap exceeded",
+                    action,
+                    reason,
                     artifact.size_bytes,
                     tuple(sorted(artifact.referenced_workflows)),
                 )
@@ -597,11 +810,19 @@ class RuntimeStorageGarbageCollector:
     def _apply_decision(
         self, decision: RuntimeStorageGcDecision, *, dry_run: bool
     ) -> int:
-        if decision.action is not RuntimeStorageGcAction.DELETE:
+        if decision.action not in {
+            RuntimeStorageGcAction.DELETE,
+            RuntimeStorageGcAction.COMPACT,
+        }:
             return 0
         size = decision.size_bytes
         if dry_run:
             return 0
+        if decision.action is RuntimeStorageGcAction.COMPACT:
+            before = _path_size(decision.path)
+            _compact_transaction_payload(decision.path)
+            after = _path_size(decision.path)
+            return max(0, before - after)
         if decision.artifact_kind is RuntimeStorageArtifactKind.MODEL_BLOB:
             # The content-addressed directory is the unit: it also holds the
             # blob's verification record, which must not outlive the blob.
@@ -739,6 +960,46 @@ class RuntimeStorageGarbageCollector:
             )
         return artifacts
 
+    def _non_view_model_materialization_artifacts(
+        self, refs: dict[Path, set[str]]
+    ) -> list[RuntimeStorageArtifactMetadata]:
+        artifacts: list[RuntimeStorageArtifactMetadata] = []
+        if not self.roots.model_materialized_dir.exists():
+            return artifacts
+        for path in sorted(self.roots.model_materialized_dir.iterdir()):
+            if path.name == "views" or not (path.exists() or path.is_symlink()):
+                continue
+            workflows = set(refs.get(path, set()))
+            metadata = _read_non_view_materialization_metadata(path)
+            rebuildable = metadata.get("rebuildable") is True
+            noofy_owned = metadata.get("owner") == "noofy"
+            if _refs_include_runner(workflows):
+                status = "active_runner_protected"
+                protected = True
+            elif workflows:
+                status = "referenced"
+                protected = False
+            elif noofy_owned and rebuildable:
+                status = "rebuildable_unreferenced"
+                protected = False
+            else:
+                status = "unclassified"
+                protected = False
+            artifacts.append(
+                _metadata_for_path(
+                    RuntimeStorageArtifactKind.NON_VIEW_MODEL_MATERIALIZATION,
+                    path,
+                    fingerprint=metadata.get("fingerprint")
+                    if isinstance(metadata.get("fingerprint"), str)
+                    else None,
+                    referenced_workflows=workflows,
+                    status=status,
+                    protected=protected,
+                    developer_details={"manifest": metadata},
+                )
+            )
+        return artifacts
+
     def _transaction_artifacts(self) -> list[RuntimeStorageArtifactMetadata]:
         artifacts: list[RuntimeStorageArtifactMetadata] = []
         if not self.roots.install_transactions_dir.exists():
@@ -748,16 +1009,17 @@ class RuntimeStorageGarbageCollector:
                 continue
             quarantine = _read_json(path / INSTALL_QUARANTINE_FILENAME)
             manifest = _read_json(path / "transaction.json")
+            status = str(quarantine.get("status") or manifest.get("status") or "stale")
             details = {"manifest": manifest, "quarantine": quarantine}
             if isinstance(quarantine.get("retain_until"), str):
                 details["retain_until"] = quarantine["retain_until"]
+            details["has_payload"] = _transaction_has_payload(path)
             artifacts.append(
                 _metadata_for_path(
                     RuntimeStorageArtifactKind.TRANSACTION,
                     path,
-                    status=str(
-                        quarantine.get("status") or manifest.get("status") or "stale"
-                    ),
+                    status=status,
+                    protected=status not in {"quarantined", "stale", "promoted"},
                     developer_details=details,
                 )
             )
@@ -993,6 +1255,59 @@ def _model_view_root_for_path(materialized_dir: Path, path: Path) -> Path | None
     return views_dir / relative.parts[0]
 
 
+def _non_view_materialization_root_for_path(
+    materialized_dir: Path, path: Path
+) -> Path | None:
+    try:
+        relative = path.relative_to(materialized_dir)
+    except ValueError:
+        return None
+    if not relative.parts or relative.parts[0] == "views":
+        return None
+    return materialized_dir / relative.parts[0]
+
+
+def _runner_workspace_model_materialization_root(
+    materialized_dir: Path, runner: RunnerDescriptor
+) -> Path | None:
+    workspace_value = runner.runner_workspace_path
+    if not workspace_value:
+        return None
+    models_path = Path(workspace_value) / "models"
+    try:
+        resolved = models_path.resolve(strict=True)
+    except OSError:
+        return None
+    model_view = _model_view_root_for_path(materialized_dir, resolved)
+    if model_view is not None:
+        return model_view
+    return _non_view_materialization_root_for_path(materialized_dir, resolved)
+
+
+def _ref_has_visible_rebuild_source(
+    ref: InstalledModelReference,
+    model_blobs_dir: Path,
+) -> bool:
+    if not ref.source_path:
+        return False
+    source = Path(ref.source_path)
+    if not source.exists() or not source.is_file():
+        return False
+    if source.is_symlink():
+        try:
+            resolved_source = source.resolve(strict=True)
+            resolved_blobs = model_blobs_dir.resolve(strict=False)
+            if resolved_source.is_relative_to(resolved_blobs):
+                return False
+        except OSError:
+            return False
+    try:
+        source_size = source.stat().st_size
+    except OSError:
+        return False
+    return ref.size_bytes is None or ref.size_bytes == source_size
+
+
 def _runner_protects_artifacts(runner: RunnerDescriptor) -> bool:
     if runner.current_job_id:
         return True
@@ -1039,6 +1354,80 @@ def _read_json(path: Path) -> dict[str, object]:
         return data if isinstance(data, dict) else {}
     except (OSError, json.JSONDecodeError):
         return {}
+
+
+def _read_non_view_materialization_metadata(path: Path) -> dict[str, object]:
+    for manifest_name in (
+        ".noofy-materialization.json",
+        "noofy-materialization.json",
+        "manifest.json",
+    ):
+        payload = _read_json(path / manifest_name)
+        if payload:
+            return payload
+    return {}
+
+
+def _transaction_has_payload(path: Path) -> bool:
+    for name in (
+        "model-views",
+        "model-blobs",
+        "dependency-envs",
+        "runner-workspaces",
+    ):
+        payload = path / name
+        if not payload.is_dir():
+            continue
+        try:
+            if any(payload.iterdir()):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def _compact_transaction_payload(path: Path) -> None:
+    removed: list[dict[str, object]] = []
+    for name in (
+        "model-views",
+        "model-blobs",
+        "dependency-envs",
+        "runner-workspaces",
+    ):
+        payload = path / name
+        if not payload.exists():
+            continue
+        size = _path_size(payload)
+        shutil.rmtree(payload, ignore_errors=True)
+        removed.append({"path": name, "size_bytes": size})
+    if not removed:
+        return
+    summary = {
+        "schema_version": "0.1.0",
+        "compacted_at": datetime.now(UTC).isoformat(),
+        "removed_payloads": removed,
+        "bytes_deleted_estimate": sum(
+            int(item["size_bytes"])
+            for item in removed
+            if isinstance(item["size_bytes"], int)
+        ),
+    }
+    target = path / "payload-cleanup-summary.json"
+    tmp = target.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
+    tmp.replace(target)
+
+
+def _artifact_counts_toward_cap(
+    artifact: RuntimeStorageArtifactMetadata, roots: RuntimeStorageRoots
+) -> bool:
+    if artifact.kind is RuntimeStorageArtifactKind.MODEL_BLOB:
+        return artifact.path.is_relative_to(roots.model_blobs_dir)
+    if artifact.kind is RuntimeStorageArtifactKind.NON_VIEW_MODEL_MATERIALIZATION:
+        return artifact.status in {"rebuildable_unreferenced", "referenced"}
+    if artifact.kind is RuntimeStorageArtifactKind.TRANSACTION:
+        return artifact.status in {"quarantined", "stale", "promoted"}
+    return True
 
 
 def _path_size(path: Path) -> int:

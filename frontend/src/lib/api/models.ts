@@ -2,14 +2,20 @@ import { deleteJson, getJson, postJson, putJson } from "./client";
 import type { ImportModelDownloadProgressItem, RequiredModelSummary } from "./workflows";
 
 export type ModelInventoryStatus = "ready" | "missing" | "needs_attention" | "never_used";
-export type ModelInventorySource = "noofy" | "external_comfyui" | "engine_visible" | "required_by_workflow";
+export type ModelInventorySource =
+  | "noofy"
+  | "external_comfyui"
+  | "engine_visible"
+  | "required_by_workflow"
+  | "runtime_model_bundle";
 export type ModelOwnership =
   | "noofy_downloaded"
   | "noofy_imported"
   | "noofy_local"
   | "external_reference"
   | "engine_reference"
-  | "workflow_requirement";
+  | "workflow_requirement"
+  | "runtime_managed";
 
 export interface ModelTag {
   id: string;

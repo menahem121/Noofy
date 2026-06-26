@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import sys
 import threading
 from pathlib import Path
@@ -41,8 +42,12 @@ def _build_store(
     local_model_roots: list[Path] | None = None,
     owned_model_root: Path | None = None,
     local_model_identity_store: LocalModelIdentityStore | None = None,
+    large_model_copy_threshold_bytes: int | None = None,
 ) -> tuple[ModelStore, LogStore]:
     log_store = LogStore()
+    kwargs = {}
+    if large_model_copy_threshold_bytes is not None:
+        kwargs["large_model_copy_threshold_bytes"] = large_model_copy_threshold_bytes
     store = ModelStore(
         **_model_store_paths(tmp_path),
         log_store=log_store,
@@ -50,6 +55,7 @@ def _build_store(
         local_model_roots=local_model_roots,
         owned_model_root=owned_model_root,
         local_model_identity_store=local_model_identity_store,
+        **kwargs,
     )
     return store, log_store
 
@@ -541,6 +547,52 @@ async def test_materialize_model_view_projects_downloaded_model_to_owned_folder(
 
 
 @pytest.mark.anyio
+async def test_reprepare_reuses_visible_owned_model_after_internal_blob_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"owned-visible-reuse-after-blob-cleanup"
+    lock = _model_lock(payload, folder="checkpoints", filename="owned.safetensors")
+    owned_model_root = tmp_path / "Noofy Models"
+    identity_store = _identity_store(tmp_path)
+    call_count = 0
+
+    async def downloader(url: str, dest: Path) -> int:
+        nonlocal call_count
+        call_count += 1
+        dest.write_bytes(payload)
+        return len(payload)
+
+    store, _ = _build_store(
+        tmp_path,
+        downloader,
+        local_model_roots=[owned_model_root],
+        owned_model_root=owned_model_root,
+        local_model_identity_store=identity_store,
+    )
+    first = await store.materialize_model_view(view_id="capsule-fp", model_locks=[lock])
+    blob_path = Path(first.model_references[0].blob_path or "")
+    assert blob_path.exists()
+    assert call_count == 1
+    shutil.rmtree(blob_path.parent)
+
+    def fail_if_hashed(path: Path, chunk_size: int = 1 << 20) -> str:
+        raise AssertionError(f"visible model identity should avoid rehash: {path}")
+
+    monkeypatch.setattr(model_store_module, "_sha256_file", fail_if_hashed)
+
+    assert store.validate_installed_model_references_for_launch(
+        first.model_references
+    ) == []
+
+    second = await store.materialize_model_view(view_id="capsule-fp", model_locks=[lock])
+
+    assert call_count == 1
+    assert second.model_references[0].asset_ownership is AssetOwnership.USER_LOCAL
+    assert Path(second.model_references[0].materialized_path or "").read_bytes() == payload
+
+
+@pytest.mark.anyio
 async def test_materialize_model_view_reuses_filename_size_local_candidate(tmp_path: Path) -> None:
     payload = b"local-candidate"
     local_root = tmp_path / "user-models"
@@ -683,6 +735,32 @@ async def test_materialize_model_view_falls_back_to_copy_when_links_fail(
 
     assert view.model_references[0].materialization_strategy == "copy"
     assert Path(view.model_references[0].materialized_path).read_bytes() == payload
+
+
+@pytest.mark.anyio
+async def test_materialize_model_view_blocks_large_copy_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"large-copy-block"
+    lock = _model_lock(payload)
+    store, _ = _build_store(
+        tmp_path,
+        _make_downloader({lock.source_urls[0]: payload}),
+        large_model_copy_threshold_bytes=1,
+    )
+
+    def fail_link(source: Path, target: Path) -> None:
+        raise OSError("cross-device link")
+
+    def fail_symlink(source: Path, target: Path) -> None:
+        raise OSError("symlink denied")
+
+    monkeypatch.setattr(model_store_module.os, "link", fail_link)
+    monkeypatch.setattr(model_store_module.os, "symlink", fail_symlink)
+
+    with pytest.raises(ModelDownloadError, match="Large model materialization"):
+        await store.materialize_model_view(view_id="capsule-fp", model_locks=[lock])
 
 
 @pytest.mark.anyio

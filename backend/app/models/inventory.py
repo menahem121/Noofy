@@ -57,6 +57,9 @@ MODEL_ASSET_SUFFIXES = {
     ".tflite",
 }
 ENGINE_VISIBLE_MODELS_TIMEOUT_SECONDS = 1.5
+RUNTIME_MATERIALIZED_VIEWS_DIRNAME = "views"
+RUNTIME_MODEL_BUNDLE_FOLDER = "workflow_installed"
+RUNTIME_MODEL_BUNDLE_KEY_PREFIX = "runtime_model_bundles"
 
 
 class ModelInventoryService:
@@ -70,6 +73,7 @@ class ModelInventoryService:
         log_store: DiagnosticsSink | None = None,
         engine_visible_models_timeout_seconds: float = ENGINE_VISIBLE_MODELS_TIMEOUT_SECONDS,
         excluded_engine_model_roots: list[Path] | None = None,
+        runtime_model_bundle_roots: list[Path] | None = None,
     ) -> None:
         self.engine_service = engine_service
         self.model_folder_service = model_folder_service
@@ -79,10 +83,14 @@ class ModelInventoryService:
             0.0,
             engine_visible_models_timeout_seconds,
         )
+        self.runtime_model_bundle_roots = [
+            root.expanduser().resolve(strict=False)
+            for root in runtime_model_bundle_roots or []
+        ]
         self.excluded_engine_model_roots = [
             root.expanduser().resolve(strict=False)
             for root in excluded_engine_model_roots or []
-        ]
+        ] + self.runtime_model_bundle_roots
         self.import_service = ModelImportService(
             model_folder_service=model_folder_service,
             ownership_store=ownership_store,
@@ -117,6 +125,7 @@ class ModelInventoryService:
             external_root=external_root,
         )
         self._add_workflow_requirements(entries)
+        self._add_runtime_model_bundles(entries)
 
         tags = self.tag_store.list_tags()
         for entry in entries.values():
@@ -151,6 +160,8 @@ class ModelInventoryService:
 
     def delete_model(self, model_key_value: str) -> ModelDeleteResponse:
         folder, filename = parse_model_key(model_key_value)
+        if folder == RUNTIME_MODEL_BUNDLE_KEY_PREFIX:
+            return self._delete_runtime_model_bundle(filename, model_key_value)
         folder_settings = self.model_folder_service.settings(ensure_folders=True)
         if folder not in folder_settings.categories:
             raise ValueError("Only supported Noofy model folders can be managed.")
@@ -181,6 +192,9 @@ class ModelInventoryService:
         self.tag_store.clear_model_tags(model_key_value)
         if target_source == "noofy":
             self.ownership_store.forget_model(model_key_value)
+        maintenance = getattr(self.engine_service, "run_runtime_storage_maintenance", None)
+        if callable(maintenance):
+            maintenance(reason="model_deleted", force_aggressive=False)
         if self.log_store is not None:
             self.log_store.add(
                 "info",
@@ -190,6 +204,39 @@ class ModelInventoryService:
             )
         label = "Noofy Models" if target_source == "noofy" else "ComfyUI models folder"
         return ModelDeleteResponse(model_key=model_key_value, deleted=True, message=f"Model file deleted from {label}.")
+
+    def _delete_runtime_model_bundle(self, bundle_name: str, model_key_value: str) -> ModelDeleteResponse:
+        if len(Path(bundle_name).parts) != 1:
+            raise ValueError("Only direct workflow-installed model bundles can be removed.")
+        for root in self.runtime_model_bundle_roots:
+            target_path = root / bundle_name
+            ensure_inside(target_path, root)
+            try:
+                target_stat = target_path.lstat()
+            except FileNotFoundError:
+                continue
+            if not stat.S_ISDIR(target_stat.st_mode):
+                raise ValueError("Only workflow-installed model bundle directories can be removed.")
+            shutil.rmtree(target_path)
+            self.tag_store.clear_model_tags(model_key_value)
+            maintenance = getattr(self.engine_service, "run_runtime_storage_maintenance", None)
+            if callable(maintenance):
+                maintenance(reason="runtime_model_bundle_deleted", force_aggressive=False)
+            if self.log_store is not None:
+                self.log_store.add(
+                    "info",
+                    "Workflow-installed model bundle deleted",
+                    "models.inventory",
+                    details={"model_key": model_key_value, "bundle": bundle_name, "root": str(root)},
+                )
+            return ModelDeleteResponse(
+                model_key=model_key_value,
+                deleted=True,
+                message=(
+                    "Workflow-installed model removed. Noofy may reinstall it if a workflow needs it again."
+                ),
+            )
+        raise FileNotFoundError("This workflow-installed model is not in managed runtime storage.")
 
     def _disk_free_bytes(self, root: Path) -> int | None:
         """Free space on the disk that holds the Noofy models folder.
@@ -501,6 +548,44 @@ class ModelInventoryService:
                         )
                     )
 
+    def _add_runtime_model_bundles(self, entries: dict[str, ModelInventoryEntry]) -> None:
+        for root in self.runtime_model_bundle_roots:
+            if not root.is_dir():
+                continue
+            bundle_dirs = sorted(
+                (path for path in root.iterdir() if path.is_dir()),
+                key=lambda path: path.name.casefold(),
+            )
+            for bundle_dir in bundle_dirs:
+                if bundle_dir.name == RUNTIME_MATERIALIZED_VIEWS_DIRNAME:
+                    continue
+                bundle_stats = _runtime_bundle_stats(bundle_dir)
+                if bundle_stats is None:
+                    continue
+                size_bytes, file_count = bundle_stats
+                key = model_key(RUNTIME_MODEL_BUNDLE_KEY_PREFIX, bundle_dir.name)
+                entries[key] = ModelInventoryEntry(
+                    model_key=key,
+                    filename=_runtime_bundle_display_name(bundle_dir.name),
+                    folder=RUNTIME_MODEL_BUNDLE_FOLDER,
+                    model_type="runtime_bundle",
+                    size_bytes=size_bytes,
+                    status="ready",
+                    status_label="Ready",
+                    source="runtime_model_bundle",
+                    source_label="Workflow-installed model",
+                    ownership="runtime_managed",
+                    ownership_label="Managed automatically by Noofy",
+                    can_delete=True,
+                    delete_unavailable_reason=None,
+                    path=str(bundle_dir),
+                    matched_root=str(root),
+                    message=(
+                        "Installed by a workflow while it was running. Noofy tracks this storage and manages cleanup "
+                        f"automatically. Contains {file_count} model file{'s' if file_count != 1 else ''}."
+                    ),
+                )
+
     def _ownership_for_file(self, key: str, source: ModelInventorySource) -> tuple[ModelOwnership, str]:
         if source == "noofy":
             origin = self.ownership_store.origin_for_model(key)
@@ -509,6 +594,8 @@ class ModelInventoryService:
             if origin == "imported":
                 return "noofy_imported", "Imported into Noofy"
             return "noofy_local", "In Noofy Models"
+        if source == "runtime_model_bundle":
+            return "runtime_managed", "Managed automatically by Noofy"
         return "external_reference", "External reference"
 
     def _path_is_inside_root(self, path: Path, root: Path) -> bool:
@@ -547,6 +634,32 @@ def _is_cleanable(model: ModelInventoryEntry) -> bool:
 
 def _is_model_asset_filename(filename: str) -> bool:
     return Path(filename).suffix.casefold() in MODEL_ASSET_SUFFIXES
+
+
+def _runtime_bundle_stats(bundle_dir: Path) -> tuple[int, int] | None:
+    size_bytes = 0
+    file_count = 0
+    for path in bundle_dir.rglob("*"):
+        try:
+            path_stat = path.stat() if path.is_file() else None
+        except OSError:
+            continue
+        if path_stat is None or not stat.S_ISREG(path_stat.st_mode):
+            continue
+        if not _is_model_asset_filename(path.name):
+            continue
+        size_bytes += path_stat.st_size
+        file_count += 1
+    if file_count == 0:
+        return None
+    return size_bytes, file_count
+
+
+def _runtime_bundle_display_name(name: str) -> str:
+    parts = [part for part in name.replace("_", "-").split("-") if part]
+    if not parts:
+        return name
+    return "-".join(part.upper() if len(part) <= 4 else part.capitalize() for part in parts)
 
 
 def _engine_model_root(path: Path, folder: str, filename: str) -> Path:
@@ -598,6 +711,8 @@ def _inventory_status_for_required_status(status: str) -> ModelInventoryStatus:
 def _delete_unavailable_reason(source: ModelInventorySource, ownership: ModelOwnership) -> str:
     if source == "noofy" and ownership == "noofy_local":
         return "Only models imported or downloaded by Noofy can be deleted."
+    if source == "runtime_model_bundle" or ownership == "runtime_managed":
+        return "Workflow-installed models are managed automatically by Noofy."
     return "Only files inside Noofy Models or the configured ComfyUI models folder can be deleted."
 
 

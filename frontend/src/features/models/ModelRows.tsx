@@ -6,6 +6,7 @@ import {
   folderNameLabel,
   formatBytes,
   hexAlpha,
+  modelDeleteActionLabel,
   modelFolderPath,
   modelSourceLabel,
   MODEL_TYPE_LABELS,
@@ -161,7 +162,7 @@ export function DetailPanel({
   const availableTags = tags.filter((tag) => !model.tag_ids.includes(tag.id));
   const folderPath = modelFolderPath(model);
   const sourceLabel = modelSourceLabel(model);
-  const deleteLabel = model.source === "external_comfyui" ? "Delete from ComfyUI folder" : "Delete from Noofy Models";
+  const deleteLabel = modelDeleteActionLabel(model);
 
   return (
     <>
@@ -251,7 +252,13 @@ export function DetailPanel({
             <dt>Source</dt>
             <dd>{sourceLabel}</dd>
           </div>
-          {model.matched_root && (
+          {model.source === "runtime_model_bundle" && (
+            <div>
+              <dt>Storage</dt>
+              <dd>Managed automatically by Noofy</dd>
+            </div>
+          )}
+          {model.matched_root && model.source !== "runtime_model_bundle" && (
             <div>
               <dt>Model root</dt>
               <dd className="detail-dev-value">{model.matched_root}</dd>

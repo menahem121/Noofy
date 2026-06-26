@@ -66,6 +66,7 @@ from app.runtime.memory.service import MemoryGovernorService
 from app.runtime.memory.resource_monitor import SystemResourceObserver, build_resource_snapshot
 from app.runtime.runners.runner_coordinator import RunnerProcessCoordinator
 from app.runtime.runners.lifecycle_service import WorkflowRunnerLifecycleService
+from app.runtime.storage.maintenance import RuntimeStorageMaintenanceService
 from app.runtime.storage.storage_gc import RuntimeStorageGarbageCollector, RuntimeStorageRoots
 from app.runtime.runners.supervisor import (
     CORE_RUNNER_ID,
@@ -143,6 +144,7 @@ class EngineService:
         run_lifecycle_service: RunLifecycleService | None = None,
         progress_estimator: WorkflowProgressEstimator | None = None,
         workflow_removal_cleanup_service: WorkflowRemovalCleanupService | None = None,
+        runtime_storage_maintenance_service: RuntimeStorageMaintenanceService | None = None,
     ) -> None:
         self.workflow_loader = workflow_loader
         self.workflow_validator = workflow_validator
@@ -171,6 +173,7 @@ class EngineService:
         self.workflow_library_store = workflow_library_store
         self.history_service = history_service
         self.workflow_removal_cleanup_service = workflow_removal_cleanup_service
+        self.runtime_storage_maintenance_service = runtime_storage_maintenance_service
         self._authoring_preparation_tasks: dict[
             str, asyncio.Task[dict[str, object]]
         ] = {}
@@ -582,26 +585,20 @@ class EngineService:
         workflow_id: str,
         install_state_removed: bool,
     ) -> None:
-        if self.capsule_installer is None:
-            return
-        try:
-            states = self.capsule_installer.install_state_store.list_states()
-            collector = RuntimeStorageGarbageCollector(
-                roots=RuntimeStorageRoots.from_paths(settings.paths),
-                install_states=states,
-                runner_descriptors=self.runner_supervisor.list_runners(),
-                log_store=self.log_store,
-            )
-            result = collector.collect_garbage()
-        except Exception as exc:
-            self.log_store.add(
-                "warning",
-                "Runtime storage cleanup after workflow removal failed",
-                "runtime.storage_gc",
+        maintenance_service = (
+            self.runtime_storage_maintenance_service
+            or self._build_runtime_storage_maintenance_service(self.capsule_installer)
+        )
+        result = None
+        if maintenance_service is not None:
+            result = maintenance_service.run(
+                reason="workflow_removed",
                 workflow_id=workflow_id,
-                details={"error": str(exc), "error_type": type(exc).__name__},
             )
-            return
+        bytes_deleted = result.gc_result.bytes_deleted if result is not None else 0
+        decision_count = (
+            len(result.gc_result.decisions) if result is not None else 0
+        )
         self.log_store.add(
             "info",
             "Runtime storage cleanup checked after workflow removal",
@@ -609,10 +606,51 @@ class EngineService:
             workflow_id=workflow_id,
             details={
                 "install_state_removed": install_state_removed,
-                "decision_count": len(result.decisions),
-                "bytes_deleted": result.bytes_deleted,
+                "decision_count": decision_count,
+                "bytes_deleted": bytes_deleted,
             },
         )
+
+    def _build_runtime_storage_maintenance_service(
+        self,
+        capsule_installer: CapsuleInstaller | None,
+    ) -> RuntimeStorageMaintenanceService | None:
+        if capsule_installer is None:
+            return None
+        model_store = getattr(capsule_installer, "model_store", None)
+        validator = (
+            model_store.validate_installed_model_references_for_launch
+            if model_store is not None
+            and hasattr(model_store, "validate_installed_model_references_for_launch")
+            else None
+        )
+        return RuntimeStorageMaintenanceService(
+            roots=RuntimeStorageRoots.from_paths(settings.paths),
+            install_state_store=capsule_installer.install_state_store,
+            runner_descriptors=self.runner_supervisor.list_runners,
+            log_store=self.log_store,
+            model_reference_validator=validator,
+        )
+
+    def run_runtime_storage_maintenance(
+        self,
+        *,
+        reason: str,
+        workflow_id: str | None = None,
+        force_aggressive: bool = False,
+    ):
+        if self.runtime_storage_maintenance_service is None:
+            return None
+        return self.runtime_storage_maintenance_service.run(
+            reason=reason,
+            workflow_id=workflow_id,
+            force_aggressive=force_aggressive,
+        )
+
+    def start_runtime_storage_idle_maintenance(self) -> None:
+        if self.runtime_storage_maintenance_service is None:
+            return
+        self.runtime_storage_maintenance_service.start_idle_maintenance()
 
     def export_workflow_comfyui_graph(
         self,
@@ -702,13 +740,16 @@ class EngineService:
     def storage_diagnostics_payload(self) -> dict[str, object]:
         if self.capsule_installer is None:
             states: list[InstallState] = []
+            validator = None
         else:
             states = self.capsule_installer.install_state_store.list_states()
+            validator = self.capsule_installer.model_store.validate_installed_model_references_for_launch
         collector = RuntimeStorageGarbageCollector(
             roots=RuntimeStorageRoots.from_paths(settings.paths),
             install_states=states,
             runner_descriptors=self.runner_supervisor.list_runners(),
             log_store=self.log_store,
+            model_reference_validator=validator,
         )
         return collector.build_reference_index().to_diagnostics()
 
@@ -822,7 +863,13 @@ class EngineService:
         return self.workflow_runner_lifecycle_service.get_install_state_developer_details(workflow_id)
 
     async def prepare_workflow(self, workflow_id: str) -> dict[str, object]:
-        return await self.workflow_runner_lifecycle_service.prepare_workflow(workflow_id)
+        try:
+            return await self.workflow_runner_lifecycle_service.prepare_workflow(workflow_id)
+        finally:
+            self.run_runtime_storage_maintenance(
+                reason="prepare_workflow",
+                workflow_id=workflow_id,
+            )
 
     async def start_workflow_runner(self, workflow_id: str) -> dict[str, object]:
         return await self.workflow_runner_lifecycle_service.start_workflow_runner(workflow_id)
@@ -936,8 +983,9 @@ class EngineService:
                 },
             )
             prepare_started_at = time.monotonic()
-            install = await self.workflow_runner_lifecycle_service.prepare_workflow(
-                workflow_id
+            install = await self._prepare_workflow_with_runtime_maintenance(
+                workflow_id,
+                reason="prepare_workflow_for_run",
             )
             self._log_slow_runner_preparation_stage(
                 workflow_id,
@@ -994,8 +1042,9 @@ class EngineService:
                 },
             )
             reprepare_started_at = time.monotonic()
-            install = await self.workflow_runner_lifecycle_service.prepare_workflow(
-                workflow_id
+            install = await self._prepare_workflow_with_runtime_maintenance(
+                workflow_id,
+                reason="reprepare_workflow_for_run",
             )
             self._log_slow_runner_preparation_stage(
                 workflow_id,
@@ -1095,6 +1144,22 @@ class EngineService:
             workflow_id,
             lease_id,
         )
+
+    async def _prepare_workflow_with_runtime_maintenance(
+        self,
+        workflow_id: str,
+        *,
+        reason: str,
+    ) -> dict[str, object]:
+        try:
+            return await self.workflow_runner_lifecycle_service.prepare_workflow(
+                workflow_id
+            )
+        finally:
+            self.run_runtime_storage_maintenance(
+                reason=reason,
+                workflow_id=workflow_id,
+            )
 
     def _workflow_has_pending_queued_runs(self, workflow_id: str) -> bool:
         """Whether a queued (not yet submitted) run still needs this workflow."""
@@ -1417,6 +1482,11 @@ class EngineService:
                 "workflow_runner_lifecycle_service",
                 runner_lifecycle_shutdown,
             )
+        if self.runtime_storage_maintenance_service is not None:
+            await _run_shutdown_step(
+                "runtime_storage_maintenance_service",
+                self.runtime_storage_maintenance_service.shutdown,
+            )
         await _run_shutdown_step(
             "run_lifecycle_service",
             self.run_lifecycle_service.shutdown,
@@ -1674,7 +1744,10 @@ class EngineService:
         self,
         workflow_id: str,
     ) -> dict[str, object]:
-        result = await self.workflow_runner_lifecycle_service.prepare_workflow(workflow_id)
+        result = await self._prepare_workflow_with_runtime_maintenance(
+            workflow_id,
+            reason="prepare_workflow_for_authoring",
+        )
         smoke_report = result.get("smoke_test_report")
         custom_node_import = smoke_report.get("custom_node_import") if isinstance(smoke_report, dict) else None
         details = custom_node_import.get("details") if isinstance(custom_node_import, dict) else None

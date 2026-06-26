@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 from app.engine.models import ImportModelDownloadProgressItem, RequiredModelSummary
 
-MODEL_INVENTORY_SCHEMA_VERSION = "2026-05-13"
+MODEL_INVENTORY_SCHEMA_VERSION = "2026-06-26"
 
 ModelInventoryStatus = Literal["ready", "missing", "needs_attention", "never_used"]
 ModelInventorySource = Literal[
@@ -14,6 +14,7 @@ ModelInventorySource = Literal[
     "external_comfyui",
     "engine_visible",
     "required_by_workflow",
+    "runtime_model_bundle",
 ]
 ModelOwnership = Literal[
     "noofy_downloaded",
@@ -22,6 +23,7 @@ ModelOwnership = Literal[
     "external_reference",
     "engine_reference",
     "workflow_requirement",
+    "runtime_managed",
 ]
 
 

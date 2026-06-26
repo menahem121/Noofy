@@ -64,6 +64,8 @@ from app.runtime.runners.supervisor import (
 )
 from app.runtime.uv_executable import resolve_noofy_uv_executable
 from app.runtime.storage.workspace_preparer import RuntimeWorkspacePreparer
+from app.runtime.storage.maintenance import RuntimeStorageMaintenanceService
+from app.runtime.storage.storage_gc import RuntimeStorageRoots
 from app.runtime.storage.workspace_store import (
     DependencyEnvManifestStore,
     RunnerWorkspaceManifestStore,
@@ -499,6 +501,13 @@ def create_default_engine_service() -> EngineService:
         ),
         log_store=log_store,
     )
+    runtime_storage_maintenance_service = RuntimeStorageMaintenanceService(
+        roots=RuntimeStorageRoots.from_paths(paths),
+        install_state_store=install_state_store,
+        runner_descriptors=supervisor.list_runners,
+        log_store=log_store,
+        model_reference_validator=model_store.validate_installed_model_references_for_launch,
+    )
 
     # Wire the on_restart callback so the supervisor and adapter learn
     # the new URL after a crash-restart that picked a new port.
@@ -633,5 +642,7 @@ def create_default_engine_service() -> EngineService:
         model_availability_service=model_availability_service,
         workflow_library_store=workflow_library_store,
         history_service=history_service,
+        runtime_storage_maintenance_service=runtime_storage_maintenance_service,
     )
+    service.run_runtime_storage_maintenance(reason="startup")
     return service

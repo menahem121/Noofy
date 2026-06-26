@@ -79,6 +79,7 @@ class FakeEngineService:
         self.engine_visible_model = noofy_root.parent / "Engine Visible" / "vae" / "engine-only.safetensors"
         self.engine_visible_model.parent.mkdir(parents=True, exist_ok=True)
         self.engine_visible_model.write_bytes(b"engine-only")
+        self.runtime_maintenance_calls: list[dict[str, object]] = []
 
     async def list_available_models(self) -> list[ModelInfo]:
         return [
@@ -89,6 +90,10 @@ class FakeEngineService:
                 path=str(self.engine_visible_model),
             ),
         ]
+
+    def run_runtime_storage_maintenance(self, **kwargs):
+        self.runtime_maintenance_calls.append(kwargs)
+        return None
 
     async def shutdown(self) -> None:
         return None
@@ -382,6 +387,75 @@ def test_models_inventory_excludes_runtime_materialized_engine_models(tmp_path: 
         keys = {model.model_key for model in inventory.models}
         assert "upscale_models/runtime-only.safetensors" not in keys
         assert "vae/engine-only.safetensors" in keys
+
+    asyncio.run(run())
+
+
+def test_models_inventory_lists_runtime_materialized_dirs_as_managed_bundles(tmp_path: Path) -> None:
+    async def run() -> None:
+        noofy_root = tmp_path / "Noofy Models"
+        materialized_root = tmp_path / "model-store" / "materialized"
+        bundle_dir = materialized_root / "moss-tts"
+        shard_a = bundle_dir / "OpenMOSS-Team--MOSS-TTS" / "model-00001-of-00002.safetensors"
+        shard_b = bundle_dir / "OpenMOSS-Team--MOSS-TTS" / "model-00002-of-00002.safetensors"
+        shard_a.parent.mkdir(parents=True)
+        shard_a.write_bytes(b"first")
+        shard_b.write_bytes(b"second")
+        (bundle_dir / "OpenMOSS-Team--MOSS-TTS" / "config.json").write_text("{}", encoding="utf-8")
+        view_file = materialized_root / "views" / "model-view-test" / "checkpoints" / "runtime-only.safetensors"
+        view_file.parent.mkdir(parents=True)
+        view_file.write_bytes(b"view")
+        settings_service = ModelFolderSettingsService(
+            store=ModelFolderSettingsStore(tmp_path / "settings" / "model-folders.json"),
+            default_noofy_models_dir=noofy_root,
+        )
+        settings_service.update(ModelFolderUpdateRequest(noofy_models_dir=str(noofy_root)))
+        engine = FakeEngineService(
+            noofy_root=noofy_root,
+            external_root=None,
+            packages=[],
+        )
+        service = ModelInventoryService(
+            engine_service=engine,
+            model_folder_service=settings_service,
+            tag_store=ModelTagStore(tmp_path / "settings" / "model-tags.json"),
+            ownership_store=ModelOwnershipStore(tmp_path / "settings" / "model-ownership.json"),
+            log_store=engine.log_store,
+            excluded_engine_model_roots=[materialized_root],
+            runtime_model_bundle_roots=[materialized_root],
+        )
+
+        inventory = await service.inventory()
+
+        by_key = {model.model_key: model for model in inventory.models}
+        bundle = by_key["runtime_model_bundles/moss-tts"]
+        assert bundle.filename == "MOSS-TTS"
+        assert bundle.folder == "workflow_installed"
+        assert bundle.model_type == "runtime_bundle"
+        assert bundle.source == "runtime_model_bundle"
+        assert bundle.source_label == "Workflow-installed model"
+        assert bundle.ownership == "runtime_managed"
+        assert bundle.ownership_label == "Managed automatically by Noofy"
+        assert bundle.can_delete is True
+        assert bundle.delete_unavailable_reason is None
+        assert bundle.path == str(bundle_dir)
+        assert bundle.matched_root == str(materialized_root)
+        assert bundle.size_bytes == shard_a.stat().st_size + shard_b.stat().st_size
+        assert "2 model files" in (bundle.message or "")
+        assert "runtime_model_bundles/views" not in by_key
+        assert "checkpoints/runtime-only.safetensors" not in by_key
+
+        delete_response = service.delete_model("runtime_model_bundles/moss-tts")
+
+        assert delete_response.deleted is True
+        assert delete_response.message == (
+            "Workflow-installed model removed. Noofy may reinstall it if a workflow needs it again."
+        )
+        assert not bundle_dir.exists()
+        assert view_file.exists()
+        assert engine.runtime_maintenance_calls == [
+            {"reason": "runtime_model_bundle_deleted", "force_aggressive": False}
+        ]
 
     asyncio.run(run())
 
@@ -745,6 +819,36 @@ def test_model_inventory_cleanable_size_counts_only_unused_noofy_owned_models(tm
     by_key = {model["model_key"]: model for model in data["models"]}
     assert by_key["loras/unused.safetensors"]["workflow_usage"] == []
     assert by_key["checkpoints/base.safetensors"]["workflow_usage"] != []
+
+
+def test_model_delete_triggers_backend_runtime_storage_maintenance(tmp_path: Path) -> None:
+    noofy_root = tmp_path / "Noofy Models"
+    model_path = noofy_root / "loras" / "unused.safetensors"
+    model_path.parent.mkdir(parents=True)
+    model_path.write_bytes(b"unused-owned")
+    settings_service = ModelFolderSettingsService(
+        store=ModelFolderSettingsStore(tmp_path / "settings" / "model-folders.json"),
+        default_noofy_models_dir=noofy_root,
+    )
+    settings_service.update(ModelFolderUpdateRequest(noofy_models_dir=str(noofy_root)))
+    ownership_store = ModelOwnershipStore(tmp_path / "settings" / "model-ownership.json")
+    ownership_store.mark_downloaded("loras/unused.safetensors")
+    engine = FakeEngineService(noofy_root=noofy_root, external_root=None, packages=[])
+    service = ModelInventoryService(
+        engine_service=engine,
+        model_folder_service=settings_service,
+        tag_store=ModelTagStore(tmp_path / "settings" / "model-tags.json"),
+        ownership_store=ownership_store,
+        log_store=engine.log_store,
+    )
+
+    response = service.delete_model("loras/unused.safetensors")
+
+    assert response.deleted is True
+    assert not model_path.exists()
+    assert engine.runtime_maintenance_calls == [
+        {"reason": "model_deleted", "force_aggressive": False}
+    ]
 
 
 def test_model_inventory_ignores_partial_import_transactions(tmp_path: Path) -> None:
