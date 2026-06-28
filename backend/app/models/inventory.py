@@ -175,9 +175,8 @@ class ModelInventoryService:
         target_source = "noofy"
         ensure_inside(target_path, noofy_root)
         if target_path.exists():
-            origin = self.ownership_store.origin_for_model(model_key_value)
-            if origin not in {"downloaded", "imported"}:
-                raise ValueError("Noofy can delete only models it imported or downloaded.")
+            if not target_path.is_file():
+                raise ValueError("Only model files can be deleted.")
         elif external_root is not None:
             target_path = external_root / folder / filename
             target_source = "external_comfyui"
@@ -292,10 +291,7 @@ class ModelInventoryService:
                 except OSError:
                     size_bytes = None
                 ownership, ownership_label = self._ownership_for_file(key, source)
-                can_delete = (
-                    (source == "noofy" and ownership in {"noofy_downloaded", "noofy_imported"})
-                    or source == "external_comfyui"
-                ) and self._path_is_inside_root(file_path, root)
+                can_delete = source in {"noofy", "external_comfyui"} and self._path_is_inside_root(file_path, root)
                 entries[key] = ModelInventoryEntry(
                     model_key=key,
                     filename=relative_filename,
@@ -377,10 +373,7 @@ class ModelInventoryService:
                 model.folder in COMFYUI_MODEL_CATEGORIES
                 and (
                     source == "external_comfyui"
-                    or (
-                        source == "noofy"
-                        and ownership in {"noofy_downloaded", "noofy_imported"}
-                    )
+                    or source == "noofy"
                 )
             )
             entries[key] = ModelInventoryEntry(
@@ -709,8 +702,6 @@ def _inventory_status_for_required_status(status: str) -> ModelInventoryStatus:
 
 
 def _delete_unavailable_reason(source: ModelInventorySource, ownership: ModelOwnership) -> str:
-    if source == "noofy" and ownership == "noofy_local":
-        return "Only models imported or downloaded by Noofy can be deleted."
     if source == "runtime_model_bundle" or ownership == "runtime_managed":
         return "Workflow-installed models are managed automatically by Noofy."
     return "Only files inside Noofy Models or the configured ComfyUI models folder can be deleted."

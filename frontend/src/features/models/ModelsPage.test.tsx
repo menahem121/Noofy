@@ -122,8 +122,8 @@ const inventory: ModelInventoryResponse = {
       source_label: "Noofy Models",
       ownership: "noofy_local",
       ownership_label: "In Noofy Models",
-      can_delete: false,
-      delete_unavailable_reason: "Only models imported or downloaded by Noofy can be deleted.",
+      can_delete: true,
+      delete_unavailable_reason: null,
       path: "/tmp/Noofy Models/diffusion_models/flux.safetensors",
       matched_root: "/tmp/Noofy Models",
       verification_level: null,
@@ -252,6 +252,9 @@ describe("ModelsPage", () => {
       }
       if (url.endsWith("/api/models/loras%2Fstyle.safetensors") && init?.method === "DELETE") {
         return Promise.resolve(jsonResponse({ model_key: "loras/style.safetensors", deleted: true, message: "Deleted" }));
+      }
+      if (url.endsWith("/api/models/diffusion_models%2Fflux.safetensors") && init?.method === "DELETE") {
+        return Promise.resolve(jsonResponse({ model_key: "diffusion_models/flux.safetensors", deleted: true, message: "Deleted" }));
       }
       if (url.endsWith("/api/models/runtime_model_bundles%2Fmoss-tts") && init?.method === "DELETE") {
         return Promise.resolve(
@@ -568,7 +571,7 @@ describe("ModelsPage", () => {
     renderPage();
 
     fireEvent.click(await screen.findByLabelText("Select all models"));
-    expect(screen.getByText("4 selected, 2 can be deleted")).toBeInTheDocument();
+    expect(screen.getByText("4 selected, 3 can be deleted")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Delete selected" }));
 
     await waitFor(() => {
@@ -579,6 +582,10 @@ describe("ModelsPage", () => {
     });
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/models/loras%2Fstyle.safetensors",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/models/diffusion_models%2Fflux.safetensors",
       expect.objectContaining({ method: "DELETE" }),
     );
     expect(fetchMock).not.toHaveBeenCalledWith(

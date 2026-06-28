@@ -1,10 +1,10 @@
-# Cross-Platform Release Strategy
+# Future Full ComfyUI Runtime Parity Strategy
 
 Status: active plan.
 
 Last reviewed: 2026-06-28.
 
-This document defines the release strategy for making Noofy compatible with
+This document defines the future release strategy for making Noofy compatible with
 ComfyUI's native local runtime capabilities without turning ComfyUI into the
 public API contract of the app. The frontend still talks only to the Noofy
 backend. The backend owns `EngineAdapter`, runtime profiles, managed sidecar
