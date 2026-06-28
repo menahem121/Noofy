@@ -326,3 +326,14 @@ of asking beginners to repair Python, pip, folders, or ComfyUI internals.
 - [Memory Governor Linux validation](docs/MEMORY_GOVERNOR_LINUX_VALIDATION.md)
 - [Model resolution and downloads](docs/MODEL_RESOLUTION_AND_DOWNLOADS.md)
 - [Model compatibility plan](docs/MODEL_COMPATIBILITY_PLAN.md)
+
+
+## License
+
+Noofy is licensed under the GNU General Public License v3.0. See
+[LICENSE](LICENSE).
+
+Noofy includes a vendored ComfyUI source snapshot under `third_party/comfyui/`.
+ComfyUI is also licensed under the GNU General Public License v3.0. Its license
+text is available at [third_party/comfyui/LICENSE](third_party/comfyui/LICENSE).
+ComfyUI remains copyright of its respective authors.
