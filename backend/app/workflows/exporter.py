@@ -570,35 +570,36 @@ class WorkflowExporter:
         if package_dir is None:
             return
         source_files_dir = package_dir / "source-files"
-        if not source_files_dir.is_dir():
-            return
+        payload_roots = [source_files_dir] if source_files_dir.is_dir() else []
+        payload_roots.append(package_dir)
         written = set(zf.namelist())
-        for root_name in ("assets", "custom_nodes"):
-            root = source_files_dir / root_name
-            if not root.is_dir():
-                continue
-            for path in sorted(root.rglob("*"), key=lambda item: item.as_posix()):
-                if path.is_dir():
+        for payload_root in payload_roots:
+            for root_name in ("assets", "custom_nodes"):
+                root = payload_root / root_name
+                if not root.is_dir():
                     continue
-                if path.is_symlink():
-                    raise WorkflowExportError(
-                        "This workflow cannot be exported because its original package "
-                        "payload contains a symlink."
-                    )
-                if not path.is_file():
-                    continue
-                try:
-                    archive_path = path.relative_to(source_files_dir).as_posix()
-                    archive_path = safe_relative_posix_path(archive_path, allow_nested=True)
-                except (PathSafetyError, ValueError) as exc:
-                    raise WorkflowExportError(
-                        "This workflow cannot be exported because its original package "
-                        "payload contains an unsafe path."
-                    ) from exc
-                if archive_path in written:
-                    continue
-                zf.write(path, archive_path)
-                written.add(archive_path)
+                for path in sorted(root.rglob("*"), key=lambda item: item.as_posix()):
+                    if path.is_dir():
+                        continue
+                    if path.is_symlink():
+                        raise WorkflowExportError(
+                            "This workflow cannot be exported because its original package "
+                            "payload contains a symlink."
+                        )
+                    if not path.is_file():
+                        continue
+                    try:
+                        archive_path = path.relative_to(payload_root).as_posix()
+                        archive_path = safe_relative_posix_path(archive_path, allow_nested=True)
+                    except (PathSafetyError, ValueError) as exc:
+                        raise WorkflowExportError(
+                            "This workflow cannot be exported because its original package "
+                            "payload contains an unsafe path."
+                        ) from exc
+                    if archive_path in written:
+                        continue
+                    zf.write(path, archive_path)
+                    written.add(archive_path)
 
     def _stored_comfyui_graph(self, package_dir: Path | None) -> dict[str, Any] | None:
         if package_dir is None:
@@ -1041,22 +1042,26 @@ def _bundled_custom_node_source_exists(
 ) -> bool:
     if package_dir is None:
         return False
-    custom_nodes_dir = package_dir / "source-files" / "custom_nodes"
-    if not custom_nodes_dir.is_dir():
-        return False
-    explicit_folder = _bundled_custom_node_source_folder(node.source)
-    for folder_name in (explicit_folder, node.folder_name, node.id):
-        if not folder_name:
+    custom_nodes_dirs = [
+        package_dir / "source-files" / "custom_nodes",
+        package_dir / "custom_nodes",
+    ]
+    for custom_nodes_dir in custom_nodes_dirs:
+        if not custom_nodes_dir.is_dir():
             continue
-        if (custom_nodes_dir / folder_name).is_dir():
-            return True
-    wanted = _normalized_custom_node_folder_name(node.folder_name or node.id)
-    for candidate in custom_nodes_dir.iterdir():
-        if (
-            candidate.is_dir()
-            and _normalized_custom_node_folder_name(candidate.name) == wanted
-        ):
-            return True
+        explicit_folder = _bundled_custom_node_source_folder(node.source)
+        for folder_name in (explicit_folder, node.folder_name, node.id):
+            if not folder_name:
+                continue
+            if (custom_nodes_dir / folder_name).is_dir():
+                return True
+        wanted = _normalized_custom_node_folder_name(node.folder_name or node.id)
+        for candidate in custom_nodes_dir.iterdir():
+            if (
+                candidate.is_dir()
+                and _normalized_custom_node_folder_name(candidate.name) == wanted
+            ):
+                return True
     return False
 
 

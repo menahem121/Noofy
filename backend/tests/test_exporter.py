@@ -396,6 +396,70 @@ def test_export_preserves_original_assets_and_bundled_custom_node_sources(
     ).read_bytes() == b"default text"
 
 
+def test_export_accepts_bundled_package_root_custom_node_sources(tmp_path: Path) -> None:
+    packages_dir = tmp_path / "native-packages"
+    package_dir = packages_dir / "root_custom_node_workflow"
+    package_dir.mkdir(parents=True)
+    package_payload = {
+        "metadata": {
+            "id": "root_custom_node_workflow",
+            "name": "Root custom node workflow",
+            "version": "0.1.0",
+        },
+        "engine": "comfyui",
+        "comfyui_graph": {
+            "1": {"class_type": "RootBundledNode", "inputs": {}},
+            "9": {"class_type": "SaveImage", "inputs": {"images": ["1", 0]}},
+        },
+        "custom_nodes": [
+            {
+                "id": "root-bundled-node",
+                "folder_name": "RootBundledNode",
+                "source": "bundled_from_creator_machine",
+                "included": True,
+                "node_types": ["RootBundledNode"],
+                "requirements_files": ["requirements.txt"],
+                "sha256_manifest": "abc123",
+            }
+        ],
+        "dashboard": _CONFIGURED_DASHBOARD,
+    }
+    capsule_payload = {
+        "schema_version": "0.1.0",
+        "custom_nodes": [
+            {
+                "id": "root-bundled-node",
+                "folder_name": "RootBundledNode",
+                "source": "bundled_from_creator_machine",
+                "included": True,
+                "node_types": ["RootBundledNode"],
+                "requirements_files": ["requirements.txt"],
+                "sha256_manifest": "abc123",
+            }
+        ],
+        "models": [],
+    }
+    (package_dir / "package.json").write_text(json.dumps(package_payload), encoding="utf-8")
+    (package_dir / "capsule.lock.json").write_text(json.dumps(capsule_payload), encoding="utf-8")
+    custom_node_dir = package_dir / "custom_nodes" / "RootBundledNode"
+    custom_node_dir.mkdir(parents=True)
+    (custom_node_dir / "__init__.py").write_text("NODE_CLASS_MAPPINGS = {}\n", encoding="utf-8")
+    (custom_node_dir / "requirements.txt").write_text("", encoding="utf-8")
+    exporter = WorkflowExporter(
+        workflow_store_dir=tmp_path / "workflow-store",
+        workflow_loader=WorkflowPackageLoader(packages_dir),
+    )
+
+    exported, _ = exporter.export_archive("root_custom_node_workflow")
+
+    with zipfile.ZipFile(io.BytesIO(exported)) as zf:
+        assert (
+            zf.read("custom_nodes/RootBundledNode/__init__.py")
+            == b"NODE_CLASS_MAPPINGS = {}\n"
+        )
+        assert zf.read("custom_nodes/RootBundledNode/requirements.txt") == b""
+
+
 def test_exported_archive_omits_dashboard_three_d_asset_bytes(tmp_path: Path) -> None:
     assets_dir = tmp_path / "assets"
     asset_service = DashboardAssetService(assets_dir)

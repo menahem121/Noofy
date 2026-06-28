@@ -17,8 +17,8 @@
     "lock_file": "community-runtime.lock"
   },
   "engine": {
-    "comfyui_version": "v0.25.0",
-    "core_source_hash": "sha256:ed3735102510df396ba3c7974a465f0ddb37faca32df678630ac470bf26ae37f",
+    "comfyui_version": "v0.26.0",
+    "core_source_hash": "sha256:2a6b8774f4daa802d91c4538de368d7b3ed71932836e344bcbac9b24a68ca54c",
     "type": "comfyui"
   },
   "hardware_observations": {
@@ -57,7 +57,7 @@
     "runner_workspace_hash": "sha256:2c2c237c5acaad79a9583544c7478a899c0666b1ed8f8aa8720a1e697e52e1ca",
     "runtime_profile_catalog_version": "0.1.0",
     "runtime_profile_id": "noofy-comfyui-v1-default",
-    "runtime_profile_manifest_hash": "sha256:fcb7d601f610529d2d0e85a94f307f746b9b1c48d5b44cbc7203adbeaabd1897",
+    "runtime_profile_manifest_hash": "sha256:88c23738a01fcef584a2bc32e498ab6a2bed75c5f08a3c1aa1c4f12496cc07f2",
     "runtime_profile_variant_id": "linux-x64-cuda130",
     "vram_mode": "auto"
   },
