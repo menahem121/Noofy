@@ -1,3 +1,5 @@
+import { render, screen, waitFor } from "@testing-library/react";
+import { createElement, useRef, type RefCallback } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -8,6 +10,7 @@ import {
   dashboardCanvasWidgetStyle,
   fitMovedLayoutPosition,
   resizeLayoutFromPointerDelta,
+  useDashboardCanvasRowHeight,
 } from "./DashboardCanvasPresentation";
 
 function mockCanvas(width = 320): HTMLElement {
@@ -45,6 +48,67 @@ describe("dashboardCanvasRenderRowHeight", () => {
   it("uses fixed row height when responsiveness is disabled or the canvas is not measurable", () => {
     expect(dashboardCanvasRenderRowHeight({ availableHeight: 960, rowHeight: 32, responsive: false })).toBe(32);
     expect(dashboardCanvasRenderRowHeight({ availableHeight: null, rowHeight: 36 })).toBe(36);
+  });
+});
+
+describe("useDashboardCanvasRowHeight", () => {
+  it("remeasures when the real canvas frame appears after a loading render", async () => {
+    function Probe({ ready }: { ready: boolean }) {
+      const frameRef = useRef<HTMLElement | null>(null);
+      const surfaceRef = useRef<HTMLElement | null>(null);
+      const rowHeight = useDashboardCanvasRowHeight({ frameRef, surfaceRef });
+      const frameCallback: RefCallback<HTMLElement> = (element) => {
+        frameRef.current = element;
+        if (element) {
+          vi.spyOn(element, "getBoundingClientRect").mockReturnValue({
+            x: 0,
+            y: 0,
+            left: 0,
+            top: 0,
+            right: 1200,
+            bottom: 1200,
+            width: 1200,
+            height: 1200,
+            toJSON: () => ({}),
+          } as DOMRect);
+        }
+      };
+      const surfaceCallback: RefCallback<HTMLDivElement> = (element) => {
+        surfaceRef.current = element;
+        if (element) {
+          vi.spyOn(element, "getBoundingClientRect").mockReturnValue({
+            x: 0,
+            y: 0,
+            left: 0,
+            top: 0,
+            right: 1200,
+            bottom: 960,
+            width: 1200,
+            height: 960,
+            toJSON: () => ({}),
+          } as DOMRect);
+        }
+      };
+
+      return createElement(
+        "div",
+        null,
+        createElement("output", { "aria-label": "row height" }, String(rowHeight)),
+        ready
+          ? createElement("main", { ref: frameCallback },
+              createElement("div", { ref: surfaceCallback }))
+          : null,
+      );
+    }
+
+    const { rerender } = render(createElement(Probe, { ready: false }));
+    expect(screen.getByLabelText("row height")).toHaveTextContent("32");
+
+    rerender(createElement(Probe, { ready: true }));
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("row height")).toHaveTextContent("50");
+    });
   });
 });
 

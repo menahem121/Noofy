@@ -2,6 +2,7 @@ import {
   forwardRef,
   useCallback,
   useLayoutEffect,
+  useRef,
   useState,
   type CSSProperties,
   type HTMLAttributes,
@@ -128,6 +129,9 @@ export function useDashboardCanvasRowHeight({
   surfaceRef?: RefObject<HTMLElement | null>;
 } & Omit<DashboardCanvasRowHeightOptions, "availableHeight">): number {
   const [availableHeight, setAvailableHeight] = useState<number | null>(null);
+  const resizeObserverRef = useRef<ResizeObserver | null>(null);
+  const observedTargetsRef = useRef<{ frame: HTMLElement | null; surface: HTMLElement | null } | null>(null);
+  const animationFrameIdsRef = useRef<number[]>([]);
 
   const measure = useCallback(() => {
     const nextHeight = dashboardCanvasAvailableHeight(frameRef.current, surfaceRef?.current ?? null);
@@ -137,11 +141,37 @@ export function useDashboardCanvasRowHeight({
     });
   }, [frameRef, surfaceRef]);
 
-  useLayoutEffect(() => {
-    measure();
+  const cancelScheduledMeasures = useCallback(() => {
+    if (typeof window !== "undefined" && typeof window.cancelAnimationFrame === "function") {
+      for (const frameId of animationFrameIdsRef.current) window.cancelAnimationFrame(frameId);
+    }
+    animationFrameIdsRef.current = [];
+  }, []);
 
+  const scheduleSettledMeasure = useCallback(() => {
+    if (typeof window === "undefined" || typeof window.requestAnimationFrame !== "function") return;
+    const firstFrameId = window.requestAnimationFrame(() => {
+      measure();
+      const secondFrameId = window.requestAnimationFrame(measure);
+      animationFrameIdsRef.current.push(secondFrameId);
+    });
+    animationFrameIdsRef.current.push(firstFrameId);
+  }, [measure]);
+
+  useLayoutEffect(() => {
     const frame = frameRef.current;
     const surface = surfaceRef?.current ?? null;
+    const observedTargets = observedTargetsRef.current;
+    if (observedTargets?.frame === frame && observedTargets.surface === surface) return;
+
+    observedTargetsRef.current = { frame, surface };
+    resizeObserverRef.current?.disconnect();
+    resizeObserverRef.current = null;
+    cancelScheduledMeasures();
+
+    measure();
+    scheduleSettledMeasure();
+
     const resizeObserver = typeof ResizeObserver === "undefined"
       ? null
       : new ResizeObserver(measure);
@@ -149,13 +179,20 @@ export function useDashboardCanvasRowHeight({
       if (frame) resizeObserver.observe(frame);
       if (surface) resizeObserver.observe(surface);
     }
+    resizeObserverRef.current = resizeObserver;
+  });
 
+  useLayoutEffect(() => {
     window.addEventListener("resize", measure);
     return () => {
-      resizeObserver?.disconnect();
       window.removeEventListener("resize", measure);
     };
-  }, [frameRef, measure, surfaceRef]);
+  }, [measure]);
+
+  useLayoutEffect(() => () => {
+    resizeObserverRef.current?.disconnect();
+    cancelScheduledMeasures();
+  }, [cancelScheduledMeasures]);
 
   return dashboardCanvasRenderRowHeight({
     availableHeight,

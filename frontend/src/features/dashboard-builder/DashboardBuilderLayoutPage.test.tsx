@@ -526,11 +526,23 @@ describe("DashboardBuilderLayoutPage", () => {
 
   it("clears the local draft and opens the workflow after backend save succeeds", async () => {
     const onSaveComplete = vi.fn();
-    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
       if (url.endsWith("/api/workflows/wf-1/dashboard")) {
         return Promise.resolve(jsonResponse({ workflow_id: "wf-1", status: "configured", valid: true }));
+      }
+      if (url.endsWith("/api/workflows/wf-1/user-state/layout")) {
+        expect(init?.method).toBe("DELETE");
+        return Promise.resolve(jsonResponse({
+          schema_version: "1",
+          workflow_id: "wf-1",
+          dashboard_version: "0.1.0",
+          values: {},
+          layout_overrides: {},
+          output_preferences: {},
+          presentation_overrides: {},
+        }));
       }
       return Promise.reject(new Error(`Unexpected request: ${url}`));
     });
@@ -550,6 +562,10 @@ describe("DashboardBuilderLayoutPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: /save dashboard/i }));
 
     await waitFor(() => expect(onSaveComplete).toHaveBeenCalledWith("wf-1"));
+    expect(fetchMock.mock.calls.some(([input, init]) =>
+      String(input).endsWith("/api/workflows/wf-1/user-state/layout") &&
+      (init as RequestInit | undefined)?.method === "DELETE",
+    )).toBe(true);
     expect(onSaveComplete).toHaveBeenCalledTimes(1);
     expect(window.localStorage.getItem(dashboardDraftKey("wf-1"))).toBeNull();
     expect(screen.queryByRole("button", { name: /open workflow/i })).not.toBeInTheDocument();
@@ -998,6 +1014,57 @@ describe("DashboardBuilderLayoutPage", () => {
         y: 18,
         w: 16,
         h: 6,
+      });
+    });
+  });
+
+  it("renders the layout builder with the same canvas metrics as the run page when schema metadata is stale", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+    const staleMetricSchema: DashboardSchema = {
+      ...placedSchema,
+      layout: { gridColumns: 20, rowHeight: 48, gridGap: 2, responsive: false },
+      widgets: placedSchema.widgets.map((widget) => ({
+        ...widget,
+        layout: { x: 0, y: 18, w: 16, h: 6 },
+      })),
+    };
+
+    render(
+      <DashboardBuilderLayoutPage
+        workflowId="wf-1"
+        workflowName="Workflow"
+        initialSchema={staleMetricSchema}
+        onBackToWidgets={vi.fn()}
+        onSaveComplete={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    const frame = await screen.findByRole("main", { name: /dashboard layout canvas/i });
+    const surface = document.querySelector(".layout-canvas__surface") as HTMLElement;
+    mockElementRect(frame, { left: 0, top: 0, width: 1200, height: 960 });
+    mockElementRect(surface, { left: 0, top: 0, width: 1200, height: 960 });
+    fireEvent(window, new Event("resize"));
+
+    const promptCell = screen.getByRole("textbox").closest("article");
+    await waitFor(() => {
+      expect(surface).toHaveStyle({
+        "--layout-columns": "32",
+        "--layout-row-height": "40px",
+        "--layout-grid-gap": "14px",
+        "--layout-surface-min-height": "960px",
+        "--layout-widget-visual-gap": "17.5px",
+      });
+      expect(promptCell).toHaveStyle({
+        left: "0%",
+        top: "720px",
+        width: "50%",
+        height: "240px",
+        minHeight: "240px",
       });
     });
   });
@@ -1498,10 +1565,10 @@ describe("DashboardBuilderLayoutPage", () => {
     dispatchPointer(window, "pointermove", { clientX: 300, clientY: 2000 });
 
     await waitFor(() => {
-      expect(promptCell).toHaveStyle({ top: "720px" });
+      expect(promptCell).toHaveStyle({ top: "701.25px" });
     });
     dispatchPointer(window, "pointerup", { clientX: 300, clientY: 2000 });
-    expect(promptCell).toHaveStyle({ top: "720px" });
+    expect(promptCell).toHaveStyle({ top: "701.25px" });
 
     fireEvent.click(screen.getByRole("button", { name: /save dashboard/i }));
 

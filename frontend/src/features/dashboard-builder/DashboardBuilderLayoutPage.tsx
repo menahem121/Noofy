@@ -22,7 +22,7 @@ import {
   Wand2,
 } from "lucide-react";
 
-import { saveDashboard } from "../../lib/api/noofyApi";
+import { deleteUserStateLayout, saveDashboard } from "../../lib/api/noofyApi";
 import {
   findNearestAvailablePosition,
   findNearestAvailablePositionWithinRows,
@@ -38,6 +38,8 @@ import {
   isWidgetLayoutCompact,
 } from "../../lib/widgetSizes";
 import {
+  DASHBOARD_CANVAS_COLUMNS,
+  DASHBOARD_CANVAS_GRID_GAP,
   DASHBOARD_CANVAS_MIN_ROWS,
   DashboardCanvasFrame,
   DashboardCanvasResizeHandles,
@@ -226,8 +228,6 @@ export function DashboardBuilderLayoutPage({
   const canvasRowHeight = useDashboardCanvasRowHeight({
     frameRef,
     surfaceRef: canvasRef,
-    rowHeight: schema.layout.rowHeight,
-    responsive: schema.layout.responsive,
   });
 
   function updateSchemaFromUser(updater: SetStateAction<DashboardSchema>) {
@@ -337,13 +337,12 @@ export function DashboardBuilderLayoutPage({
     if (!canvas) return null;
 
     const baseLayout = dashboardItemLayout(item) ?? defaultLayoutForTopLevelItem(item);
-    const currentSchema = schemaRef.current;
-    const fitted = fitLayout(baseLayout, currentSchema.layout.gridColumns);
+    const fitted = fitLayout(baseLayout, DASHBOARD_CANVAS_COLUMNS);
     const layout = layoutFromCanvasPointer(event, fitted, canvas, {
-      columns: currentSchema.layout.gridColumns,
-      rowHeight: activeRowHeight(currentSchema),
+      columns: DASHBOARD_CANVAS_COLUMNS,
+      rowHeight: canvasRowHeight,
     });
-    return layout ? fitLayoutToVisibleCanvas(layout, currentSchema) : null;
+    return layout ? fitLayoutToVisibleCanvas(layout) : null;
   }
 
   function resolveDropLayout(
@@ -352,13 +351,12 @@ export function DashboardBuilderLayoutPage({
     currentSchema: DashboardSchema,
     { fitDimensions = true }: { fitDimensions?: boolean } = {},
   ): DashboardWidgetLayout | null {
-    const rows = visibleCanvasRows(currentSchema);
+    const rows = visibleCanvasRows();
     const desired = fitDimensions
-      ? fitLayout(desiredLayout, currentSchema.layout.gridColumns)
+      ? fitLayout(desiredLayout, DASHBOARD_CANVAS_COLUMNS)
       : desiredLayout;
     const fitted = fitLayoutToVisibleCanvas(
       desired,
-      currentSchema,
       rows,
     );
     const items = topLevelDashboardItems(currentSchema).map((candidate) => ({
@@ -366,30 +364,28 @@ export function DashboardBuilderLayoutPage({
       layout: dashboardItemLayout(candidate),
     }));
     if (rows === null) {
-      return findNearestAvailablePosition(itemId, fitted, items, currentSchema.layout.gridColumns);
+      return findNearestAvailablePosition(itemId, fitted, items, DASHBOARD_CANVAS_COLUMNS);
     }
-    return findNearestAvailablePositionWithinRows(itemId, fitted, items, currentSchema.layout.gridColumns, rows);
+    return findNearestAvailablePositionWithinRows(itemId, fitted, items, DASHBOARD_CANVAS_COLUMNS, rows);
   }
 
   function fitLayoutToVisibleCanvas(
     layout: DashboardWidgetLayout,
-    currentSchema: DashboardSchema,
-    rows = visibleCanvasRows(currentSchema),
+    rows = visibleCanvasRows(),
   ): DashboardWidgetLayout {
     if (rows === null) return layout;
     const maxY = Math.max(0, rows - layout.h);
     return {
       ...layout,
-      x: Math.min(Math.max(0, layout.x), Math.max(0, currentSchema.layout.gridColumns - layout.w)),
+      x: Math.min(Math.max(0, layout.x), Math.max(0, DASHBOARD_CANVAS_COLUMNS - layout.w)),
       y: Math.min(Math.max(0, layout.y), maxY),
     };
   }
 
   function fitResizedLayoutToVisibleCanvas(
     layout: DashboardWidgetLayout,
-    currentSchema: DashboardSchema,
   ): DashboardWidgetLayout {
-    const rows = visibleCanvasRows(currentSchema);
+    const rows = visibleCanvasRows();
     if (rows === null) return layout;
     const minH = layout.minH ?? 2;
     const maxH = Math.max(minH, rows - layout.y);
@@ -398,12 +394,11 @@ export function DashboardBuilderLayoutPage({
         ...layout,
         h: Math.min(layout.h, maxH),
       },
-      currentSchema,
       rows,
     );
   }
 
-  function visibleCanvasRows(currentSchema: DashboardSchema): number | null {
+  function visibleCanvasRows(): number | null {
     const canvas = canvasRef.current;
     if (!canvas) return null;
     const frame = frameRef.current ?? (canvas.closest(".layout-canvas") as HTMLElement | null);
@@ -413,13 +408,9 @@ export function DashboardBuilderLayoutPage({
     return dashboardCanvasVisibleRows({
       visibleHeight,
       scrollTop,
-      rowHeight: activeRowHeight(currentSchema),
-      minRows: currentSchema.layout.responsive ? DASHBOARD_CANVAS_MIN_ROWS : 1,
+      rowHeight: canvasRowHeight,
+      minRows: DASHBOARD_CANVAS_MIN_ROWS,
     });
-  }
-
-  function activeRowHeight(currentSchema: DashboardSchema): number {
-    return currentSchema.layout.responsive ? canvasRowHeight : currentSchema.layout.rowHeight;
   }
 
   function removeItem(itemId: string) {
@@ -475,12 +466,11 @@ export function DashboardBuilderLayoutPage({
             clientX: pointerEvent.clientX,
             clientY: pointerEvent.clientY,
             canvas: canvasRef.current,
-            columns: currentSchema.layout.gridColumns,
-            rowHeight: activeRowHeight(currentSchema),
+            columns: DASHBOARD_CANVAS_COLUMNS,
+            rowHeight: canvasRowHeight,
           }),
-          currentSchema.layout.gridColumns,
+          DASHBOARD_CANVAS_COLUMNS,
         ),
-        currentSchema,
       );
       const dropLayout = resolveDropLayout(moveState.itemId, candidate, currentSchema, { fitDimensions: false }) ?? moveState.dropLayout;
       if (sameGridLayout(candidate, moveState.currentLayout) && sameGridLayout(dropLayout, moveState.dropLayout)) return;
@@ -555,12 +545,11 @@ export function DashboardBuilderLayoutPage({
               clientY: pointerEvent.clientY,
               canvas: canvasRef.current,
               handle: resizeState.handle,
-              columns: current.layout.gridColumns,
-              rowHeight: activeRowHeight(current),
+              columns: DASHBOARD_CANVAS_COLUMNS,
+              rowHeight: canvasRowHeight,
             }),
-            current.layout.gridColumns,
+            DASHBOARD_CANVAS_COLUMNS,
           ),
-          current,
         );
         const items = topLevelDashboardItems(current);
         const target = items.find((item) => item.id === resizeState.itemId);
@@ -607,7 +596,13 @@ export function DashboardBuilderLayoutPage({
     setIsSavingDashboard(true);
     setSaveError(null);
     saveDashboard(targetId, payload)
-      .then(() => {
+      .then(async () => {
+        if (saveSequence !== saveSequenceRef.current || activeWorkflowIdRef.current !== targetId) return;
+        try {
+          await deleteUserStateLayout(targetId);
+        } catch {
+          // Stale per-user layout overrides should not block a valid dashboard save.
+        }
         if (saveSequence !== saveSequenceRef.current || activeWorkflowIdRef.current !== targetId) return;
         clearDashboardDraft(targetId);
         draftActiveRef.current = false;
@@ -740,9 +735,9 @@ export function DashboardBuilderLayoutPage({
               ref={canvasRef}
               empty={placedItems.length === 0}
               rows={canvasRows}
-              columns={schema.layout.gridColumns}
+              columns={DASHBOARD_CANVAS_COLUMNS}
               rowHeight={canvasRowHeight}
-              gridGap={schema.layout.gridGap}
+              gridGap={DASHBOARD_CANVAS_GRID_GAP}
             >
               {placedItems.length === 0 ? (
                 <div className="layout-canvas__empty">
@@ -759,7 +754,7 @@ export function DashboardBuilderLayoutPage({
                   workflowId={activeWorkflowId}
                   item={topLevelItems.find((item) => item.id === dropPreview.itemId) ?? null}
                   layout={dropPreview.layout}
-                  columns={schema.layout.gridColumns}
+                  columns={DASHBOARD_CANVAS_COLUMNS}
                   rowHeight={canvasRowHeight}
                   dropPreview
                 />
@@ -777,7 +772,7 @@ export function DashboardBuilderLayoutPage({
                     key={item.id}
                     item={item}
                     layout={displayLayout}
-                    columns={schema.layout.gridColumns}
+                    columns={DASHBOARD_CANVAS_COLUMNS}
                     rowHeight={canvasRowHeight}
                     selected={selectedItemId === item.id}
                     dragging={activeDragItemId === item.id}
@@ -794,7 +789,7 @@ export function DashboardBuilderLayoutPage({
                   workflowId={activeWorkflowId}
                   item={topLevelItems.find((item) => item.id === dragPreview.itemId) ?? null}
                   layout={dragPreview.layout}
-                  columns={schema.layout.gridColumns}
+                  columns={DASHBOARD_CANVAS_COLUMNS}
                   rowHeight={canvasRowHeight}
                 />
               ) : null}
