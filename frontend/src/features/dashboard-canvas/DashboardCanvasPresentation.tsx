@@ -1,8 +1,12 @@
 import {
   forwardRef,
+  useCallback,
+  useLayoutEffect,
+  useState,
   type CSSProperties,
   type HTMLAttributes,
   type PointerEvent,
+  type RefObject,
   type ReactNode,
 } from "react";
 
@@ -12,9 +16,22 @@ export const DASHBOARD_CANVAS_COLUMNS = 32;
 export const DASHBOARD_CANVAS_ROW_HEIGHT = 32;
 export const DASHBOARD_CANVAS_GRID_GAP = 14;
 export const DASHBOARD_CANVAS_MIN_ROWS = 24;
+export const DASHBOARD_CANVAS_MIN_VISUAL_GAP = 10;
+export const DASHBOARD_CANVAS_MAX_VISUAL_GAP = 24;
 
 export interface DashboardCanvasMetrics {
   columns?: number;
+  rowHeight?: number;
+}
+
+export interface DashboardCanvasRowHeightOptions {
+  availableHeight?: number | null;
+  rowHeight?: number;
+  responsive?: boolean;
+  minRows?: number;
+}
+
+export interface DashboardCanvasVisualGapOptions {
   rowHeight?: number;
   gridGap?: number;
 }
@@ -36,8 +53,94 @@ export function canvasRowsForItems(
 ): number {
   return Math.max(
     minRows,
-    ...items.map((item) => (item.layout ? item.layout.y + item.layout.h + 2 : 0)),
+    ...items.map((item) => (item.layout ? item.layout.y + item.layout.h : 0)),
   );
+}
+
+export function dashboardCanvasRenderRowHeight({
+  availableHeight,
+  rowHeight = DASHBOARD_CANVAS_ROW_HEIGHT,
+  responsive = true,
+  minRows = DASHBOARD_CANVAS_MIN_ROWS,
+}: DashboardCanvasRowHeightOptions = {}): number {
+  const fallbackRowHeight = positiveFinite(rowHeight) ? rowHeight : DASHBOARD_CANVAS_ROW_HEIGHT;
+  if (!responsive) return fallbackRowHeight;
+  if (!positiveFinite(availableHeight) || !positiveFinite(minRows)) return fallbackRowHeight;
+  return Math.max(1, availableHeight / minRows);
+}
+
+export function dashboardCanvasVisualGap({
+  rowHeight = DASHBOARD_CANVAS_ROW_HEIGHT,
+  gridGap = DASHBOARD_CANVAS_GRID_GAP,
+}: DashboardCanvasVisualGapOptions = {}): number {
+  const fallbackGap = positiveFinite(gridGap) ? gridGap : DASHBOARD_CANVAS_GRID_GAP;
+  if (!positiveFinite(rowHeight)) return fallbackGap;
+  const scaledGap = fallbackGap * (rowHeight / DASHBOARD_CANVAS_ROW_HEIGHT);
+  return clamp(
+    scaledGap,
+    Math.min(fallbackGap, DASHBOARD_CANVAS_MIN_VISUAL_GAP),
+    Math.max(fallbackGap, DASHBOARD_CANVAS_MAX_VISUAL_GAP),
+  );
+}
+
+export function dashboardCanvasAvailableHeight(
+  frame: HTMLElement | null,
+  surface: HTMLElement | null = null,
+): number | null {
+  const frameRect = frame?.getBoundingClientRect();
+  const surfaceRect = surface?.getBoundingClientRect();
+  const height = frame
+    ? frame.clientHeight || frameRect?.height || surfaceRect?.height
+    : surface?.clientHeight || surfaceRect?.height;
+  return positiveFinite(height) ? height : null;
+}
+
+export function useDashboardCanvasRowHeight({
+  frameRef,
+  surfaceRef,
+  rowHeight = DASHBOARD_CANVAS_ROW_HEIGHT,
+  responsive = true,
+  minRows = DASHBOARD_CANVAS_MIN_ROWS,
+}: {
+  frameRef: RefObject<HTMLElement | null>;
+  surfaceRef?: RefObject<HTMLElement | null>;
+} & Omit<DashboardCanvasRowHeightOptions, "availableHeight">): number {
+  const [availableHeight, setAvailableHeight] = useState<number | null>(null);
+
+  const measure = useCallback(() => {
+    const nextHeight = dashboardCanvasAvailableHeight(frameRef.current, surfaceRef?.current ?? null);
+    setAvailableHeight((currentHeight) => {
+      if (currentHeight === null || nextHeight === null) return currentHeight === nextHeight ? currentHeight : nextHeight;
+      return Math.abs(currentHeight - nextHeight) < 0.5 ? currentHeight : nextHeight;
+    });
+  }, [frameRef, surfaceRef]);
+
+  useLayoutEffect(() => {
+    measure();
+
+    const frame = frameRef.current;
+    const surface = surfaceRef?.current ?? null;
+    const resizeObserver = typeof ResizeObserver === "undefined"
+      ? null
+      : new ResizeObserver(measure);
+    if (resizeObserver) {
+      if (frame) resizeObserver.observe(frame);
+      if (surface) resizeObserver.observe(surface);
+    }
+
+    window.addEventListener("resize", measure);
+    return () => {
+      resizeObserver?.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [frameRef, measure, surfaceRef]);
+
+  return dashboardCanvasRenderRowHeight({
+    availableHeight,
+    rowHeight,
+    responsive,
+    minRows,
+  });
 }
 
 export function dashboardCanvasWidgetStyle(
@@ -47,12 +150,18 @@ export function dashboardCanvasWidgetStyle(
     rowHeight = DASHBOARD_CANVAS_ROW_HEIGHT,
   }: DashboardCanvasMetrics = {},
 ): CSSProperties {
+  const visualInset = "var(--layout-widget-visual-inset, 0px)";
   return {
     left: `${(layout.x / columns) * 100}%`,
     top: `${layout.y * rowHeight}px`,
     width: `${(layout.w / columns) * 100}%`,
+    height: `${layout.h * rowHeight}px`,
     minHeight: `${layout.h * rowHeight}px`,
-  };
+    "--layout-widget-inset-top": visualInset,
+    "--layout-widget-inset-right": visualInset,
+    "--layout-widget-inset-bottom": visualInset,
+    "--layout-widget-inset-left": visualInset,
+  } as CSSProperties;
 }
 
 export function layoutFromCanvasPointer(
@@ -206,12 +315,14 @@ export const DashboardCanvasSurface = forwardRef<HTMLDivElement, HTMLAttributes<
   style,
   ...props
 }, ref) {
+  const visualGap = dashboardCanvasVisualGap({ rowHeight, gridGap });
   const surfaceStyle = {
     "--layout-surface-min-height": `${rows * rowHeight}px`,
     "--layout-columns": columns,
     "--layout-column-width": `${100 / columns}%`,
     "--layout-row-height": `${rowHeight}px`,
     "--layout-grid-gap": `${gridGap}px`,
+    "--layout-widget-visual-gap": `${visualGap}px`,
     ...style,
   } as CSSProperties;
 
@@ -235,7 +346,6 @@ export function DashboardCanvasWidgetShell({
   layout,
   columns = DASHBOARD_CANVAS_COLUMNS,
   rowHeight = DASHBOARD_CANVAS_ROW_HEIGHT,
-  gridGap = DASHBOARD_CANVAS_GRID_GAP,
   selected = false,
   preview = false,
   className = "",
@@ -245,11 +355,10 @@ export function DashboardCanvasWidgetShell({
   layout: GridItemLayout;
   columns?: number;
   rowHeight?: number;
-  gridGap?: number;
   selected?: boolean;
   preview?: boolean;
 }) {
-  const layoutStyle = dashboardCanvasWidgetStyle(layout, { columns, rowHeight, gridGap });
+  const layoutStyle = dashboardCanvasWidgetStyle(layout, { columns, rowHeight });
   const combinedStyle = { ...layoutStyle, ...props.style };
 
   return (
@@ -297,4 +406,8 @@ export function DashboardCanvasResizeHandles({
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
+}
+
+function positiveFinite(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
 }

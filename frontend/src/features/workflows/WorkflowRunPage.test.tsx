@@ -984,6 +984,20 @@ function dispatchPointer(target: Window | Node, type: string, init: { pointerId?
   fireEvent(target, event);
 }
 
+function mockElementRect(element: Element, rect: Partial<DOMRect>) {
+  vi.spyOn(element, "getBoundingClientRect").mockReturnValue({
+    x: rect.x ?? rect.left ?? 0,
+    y: rect.y ?? rect.top ?? 0,
+    left: rect.left ?? rect.x ?? 0,
+    top: rect.top ?? rect.y ?? 0,
+    right: rect.right ?? (rect.left ?? rect.x ?? 0) + (rect.width ?? 0),
+    bottom: rect.bottom ?? (rect.top ?? rect.y ?? 0) + (rect.height ?? 0),
+    width: rect.width ?? 0,
+    height: rect.height ?? 0,
+    toJSON: () => ({}),
+  } as DOMRect);
+}
+
 function mockCanvasActionBarBounds({
   left,
   top,
@@ -4810,6 +4824,56 @@ describe("WorkflowRunPage", () => {
       top: "0px",
       width: "50%",
       height: "256px",
+    });
+  });
+
+  it("scales run canvas rows from the available workspace height with the same logical placement", async () => {
+    const bottomAnchoredPackageData = {
+      ...configuredPackageData,
+      outputs: [],
+      dashboard: {
+        ...configuredPackageData.dashboard,
+        sections: [
+          {
+            id: "main",
+            title: "Main",
+            controls: [
+              {
+                id: "prompt",
+                type: "textarea",
+                label: "Prompt",
+                input_id: "prompt",
+                layout: { x: 0, y: 18, w: 16, h: 6 },
+              },
+            ],
+          },
+        ],
+      },
+    };
+    mockConfiguredDashboardFetch(fetchMock, readyRuntime, bottomAnchoredPackageData);
+
+    renderRunPage();
+
+    const frame = await screen.findByRole("main", { name: /workflow dashboard canvas/i });
+    const surface = document.querySelector("#canvas-dashboard-surface") as HTMLElement;
+    mockElementRect(frame, { left: 0, top: 0, width: 1200, height: 960 });
+    mockElementRect(surface, { left: 0, top: 0, width: 1200, height: 960 });
+    fireEvent(window, new Event("resize"));
+
+    const promptCell = screen.getByRole("textbox").closest("article");
+    await waitFor(() => {
+      expect(surface).toHaveStyle({
+        "--layout-surface-min-height": "960px",
+        "--layout-widget-visual-gap": "17.5px",
+      });
+      expect(promptCell).toHaveStyle({
+        left: "0%",
+        top: "720px",
+        width: "50%",
+        height: "240px",
+        minHeight: "240px",
+        "--layout-widget-inset-bottom": "var(--layout-widget-visual-inset, 0px)",
+      });
     });
   });
 

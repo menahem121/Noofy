@@ -332,9 +332,6 @@
 
 .layout-canvas-widget--run-editing {
   border-color: rgba(139, 92, 246, 0.5);
-  box-shadow:
-    0 0 0 2px rgba(139, 92, 246, 0.14),
-    0 18px 42px rgba(0, 0, 0, 0.28);
 }
 
 .layout-canvas-widget--readonly {
@@ -415,7 +412,11 @@
 .layout-canvas-widget--inline-toggle {
   justify-content: center;
   gap: 0;
-  padding: calc(7px + var(--layout-widget-visual-inset, 0px));
+  padding:
+    calc(7px + var(--layout-widget-inset-top, var(--layout-widget-visual-inset, 0px)))
+    calc(7px + var(--layout-widget-inset-right, var(--layout-widget-visual-inset, 0px)))
+    calc(7px + var(--layout-widget-inset-bottom, var(--layout-widget-visual-inset, 0px)))
+    calc(7px + var(--layout-widget-inset-left, var(--layout-widget-visual-inset, 0px)));
 }
 
 .layout-canvas-widget--inline-toggle .layout-canvas-widget__header {
@@ -457,7 +458,11 @@
 }
 
 .layout-canvas-widget--one-row-toggle {
-  padding: calc(4px + var(--layout-widget-visual-inset, 0px));
+  padding:
+    calc(4px + var(--layout-widget-inset-top, var(--layout-widget-visual-inset, 0px)))
+    calc(4px + var(--layout-widget-inset-right, var(--layout-widget-visual-inset, 0px)))
+    calc(4px + var(--layout-widget-inset-bottom, var(--layout-widget-visual-inset, 0px)))
+    calc(4px + var(--layout-widget-inset-left, var(--layout-widget-visual-inset, 0px)));
 }
 
 .layout-canvas-widget--one-row-toggle .canvas-widget-inline-toggle .canvas-widget-toggle {
@@ -542,7 +547,11 @@
 
 .layout-canvas-resize-handles {
   position: absolute;
-  inset: var(--layout-widget-visual-inset, 0px);
+  inset:
+    var(--layout-widget-inset-top, var(--layout-widget-visual-inset, 0px))
+    var(--layout-widget-inset-right, var(--layout-widget-visual-inset, 0px))
+    var(--layout-widget-inset-bottom, var(--layout-widget-visual-inset, 0px))
+    var(--layout-widget-inset-left, var(--layout-widget-visual-inset, 0px));
   z-index: 2;
   pointer-events: none;
 }

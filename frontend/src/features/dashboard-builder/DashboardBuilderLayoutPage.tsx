@@ -44,11 +44,13 @@ import {
   DashboardCanvasWidgetShell,
   type DashboardResizeHandle,
   canvasRowsForItems,
+  dashboardCanvasAvailableHeight,
   fitMovedLayoutPosition,
   layoutFromCanvasPointer,
   moveLayoutFromPointerDelta,
   resizeLayoutFromPointerDelta,
   sameGridLayout,
+  useDashboardCanvasRowHeight,
 } from "../dashboard-canvas/DashboardCanvasPresentation";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
 import {
@@ -162,6 +164,7 @@ export function DashboardBuilderLayoutPage({
   const [dropPreview, setDropPreview] = useState<{ itemId: string; layout: DashboardWidgetLayout } | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [isSavingDashboard, setIsSavingDashboard] = useState(false);
+  const frameRef = useRef<HTMLElement | null>(null);
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const resizeStateRef = useRef<{
     itemId: string;
@@ -218,6 +221,12 @@ export function DashboardBuilderLayoutPage({
   const placedItems = topLevelItems.filter((item) => dashboardItemLayout(item));
   const allWidgetsPlaced = schemaReady && topLevelItems.length > 0 && unplacedItems.length === 0;
   const canvasRows = schemaReady ? canvasRowsForItems(topLevelItems.map((item) => ({ layout: dashboardItemLayout(item) }))) : 0;
+  const canvasRowHeight = useDashboardCanvasRowHeight({
+    frameRef,
+    surfaceRef: canvasRef,
+    rowHeight: schema.layout.rowHeight,
+    responsive: schema.layout.responsive,
+  });
 
   function updateSchemaFromUser(updater: SetStateAction<DashboardSchema>) {
     draftActiveRef.current = true;
@@ -330,7 +339,7 @@ export function DashboardBuilderLayoutPage({
     const fitted = fitLayout(baseLayout, currentSchema.layout.gridColumns);
     const layout = layoutFromCanvasPointer(event, fitted, canvas, {
       columns: currentSchema.layout.gridColumns,
-      rowHeight: currentSchema.layout.rowHeight,
+      rowHeight: activeRowHeight(currentSchema),
     });
     return layout ? fitLayoutToVisibleCanvas(layout, currentSchema) : null;
   }
@@ -395,15 +404,15 @@ export function DashboardBuilderLayoutPage({
   function visibleCanvasRows(currentSchema: DashboardSchema): number | null {
     const canvas = canvasRef.current;
     if (!canvas) return null;
-    const surfaceRect = canvas.getBoundingClientRect();
-    const frame = canvas.closest(".layout-canvas") as HTMLElement | null;
-    const frameRect = frame?.getBoundingClientRect();
-    const visibleHeight = frame
-      ? frame.clientHeight || frameRect?.height || surfaceRect.height
-      : canvas.clientHeight || surfaceRect.height;
-    if (!Number.isFinite(visibleHeight) || visibleHeight <= 0) return null;
+    const frame = frameRef.current ?? (canvas.closest(".layout-canvas") as HTMLElement | null);
+    const visibleHeight = dashboardCanvasAvailableHeight(frame, canvas);
+    if (visibleHeight === null || !Number.isFinite(visibleHeight) || visibleHeight <= 0) return null;
     const scrollTop = frame?.scrollTop ?? 0;
-    return Math.max(1, Math.floor((scrollTop + visibleHeight) / currentSchema.layout.rowHeight));
+    return Math.max(1, Math.floor((scrollTop + visibleHeight) / activeRowHeight(currentSchema)));
+  }
+
+  function activeRowHeight(currentSchema: DashboardSchema): number {
+    return currentSchema.layout.responsive ? canvasRowHeight : currentSchema.layout.rowHeight;
   }
 
   function removeItem(itemId: string) {
@@ -460,7 +469,7 @@ export function DashboardBuilderLayoutPage({
             clientY: pointerEvent.clientY,
             canvas: canvasRef.current,
             columns: currentSchema.layout.gridColumns,
-            rowHeight: currentSchema.layout.rowHeight,
+            rowHeight: activeRowHeight(currentSchema),
           }),
           currentSchema.layout.gridColumns,
         ),
@@ -540,7 +549,7 @@ export function DashboardBuilderLayoutPage({
               canvas: canvasRef.current,
               handle: resizeState.handle,
               columns: current.layout.gridColumns,
-              rowHeight: current.layout.rowHeight,
+              rowHeight: activeRowHeight(current),
             }),
             current.layout.gridColumns,
           ),
@@ -719,13 +728,13 @@ export function DashboardBuilderLayoutPage({
             </footer>
           </aside>
 
-          <DashboardCanvasFrame aria-label="Dashboard layout canvas">
+          <DashboardCanvasFrame ref={frameRef} aria-label="Dashboard layout canvas">
             <DashboardCanvasSurface
               ref={canvasRef}
               empty={placedItems.length === 0}
               rows={canvasRows}
               columns={schema.layout.gridColumns}
-              rowHeight={schema.layout.rowHeight}
+              rowHeight={canvasRowHeight}
               gridGap={schema.layout.gridGap}
             >
               {placedItems.length === 0 ? (
@@ -744,8 +753,7 @@ export function DashboardBuilderLayoutPage({
                   item={topLevelItems.find((item) => item.id === dropPreview.itemId) ?? null}
                   layout={dropPreview.layout}
                   columns={schema.layout.gridColumns}
-                  gridGap={schema.layout.gridGap}
-                  rowHeight={schema.layout.rowHeight}
+                  rowHeight={canvasRowHeight}
                   dropPreview
                 />
               ) : null}
@@ -763,8 +771,7 @@ export function DashboardBuilderLayoutPage({
                     item={item}
                     layout={displayLayout}
                     columns={schema.layout.gridColumns}
-                    gridGap={schema.layout.gridGap}
-                    rowHeight={schema.layout.rowHeight}
+                    rowHeight={canvasRowHeight}
                     selected={selectedItemId === item.id}
                     dragging={activeDragItemId === item.id}
                     onSelect={() => setSelectedItemId(item.id)}
@@ -781,8 +788,7 @@ export function DashboardBuilderLayoutPage({
                   item={topLevelItems.find((item) => item.id === dragPreview.itemId) ?? null}
                   layout={dragPreview.layout}
                   columns={schema.layout.gridColumns}
-                  gridGap={schema.layout.gridGap}
-                  rowHeight={schema.layout.rowHeight}
+                  rowHeight={canvasRowHeight}
                 />
               ) : null}
             </DashboardCanvasSurface>
@@ -843,7 +849,6 @@ function PlacedDashboardItem({
   item,
   layout,
   columns,
-  gridGap,
   rowHeight,
   selected,
   onSelect,
@@ -858,7 +863,6 @@ function PlacedDashboardItem({
   item: DashboardTopLevelItem;
   layout: DashboardWidgetLayout;
   columns: number;
-  gridGap: number;
   rowHeight: number;
   selected: boolean;
   dragging?: boolean;
@@ -885,11 +889,9 @@ function PlacedDashboardItem({
     <DashboardCanvasWidgetShell
       layout={layout}
       columns={columns}
-      gridGap={gridGap}
       rowHeight={rowHeight}
       selected={selected}
       preview={preview}
-      style={{ height: `${layout.h * rowHeight}px` }}
       className={`${dragging ? "layout-canvas-widget--moving" : ""}${
         dropPreview ? " layout-canvas-widget--drop-preview" : ""
       }${compact ? " layout-canvas-widget--compact" : ""}${
@@ -940,7 +942,6 @@ function DragPreviewItem({
   item,
   layout,
   columns,
-  gridGap,
   rowHeight,
   dropPreview = false,
 }: {
@@ -948,7 +949,6 @@ function DragPreviewItem({
   item: DashboardTopLevelItem | null;
   layout: DashboardWidgetLayout;
   columns: number;
-  gridGap: number;
   rowHeight: number;
   dropPreview?: boolean;
 }) {
@@ -960,7 +960,6 @@ function DragPreviewItem({
       item={item}
       layout={layout}
       columns={columns}
-      gridGap={gridGap}
       rowHeight={rowHeight}
       selected
       dragging={false}

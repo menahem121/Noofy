@@ -33,6 +33,20 @@ function dispatchPointer(target: Window | Node, type: string, init: { pointerId?
   fireEvent(target, event);
 }
 
+function mockElementRect(element: Element, rect: Partial<DOMRect>) {
+  vi.spyOn(element, "getBoundingClientRect").mockReturnValue({
+    x: rect.x ?? rect.left ?? 0,
+    y: rect.y ?? rect.top ?? 0,
+    left: rect.left ?? rect.x ?? 0,
+    top: rect.top ?? rect.y ?? 0,
+    right: rect.right ?? (rect.left ?? rect.x ?? 0) + (rect.width ?? 0),
+    bottom: rect.bottom ?? (rect.top ?? rect.y ?? 0) + (rect.height ?? 0),
+    width: rect.width ?? 0,
+    height: rect.height ?? 0,
+    toJSON: () => ({}),
+  } as DOMRect);
+}
+
 const readyRuntime = {
   mode: "managed",
   reachable: true,
@@ -916,6 +930,76 @@ describe("DashboardBuilderLayoutPage", () => {
     expect(document.querySelector(".layout-canvas__surface")).toHaveStyle({
       "--layout-surface-min-height": "768px",
     });
+    expect(componentsCss).toMatch(
+      /\.workspace-content--canvas-run,\s*\.workspace-content--builder-layout\s*{[^}]*height:\s*calc\(100dvh - var\(--topbar-height\)\);/,
+    );
+    expect(builderLayoutCss).toMatch(
+      /\.workspace-content:has\(> \.builder-layout-page\)\s*{[^}]*min-height:\s*calc\(100dvh - var\(--topbar-height\)\);/,
+    );
+  });
+
+  it("scales the builder canvas rows from available height while preserving saved tile layout", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/runtime")) return Promise.resolve(jsonResponse(readyRuntime));
+      if (url.endsWith("/api/workflows/wf-1/dashboard")) {
+        expect(init?.method).toBe("PUT");
+        return Promise.resolve(jsonResponse({ workflow_id: "wf-1", status: "configured", valid: true }));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+    const bottomAnchoredSchema: DashboardSchema = {
+      ...placedSchema,
+      widgets: placedSchema.widgets.map((widget) => ({
+        ...widget,
+        layout: { x: 0, y: 18, w: 16, h: 6 },
+      })),
+    };
+
+    render(
+      <DashboardBuilderLayoutPage
+        workflowId="wf-1"
+        workflowName="Workflow"
+        initialSchema={bottomAnchoredSchema}
+        onBackToWidgets={vi.fn()}
+        onSaveComplete={vi.fn()}
+        onNavigate={vi.fn()}
+      />,
+    );
+
+    const frame = await screen.findByRole("main", { name: /dashboard layout canvas/i });
+    const surface = document.querySelector(".layout-canvas__surface") as HTMLElement;
+    mockElementRect(frame, { left: 0, top: 0, width: 1200, height: 960 });
+    mockElementRect(surface, { left: 0, top: 0, width: 1200, height: 960 });
+    fireEvent(window, new Event("resize"));
+
+    const promptCell = screen.getByRole("textbox").closest("article");
+    await waitFor(() => {
+      expect(surface).toHaveStyle({
+        "--layout-surface-min-height": "960px",
+        "--layout-widget-visual-gap": "17.5px",
+      });
+      expect(promptCell).toHaveStyle({
+        top: "720px",
+        height: "240px",
+        minHeight: "240px",
+        "--layout-widget-inset-bottom": "var(--layout-widget-visual-inset, 0px)",
+      });
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /save dashboard/i }));
+
+    await waitFor(() => {
+      const putCall = fetchMock.mock.calls.find(([, init]) => (init as RequestInit | undefined)?.method === "PUT");
+      expect(putCall).toBeDefined();
+      const body = JSON.parse((putCall![1] as RequestInit).body as string);
+      expect(body.dashboard.sections[0].controls[0].layout).toMatchObject({
+        x: 0,
+        y: 18,
+        w: 16,
+        h: 6,
+      });
+    });
   });
 
   it("renders packaged default images in layout preview without the builder filename strip", async () => {
@@ -948,9 +1032,18 @@ describe("DashboardBuilderLayoutPage", () => {
   it("keeps canvas widget separation visual without changing tile geometry", () => {
     expect(builderLayoutCss).toMatch(/--layout-widget-visual-gap:\s*var\(--layout-grid-gap, 0px\);/);
     expect(builderLayoutCss).toMatch(/--layout-widget-visual-inset:\s*calc\(var\(--layout-widget-visual-gap\) \/ 2\);/);
-    expect(builderLayoutCss).toMatch(/\.layout-canvas-widget\s*{[^}]*padding:\s*calc\(15px \+ var\(--layout-widget-visual-inset, 0px\)\);/);
-    expect(builderLayoutCss).toMatch(/\.layout-canvas-widget::before\s*{[^}]*inset:\s*var\(--layout-widget-visual-inset, 0px\);/);
-    expect(canvasCss).toMatch(/\.layout-canvas-resize-handles\s*{[^}]*inset:\s*var\(--layout-widget-visual-inset, 0px\);/);
+    expect(builderLayoutCss).toMatch(
+      /\.layout-canvas-widget\s*{[^}]*padding:[^}]*var\(--layout-widget-inset-bottom, var\(--layout-widget-visual-inset, 0px\)\)/,
+    );
+    expect(builderLayoutCss).toMatch(
+      /\.layout-canvas-widget::before\s*{[^}]*inset:[^}]*var\(--layout-widget-inset-bottom, var\(--layout-widget-visual-inset, 0px\)\)/,
+    );
+    expect(canvasCss).toMatch(
+      /\.layout-canvas-resize-handles\s*{[^}]*inset:[^}]*var\(--layout-widget-inset-bottom, var\(--layout-widget-visual-inset, 0px\)\)/,
+    );
+    expect(builderLayoutCss).not.toMatch(/\.layout-canvas-widget::before\s*{[^}]*box-shadow:/);
+    expect(builderLayoutCss).not.toMatch(/\.layout-canvas-widget--selected::before\s*{[^}]*box-shadow:/);
+    expect(builderLayoutCss).not.toMatch(/\.layout-canvas-widget--moving::before,[\s\S]*?box-shadow:/);
   });
 
   it("lets multiline text widgets fill the resized canvas widget height", () => {

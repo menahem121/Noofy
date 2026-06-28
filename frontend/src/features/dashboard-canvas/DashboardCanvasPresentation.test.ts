@@ -1,6 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { fitMovedLayoutPosition, resizeLayoutFromPointerDelta } from "./DashboardCanvasPresentation";
+import {
+  canvasRowsForItems,
+  dashboardCanvasRenderRowHeight,
+  dashboardCanvasVisualGap,
+  dashboardCanvasWidgetStyle,
+  fitMovedLayoutPosition,
+  resizeLayoutFromPointerDelta,
+} from "./DashboardCanvasPresentation";
 
 function mockCanvas(width = 320): HTMLElement {
   const canvas = document.createElement("div");
@@ -17,6 +24,77 @@ function mockCanvas(width = 320): HTMLElement {
   } as DOMRect);
   return canvas;
 }
+
+describe("canvasRowsForItems", () => {
+  it("uses 24 rows as the stable visible canvas without adding bottom padding", () => {
+    expect(canvasRowsForItems([{ layout: { x: 0, y: 18, w: 32, h: 6 } }])).toBe(24);
+  });
+
+  it("grows only when items extend past the stable visible rows", () => {
+    expect(canvasRowsForItems([{ layout: { x: 0, y: 24, w: 32, h: 4 } }])).toBe(28);
+  });
+});
+
+describe("dashboardCanvasRenderRowHeight", () => {
+  it("derives responsive row height from the available 24-row canvas", () => {
+    expect(dashboardCanvasRenderRowHeight({ availableHeight: 960 })).toBe(40);
+    expect(dashboardCanvasRenderRowHeight({ availableHeight: 600 })).toBe(25);
+  });
+
+  it("uses fixed row height when responsiveness is disabled or the canvas is not measurable", () => {
+    expect(dashboardCanvasRenderRowHeight({ availableHeight: 960, rowHeight: 32, responsive: false })).toBe(32);
+    expect(dashboardCanvasRenderRowHeight({ availableHeight: null, rowHeight: 36 })).toBe(36);
+  });
+});
+
+describe("dashboardCanvasVisualGap", () => {
+  it("keeps the original 14px gap at the fallback 32px row height", () => {
+    expect(dashboardCanvasVisualGap({ rowHeight: 32, gridGap: 14 })).toBe(14);
+  });
+
+  it("scales visual gaps with responsive row height", () => {
+    expect(dashboardCanvasVisualGap({ rowHeight: 40, gridGap: 14 })).toBe(17.5);
+  });
+
+  it("clamps default gaps on very short and very tall rows", () => {
+    expect(dashboardCanvasVisualGap({ rowHeight: 16, gridGap: 14 })).toBe(10);
+    expect(dashboardCanvasVisualGap({ rowHeight: 80, gridGap: 14 })).toBe(24);
+  });
+
+  it("respects intentionally smaller authored grid gaps", () => {
+    expect(dashboardCanvasVisualGap({ rowHeight: 40, gridGap: 2 })).toBe(2.5);
+  });
+});
+
+describe("dashboardCanvasWidgetStyle", () => {
+  it("projects tile position and size through the active row height", () => {
+    expect(dashboardCanvasWidgetStyle({ x: 8, y: 2, w: 16, h: 6 }, { columns: 32, rowHeight: 40 })).toMatchObject({
+      left: "25%",
+      top: "80px",
+      width: "50%",
+      height: "240px",
+      minHeight: "240px",
+    });
+  });
+
+  it("keeps visual insets at canvas edges while preserving the tile shell", () => {
+    expect(
+      dashboardCanvasWidgetStyle(
+        { x: 0, y: 18, w: 16, h: 6 },
+        { columns: 32, rowHeight: 40 },
+      ),
+    ).toMatchObject({
+      left: "0%",
+      top: "720px",
+      width: "50%",
+      height: "240px",
+      "--layout-widget-inset-left": "var(--layout-widget-visual-inset, 0px)",
+      "--layout-widget-inset-bottom": "var(--layout-widget-visual-inset, 0px)",
+      "--layout-widget-inset-top": "var(--layout-widget-visual-inset, 0px)",
+      "--layout-widget-inset-right": "var(--layout-widget-visual-inset, 0px)",
+    });
+  });
+});
 
 describe("resizeLayoutFromPointerDelta", () => {
   it("resizes from the top-left corner while keeping the bottom-right corner fixed", () => {

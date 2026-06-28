@@ -61,16 +61,17 @@ import {
 } from "../../lib/widgetSizes";
 import {
   DASHBOARD_CANVAS_COLUMNS,
-  DASHBOARD_CANVAS_ROW_HEIGHT,
   DashboardCanvasFrame,
   DashboardCanvasResizeHandles,
   DashboardCanvasSurface,
   DashboardCanvasWidgetShell,
   type DashboardResizeHandle,
   canvasRowsForItems,
+  dashboardCanvasAvailableHeight,
   fitMovedLayoutPosition,
   resizeLayoutFromPointerDelta,
   sameGridLayout,
+  useDashboardCanvasRowHeight,
 } from "../dashboard-canvas/DashboardCanvasPresentation";
 import { DashboardInputControl, SeedModeToggleButton } from "./DashboardInputControl";
 import type { LoraBrowserControlProps } from "./DashboardInputControl";
@@ -277,6 +278,10 @@ export function CanvasDashboardView({
   const showGeneralLivePreview = Boolean(livePreview?.data_url && !livePreviewHasWidgetTarget && !livePreviewFallbackControlId);
 
   const requestedActionBarPosition = draggingActionBarPosition ?? actionBarPosition ?? null;
+  const canvasRowHeight = useDashboardCanvasRowHeight({
+    frameRef,
+    surfaceRef: canvasRef,
+  });
 
   useEffect(() => {
     function handleResize() {
@@ -369,15 +374,11 @@ export function CanvasDashboardView({
   function visibleCanvasRows(): number | null {
     const surface = canvasRef.current;
     if (!surface) return null;
-    const surfaceRect = surface.getBoundingClientRect();
     const frame = frameRef.current ?? (surface.closest(".layout-canvas") as HTMLElement | null);
-    const frameRect = frame?.getBoundingClientRect();
-    const visibleHeight = frame
-      ? frame.clientHeight || frameRect?.height || surfaceRect.height
-      : surface.clientHeight || surfaceRect.height;
-    if (!Number.isFinite(visibleHeight) || visibleHeight <= 0) return null;
+    const visibleHeight = dashboardCanvasAvailableHeight(frame, surface);
+    if (visibleHeight === null || !Number.isFinite(visibleHeight) || visibleHeight <= 0) return null;
     const scrollTop = frame?.scrollTop ?? 0;
-    return Math.max(1, Math.floor((scrollTop + visibleHeight) / DASHBOARD_CANVAS_ROW_HEIGHT));
+    return Math.max(1, Math.floor((scrollTop + visibleHeight) / canvasRowHeight));
   }
 
   function layoutCollides(controlId: string, layout: GridItemLayout): boolean {
@@ -417,7 +418,7 @@ export function CanvasDashboardView({
       const moveState = moveStateRef.current;
       if (!moveState) return;
       const deltaColumns = Math.round((pointerEvent.clientX - moveState.startClientX) / moveState.columnWidth);
-      const deltaRows = Math.round((pointerEvent.clientY - moveState.startClientY) / DASHBOARD_CANVAS_ROW_HEIGHT);
+      const deltaRows = Math.round((pointerEvent.clientY - moveState.startClientY) / canvasRowHeight);
       const candidate = fitLayoutToVisibleCanvas(
         fitMovedLayoutPosition(
           {
@@ -490,6 +491,7 @@ export function CanvasDashboardView({
         clientY: pointerEvent.clientY,
         canvas: canvasRef.current,
         handle: resizeState.handle,
+        rowHeight: canvasRowHeight,
       });
       onLayoutOverride(resizeState.controlId, resolveResizedLayout(resizeState.controlId, candidate));
     }
@@ -636,11 +638,13 @@ export function CanvasDashboardView({
           ref={canvasRef}
           className={isEditingLayout ? "canvas-dashboard__surface--editing" : ""}
           rows={canvasRows}
+          rowHeight={canvasRowHeight}
         >
           {dropPreview ? (
             <CanvasWidgetDropPreview
               item={topLevelItems.find((item) => item.id === dropPreview.controlId) ?? null}
               layout={dropPreview.layout}
+              rowHeight={canvasRowHeight}
             />
           ) : null}
 
@@ -655,6 +659,7 @@ export function CanvasDashboardView({
                 key={item.id}
                 item={item}
                 layout={displayLayout}
+                rowHeight={canvasRowHeight}
                 isMoving={isMoving}
                 isEditingLayout={isEditingLayout}
                 inputIndex={inputIndex}
@@ -719,9 +724,11 @@ export function CanvasDashboardView({
 function CanvasWidgetDropPreview({
   item,
   layout,
+  rowHeight,
 }: {
   item: DashboardTopLevelControlItem | null;
   layout: GridItemLayout;
+  rowHeight: number;
 }) {
   if (!item) return null;
   const Icon = item.kind === "group" ? LayoutGrid : iconForControlType(item.control.type);
@@ -732,7 +739,7 @@ function CanvasWidgetDropPreview({
     <DashboardCanvasWidgetShell
       className="layout-canvas-widget--run layout-canvas-widget--preview layout-canvas-widget--drop-preview"
       layout={layout}
-      style={{ height: `${layout.h * DASHBOARD_CANVAS_ROW_HEIGHT}px` }}
+      rowHeight={rowHeight}
       aria-hidden="true"
     >
       <header className="layout-canvas-widget__header">
@@ -753,6 +760,7 @@ function CanvasWidgetDropPreview({
 function CanvasWidgetCell({
   item,
   layout,
+  rowHeight,
   isMoving,
   isEditingLayout,
   inputIndex,
@@ -790,6 +798,7 @@ function CanvasWidgetCell({
 }: {
   item: DashboardTopLevelControlItem;
   layout: GridItemLayout;
+  rowHeight: number;
   isMoving: boolean;
   isEditingLayout: boolean;
   inputIndex: Map<string, WorkflowInputDef>;
@@ -870,7 +879,7 @@ function CanvasWidgetCell({
         inlineHeaderToggle && layout.h <= 1 ? " layout-canvas-widget--one-row-toggle" : ""
       }`}
       layout={layout}
-      style={{ height: `${layout.h * DASHBOARD_CANVAS_ROW_HEIGHT}px` }}
+      rowHeight={rowHeight}
       onPointerDown={isEditingLayout ? onMoveStart : undefined}
       data-dashboard-control-id={control ? control.id : undefined}
     >
