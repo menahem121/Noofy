@@ -32,7 +32,7 @@ def test_runtime_profile_catalog_loads_and_validates_manifest_hash() -> None:
     assert profile.runtime_profile_id == "noofy-comfyui-v1-default"
     assert profile.runtime_profile_manifest_hash == profile.computed_manifest_hash()
     assert profile.source_status is RuntimeSourceStatus.CLEAN_REPRODUCIBLE
-    assert profile.comfyui_core_version == "v0.25.0"
+    assert profile.comfyui_core_version == "v0.26.0"
     assert profile.comfyui_source_origin_kind is RuntimeSourceOriginKind.UPSTREAM_SOURCE_ARCHIVE
     assert profile.signed_manifest_reference is not None
     assert all(
