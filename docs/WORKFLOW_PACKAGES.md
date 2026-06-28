@@ -55,9 +55,16 @@ The dashboard schema describes what the end user sees. It should support:
 - image, audio, video, and generic file upload controls
 - toggles
 - run and cancel actions
+- tile layout coordinates for controls and groups
 - default values and presets
 - validation rules
 - conditional visibility and enabled states
+
+Dashboard control and group layout is stored as tile coordinates: `x`, `y`,
+`w`, and `h`. These values are portable dashboard geometry, not rendered pixel
+positions. The current canvas model uses 32 columns and a stable 24-row visible
+area for responsive dashboards; frontend builder and run views derive rendered
+row height from the available canvas height when responsiveness is enabled.
 
 ### API Credential Controls
 

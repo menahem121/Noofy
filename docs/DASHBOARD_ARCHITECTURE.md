@@ -84,7 +84,16 @@ Bindable-input discovery uses app-owned contracts for bundled ComfyUI media load
 The builder has two responsibilities:
 
 - Choose widgets: inspect bindable workflow values and output-capable nodes, select the values to expose, choose widget types, set user-facing labels/defaults/validation, and create bindings.
-- Arrange widgets: place selected widgets on a responsive 32-column grid and save the final layout.
+- Arrange widgets: place selected widgets on a responsive tile canvas and save the final layout.
+
+Dashboard layout coordinates are tile-based, not pixel-based. Widgets persist
+`x`, `y`, `w`, and `h` in the dashboard schema. The canvas uses 32 columns and a
+stable 24-row visible area for responsive dashboards. `rowHeight` remains
+fallback/design metadata: when `responsive` is true, builder and run view derive
+the rendered row height from the available canvas height; when `responsive` is
+false, they use the fixed `rowHeight`. This keeps a widget whose bottom edge is
+on row 24 attached to the bottom of the usable canvas on taller screens without
+rewriting saved layout coordinates.
 
 Saving a dashboard goes through the backend, validates bindings, then writes only dashboard schema data. Imported workflows write `dashboard.json` in the internal package copy. Bundled native workflows write a user-owned dashboard override under `{data_dir}/workflow-store/dashboard-overrides/{workflow_id}/dashboard.json`, leaving bundled source files immutable. Failed saves keep the local builder draft and must not navigate to the run page.
 
@@ -94,8 +103,9 @@ Configured workflows open in the canvas dashboard by default.
 
 Canvas behavior:
 
-- Uses the saved 32-column grid layout from `dashboard.json`.
-- Uses builder-compatible canvas presentation components and widget sizing.
+- Uses the saved tile layout from `dashboard.json`; `x`, `y`, `w`, and `h`
+  remain the source of truth.
+- Uses builder-compatible canvas presentation components, row-height derivation, visible-row clamping, and widget sizing.
 - Locks layout in normal mode: no drag handles, resize handles, selection outlines, or preset chips.
 - Provides a canvas action group with Run, Cancel, and workflow customization menu.
 - Allows layout editing only through Edit Dashboard Layout mode; moves/resizes are grid-snapped and saved as user layout overrides.

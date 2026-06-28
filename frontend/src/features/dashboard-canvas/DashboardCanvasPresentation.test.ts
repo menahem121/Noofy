@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   canvasRowsForItems,
   dashboardCanvasRenderRowHeight,
+  dashboardCanvasVisibleRows,
   dashboardCanvasVisualGap,
   dashboardCanvasWidgetStyle,
   fitMovedLayoutPosition,
@@ -44,6 +45,20 @@ describe("dashboardCanvasRenderRowHeight", () => {
   it("uses fixed row height when responsiveness is disabled or the canvas is not measurable", () => {
     expect(dashboardCanvasRenderRowHeight({ availableHeight: 960, rowHeight: 32, responsive: false })).toBe(32);
     expect(dashboardCanvasRenderRowHeight({ availableHeight: null, rowHeight: 36 })).toBe(36);
+  });
+});
+
+describe("dashboardCanvasVisibleRows", () => {
+  it("keeps the stable 24 responsive rows reachable when measurement drift would floor to 23", () => {
+    expect(dashboardCanvasVisibleRows({ visibleHeight: 935, rowHeight: 40 })).toBe(24);
+  });
+
+  it("counts additional rows when the scroll position exposes content below the stable rows", () => {
+    expect(dashboardCanvasVisibleRows({ visibleHeight: 960, rowHeight: 40, scrollTop: 120 })).toBe(27);
+  });
+
+  it("can clamp to the actually visible rows for fixed-row canvases", () => {
+    expect(dashboardCanvasVisibleRows({ visibleHeight: 607, rowHeight: 32, minRows: 1 })).toBe(18);
   });
 });
 

@@ -36,6 +36,13 @@ export interface DashboardCanvasVisualGapOptions {
   gridGap?: number;
 }
 
+export interface DashboardCanvasVisibleRowsOptions {
+  visibleHeight?: number | null;
+  rowHeight?: number;
+  scrollTop?: number;
+  minRows?: number;
+}
+
 export interface DashboardCanvasItem {
   layout?: GridItemLayout | null;
 }
@@ -93,6 +100,21 @@ export function dashboardCanvasAvailableHeight(
     ? frame.clientHeight || frameRect?.height || surfaceRect?.height
     : surface?.clientHeight || surfaceRect?.height;
   return positiveFinite(height) ? height : null;
+}
+
+export function dashboardCanvasVisibleRows({
+  visibleHeight,
+  rowHeight = DASHBOARD_CANVAS_ROW_HEIGHT,
+  scrollTop = 0,
+  minRows = DASHBOARD_CANVAS_MIN_ROWS,
+}: DashboardCanvasVisibleRowsOptions = {}): number | null {
+  if (!positiveFinite(visibleHeight) || !positiveFinite(rowHeight)) return null;
+  const rawRows = (Math.max(0, scrollTop) + visibleHeight) / rowHeight;
+  const roundedRows = Math.round(rawRows);
+  const measuredRows = Math.abs(rawRows - roundedRows) < 0.01
+    ? roundedRows
+    : Math.floor(rawRows);
+  return Math.max(1, minRows, measuredRows);
 }
 
 export function useDashboardCanvasRowHeight({

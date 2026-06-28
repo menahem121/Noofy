@@ -68,6 +68,7 @@ import {
   type DashboardResizeHandle,
   canvasRowsForItems,
   dashboardCanvasAvailableHeight,
+  dashboardCanvasVisibleRows,
   fitMovedLayoutPosition,
   resizeLayoutFromPointerDelta,
   sameGridLayout,
@@ -378,7 +379,11 @@ export function CanvasDashboardView({
     const visibleHeight = dashboardCanvasAvailableHeight(frame, surface);
     if (visibleHeight === null || !Number.isFinite(visibleHeight) || visibleHeight <= 0) return null;
     const scrollTop = frame?.scrollTop ?? 0;
-    return Math.max(1, Math.floor((scrollTop + visibleHeight) / canvasRowHeight));
+    return dashboardCanvasVisibleRows({
+      visibleHeight,
+      scrollTop,
+      rowHeight: canvasRowHeight,
+    });
   }
 
   function layoutCollides(controlId: string, layout: GridItemLayout): boolean {

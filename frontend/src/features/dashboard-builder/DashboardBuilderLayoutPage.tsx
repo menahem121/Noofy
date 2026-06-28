@@ -38,6 +38,7 @@ import {
   isWidgetLayoutCompact,
 } from "../../lib/widgetSizes";
 import {
+  DASHBOARD_CANVAS_MIN_ROWS,
   DashboardCanvasFrame,
   DashboardCanvasResizeHandles,
   DashboardCanvasSurface,
@@ -45,6 +46,7 @@ import {
   type DashboardResizeHandle,
   canvasRowsForItems,
   dashboardCanvasAvailableHeight,
+  dashboardCanvasVisibleRows,
   fitMovedLayoutPosition,
   layoutFromCanvasPointer,
   moveLayoutFromPointerDelta,
@@ -408,7 +410,12 @@ export function DashboardBuilderLayoutPage({
     const visibleHeight = dashboardCanvasAvailableHeight(frame, canvas);
     if (visibleHeight === null || !Number.isFinite(visibleHeight) || visibleHeight <= 0) return null;
     const scrollTop = frame?.scrollTop ?? 0;
-    return Math.max(1, Math.floor((scrollTop + visibleHeight) / activeRowHeight(currentSchema)));
+    return dashboardCanvasVisibleRows({
+      visibleHeight,
+      scrollTop,
+      rowHeight: activeRowHeight(currentSchema),
+      minRows: currentSchema.layout.responsive ? DASHBOARD_CANVAS_MIN_ROWS : 1,
+    });
   }
 
   function activeRowHeight(currentSchema: DashboardSchema): number {

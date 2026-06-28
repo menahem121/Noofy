@@ -34,7 +34,7 @@ function dispatchPointer(target: Window | Node, type: string, init: { pointerId?
 }
 
 function mockElementRect(element: Element, rect: Partial<DOMRect>) {
-  vi.spyOn(element, "getBoundingClientRect").mockReturnValue({
+  return vi.spyOn(element, "getBoundingClientRect").mockReturnValue({
     x: rect.x ?? rect.left ?? 0,
     y: rect.y ?? rect.top ?? 0,
     left: rect.left ?? rect.x ?? 0,
@@ -1473,17 +1473,23 @@ describe("DashboardBuilderLayoutPage", () => {
       />,
     );
 
-    await screen.findByRole("button", { name: /resize prompt from bottom-right/i });
+    const frame = await screen.findByRole("main", { name: /dashboard layout canvas/i });
     const canvasSurface = document.querySelector(".layout-canvas__surface") as HTMLElement;
-    vi.spyOn(canvasSurface, "getBoundingClientRect").mockReturnValue({
+    const frameRectSpy = mockElementRect(frame, { left: 0, top: 0, width: 1200, height: 960 });
+    mockElementRect(canvasSurface, { left: 0, top: 0, width: 1200, height: 960 });
+    fireEvent(window, new Event("resize"));
+    await waitFor(() => {
+      expect(canvasSurface).toHaveStyle({ "--layout-row-height": "40px" });
+    });
+    frameRectSpy.mockReturnValue({
       x: 0,
       y: 0,
       left: 0,
       top: 0,
       right: 1200,
-      bottom: 768,
+      bottom: 935,
       width: 1200,
-      height: 768,
+      height: 935,
       toJSON: () => ({}),
     } as DOMRect);
 
@@ -1492,10 +1498,10 @@ describe("DashboardBuilderLayoutPage", () => {
     dispatchPointer(window, "pointermove", { clientX: 300, clientY: 2000 });
 
     await waitFor(() => {
-      expect(promptCell).toHaveStyle({ top: "576px" });
+      expect(promptCell).toHaveStyle({ top: "720px" });
     });
     dispatchPointer(window, "pointerup", { clientX: 300, clientY: 2000 });
-    expect(promptCell).toHaveStyle({ top: "576px" });
+    expect(promptCell).toHaveStyle({ top: "720px" });
 
     fireEvent.click(screen.getByRole("button", { name: /save dashboard/i }));
 

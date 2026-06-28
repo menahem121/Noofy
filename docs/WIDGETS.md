@@ -4,7 +4,12 @@ Status: current architecture/reference.
 
 Dashboard widgets are the app-owned controls shown on the Noofy workflow dashboard. The frontend renders them from `dashboard.json`, and workflow execution still goes through the backend API and the active `EngineAdapter`.
 
-Widget layout uses the shared 32-column dashboard grid. The minimum sizes below are stored as grid cells and are also the default size for newly placed widgets. In code, these map to `w`, `h`, `minW`, and `minH` from `frontend/src/lib/widgetSizes.ts`.
+Widget layout uses the shared dashboard tile canvas: 32 columns and a stable
+24-row visible area for responsive dashboards. Widget placement and size are
+stored as tile coordinates, not pixels. In code, these map to `x`, `y`, `w`,
+`h`, `minW`, and `minH` from `frontend/src/lib/widgetSizes.ts`. The minimum
+sizes below are stored as grid cells and are also the default size for newly
+placed widgets.
 
 Widget groups are visual containers around existing controls. A group owns one dashboard block layout and an ordered list of child control IDs; child controls keep their own bindings, defaults, validation, values, and widget configuration.
 
