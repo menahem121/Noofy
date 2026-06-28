@@ -99,7 +99,7 @@
     "signatures": []
   },
   "workflow": {
-    "package_id": "image_longcat_image_edit-copy",
+    "package_id": "image_longcat_image_edit",
     "publisher_id": "local",
     "source": "local_copy",
     "trust_level": "quarantined_community",

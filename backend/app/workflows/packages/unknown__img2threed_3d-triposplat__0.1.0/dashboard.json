@@ -55,7 +55,7 @@
           "input_id": "ctrl-node-99-image",
           "label": "Input image",
           "layout": {
-            "h": 20,
+            "h": 18,
             "min_h": 6,
             "min_w": 6,
             "w": 10,
@@ -70,7 +70,7 @@
           "id": "ctrl-node-51-output_3d",
           "label": "3D model",
           "layout": {
-            "h": 24,
+            "h": 22,
             "min_h": 8,
             "min_w": 8,
             "w": 22,
@@ -92,7 +92,7 @@
             "min_w": 6,
             "w": 10,
             "x": 0,
-            "y": 22
+            "y": 20
           },
           "required": false,
           "type": "slider"

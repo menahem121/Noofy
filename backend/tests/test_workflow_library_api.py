@@ -94,10 +94,14 @@ class FakeAvailabilityService:
 
 
 class VerifyingAvailabilityService:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, bool]] = []
+
     def cleanup_interrupted_downloads(self) -> int:
         return 0
 
     def summarize(self, package, *, deep_search=True, verify_hashes=True) -> RequiredModelSummary:
+        self.calls.append({"deep_search": deep_search, "verify_hashes": verify_hashes})
         status = "available" if verify_hashes else "possible_match"
         models = [
             RequiredModelAvailability(
@@ -1343,6 +1347,51 @@ def test_workflow_details_loads_drawer_data_separately(tmp_path: Path) -> None:
     assert details["overview"]["description"] == "Original description"
     assert details["models_used"] == []
     assert details["advanced"]["engine"] == "comfyui"
+
+
+def test_workflow_details_uses_fast_model_availability_for_drawer(tmp_path: Path) -> None:
+    packages_dir = tmp_path / "details-packages"
+    package_dir = packages_dir / "details_model_wf"
+    package_dir.mkdir(parents=True)
+    (package_dir / "package.json").write_text(
+        json.dumps(
+            {
+                "metadata": {"id": "details_model_wf", "name": "Details Model", "version": "1.0.0"},
+                "engine": "comfyui",
+                "required_models": [
+                    {
+                        "folder": "checkpoints",
+                        "filename": "large.safetensors",
+                        "model_type": "checkpoint",
+                        "checksum": "sha256:" + ("a" * 64),
+                        "size_bytes": 12_000_000_000,
+                        "verification_level": "sha256_size",
+                    }
+                ],
+                "comfyui_graph": {"1": {"class_type": "SaveImage", "inputs": {}}},
+                "inputs": [],
+                "outputs": [],
+                "custom_nodes": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (package_dir / "dashboard.json").write_text(
+        json.dumps({"version": "0.1.0", "status": "configured", "sections": []}),
+        encoding="utf-8",
+    )
+    availability = VerifyingAvailabilityService()
+    service = WorkflowLibraryService(
+        WorkflowPackageLoader(packages_dir),
+        availability,
+        LogStore(),
+    )
+
+    details = service.workflow_details("details_model_wf")
+
+    assert availability.calls
+    assert all(call == {"deep_search": False, "verify_hashes": False} for call in availability.calls)
+    assert details["models_used"][0]["status"] == "possible_match"
 
 
 def test_metadata_edits_update_internal_copy_but_not_original_archive_or_history_export(tmp_path: Path) -> None:

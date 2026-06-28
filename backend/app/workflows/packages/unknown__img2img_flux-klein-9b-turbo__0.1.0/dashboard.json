@@ -84,7 +84,7 @@
             "min_w": 6,
             "w": 12,
             "x": 0,
-            "y": 15
+            "y": 13
           },
           "required": false,
           "type": "load_image"
@@ -94,7 +94,7 @@
           "id": "ctrl-node-9-output_image",
           "label": "Result",
           "layout": {
-            "h": 24,
+            "h": 22,
             "min_h": 6,
             "min_w": 6,
             "w": 20,
@@ -120,7 +120,7 @@
             "min_w": 6,
             "w": 12,
             "x": 0,
-            "y": 2
+            "y": 0
           },
           "title": "prompt"
         }

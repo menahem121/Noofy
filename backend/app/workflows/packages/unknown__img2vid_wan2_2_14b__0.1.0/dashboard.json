@@ -125,7 +125,7 @@
           "input_id": "input-97-image",
           "label": "Input image",
           "layout": {
-            "h": 10,
+            "h": 7,
             "min_h": 6,
             "min_w": 6,
             "w": 12,
@@ -162,7 +162,7 @@
             "min_w": 6,
             "w": 12,
             "x": 0,
-            "y": 23
+            "y": 20
           },
           "required": false,
           "type": "slider"
@@ -178,7 +178,7 @@
             "min_w": 6,
             "w": 10,
             "x": 12,
-            "y": 23
+            "y": 20
           },
           "required": false,
           "type": "slider"
@@ -194,7 +194,7 @@
             "min_w": 6,
             "w": 10,
             "x": 22,
-            "y": 23
+            "y": 20
           },
           "required": false,
           "type": "slider"
@@ -204,7 +204,7 @@
           "id": "ctrl-node-108-output_video",
           "label": "Output video",
           "layout": {
-            "h": 21,
+            "h": 18,
             "min_h": 7,
             "min_w": 8,
             "w": 20,
@@ -230,7 +230,7 @@
             "min_w": 6,
             "w": 12,
             "x": 0,
-            "y": 10
+            "y": 7
           },
           "title": "Prompt"
         }

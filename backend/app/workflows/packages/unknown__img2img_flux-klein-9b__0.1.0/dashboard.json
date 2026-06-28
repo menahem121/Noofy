@@ -101,7 +101,7 @@
           "input_id": "ctrl-node-76-image",
           "label": "Input image",
           "layout": {
-            "h": 13,
+            "h": 10,
             "min_h": 6,
             "min_w": 6,
             "w": 12,
@@ -130,7 +130,7 @@
             "min_w": 6,
             "w": 12,
             "x": 12,
-            "y": 23
+            "y": 20
           },
           "required": false,
           "type": "slider"
@@ -146,7 +146,7 @@
             "min_w": 4,
             "w": 8,
             "x": 24,
-            "y": 23
+            "y": 20
           },
           "required": false,
           "type": "seed_widget"
@@ -156,7 +156,7 @@
           "id": "ctrl-node-9-output_image",
           "label": "Result",
           "layout": {
-            "h": 21,
+            "h": 18,
             "min_h": 6,
             "min_w": 6,
             "w": 20,

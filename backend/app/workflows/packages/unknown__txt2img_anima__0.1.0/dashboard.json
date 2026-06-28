@@ -140,7 +140,7 @@
             "min_w": 4,
             "w": 8,
             "x": 12,
-            "y": 23
+            "y": 20
           },
           "required": false,
           "type": "seed_widget"
@@ -156,7 +156,7 @@
             "min_w": 6,
             "w": 12,
             "x": 20,
-            "y": 23
+            "y": 20
           },
           "required": false,
           "type": "slider"
@@ -166,7 +166,7 @@
           "id": "ctrl-node-46-output_image",
           "label": "Result",
           "layout": {
-            "h": 21,
+            "h": 18,
             "min_h": 6,
             "min_w": 6,
             "w": 20,
@@ -187,7 +187,7 @@
           "description": "",
           "id": "group-1",
           "layout": {
-            "h": 16,
+            "h": 13,
             "min_h": 6,
             "min_w": 6,
             "w": 12,
@@ -209,7 +209,7 @@
             "min_w": 6,
             "w": 12,
             "x": 0,
-            "y": 16
+            "y": 13
           },
           "title": "Height + Width"
         }

@@ -130,7 +130,7 @@
             "min_w": 6,
             "w": 6,
             "x": 20,
-            "y": 23
+            "y": 20
           },
           "required": false,
           "type": "slider"
@@ -146,7 +146,7 @@
             "min_w": 4,
             "w": 6,
             "x": 26,
-            "y": 23
+            "y": 20
           },
           "required": false,
           "type": "toggle"
@@ -170,7 +170,7 @@
             "min_w": 6,
             "w": 10,
             "x": 10,
-            "y": 23
+            "y": 20
           },
           "required": false,
           "type": "slider"
@@ -186,7 +186,7 @@
             "min_w": 6,
             "w": 10,
             "x": 0,
-            "y": 23
+            "y": 20
           },
           "required": false,
           "type": "slider"
@@ -196,7 +196,7 @@
           "id": "ctrl-node-80-output_video",
           "label": "Output video",
           "layout": {
-            "h": 21,
+            "h": 18,
             "min_h": 7,
             "min_w": 8,
             "w": 20,
@@ -217,7 +217,7 @@
           "description": "",
           "id": "group-1",
           "layout": {
-            "h": 23,
+            "h": 20,
             "min_h": 6,
             "min_w": 6,
             "w": 12,

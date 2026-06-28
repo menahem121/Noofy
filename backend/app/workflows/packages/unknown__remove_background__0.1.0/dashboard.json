@@ -65,12 +65,12 @@
           "input_id": "ctrl-node-2-image",
           "label": "Input image",
           "layout": {
-            "h": 12,
+            "h": 13,
             "min_h": 6,
             "min_w": 6,
             "w": 10,
             "x": 0,
-            "y": 7
+            "y": 5
           },
           "required": false,
           "type": "load_image"
@@ -86,7 +86,7 @@
             "min_w": 5,
             "w": 10,
             "x": 0,
-            "y": 19
+            "y": 18
           },
           "required": false,
           "type": "select"
@@ -96,7 +96,7 @@
           "id": "ctrl-node-370-output_image",
           "label": "Result",
           "layout": {
-            "h": 24,
+            "h": 22,
             "min_h": 6,
             "min_w": 6,
             "w": 22,

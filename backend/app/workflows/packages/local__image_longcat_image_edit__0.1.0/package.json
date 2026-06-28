@@ -3,22 +3,22 @@
   "category": "Img2img",
   "custom_nodes": [],
   "description": "",
-  "display_name": "image_longcat_image_edit Copy",
+  "display_name": "image_longcat_image_edit",
   "engine": "comfyui",
   "icon": "image",
   "metadata": {
     "author": "Menahem121",
     "category": "Img2img",
     "description": "",
-    "display_name": "image_longcat_image_edit Copy",
+    "display_name": "image_longcat_image_edit",
     "icon": "image",
-    "id": "local__image_longcat_image_edit-copy__0.1.0",
-    "name": "image_longcat_image_edit Copy",
+    "id": "local__image_longcat_image_edit__0.1.0",
+    "name": "image_longcat_image_edit",
     "tags": [],
     "version": "0.1.0",
     "website": "github.com/menahem121/Noofy"
   },
-  "package_id": "image_longcat_image_edit-copy",
+  "package_id": "image_longcat_image_edit",
   "publisher_id": "local",
   "required_models": [
     {

@@ -79,7 +79,7 @@
           "input_id": "ctrl-node-13-image",
           "label": "Input image",
           "layout": {
-            "h": 10,
+            "h": 8,
             "min_h": 6,
             "min_w": 6,
             "w": 12,
@@ -116,7 +116,7 @@
             "min_w": 6,
             "w": 12,
             "x": 0,
-            "y": 23
+            "y": 20
           },
           "required": false,
           "type": "slider"
@@ -126,7 +126,7 @@
           "id": "ctrl-node-9-output_image",
           "label": "Result",
           "layout": {
-            "h": 25,
+            "h": 22,
             "min_h": 6,
             "min_w": 6,
             "w": 20,
@@ -147,12 +147,12 @@
           "description": "",
           "id": "group-1",
           "layout": {
-            "h": 13,
+            "h": 12,
             "min_h": 6,
             "min_w": 6,
             "w": 12,
             "x": 0,
-            "y": 10
+            "y": 8
           },
           "title": "Prompt"
         }

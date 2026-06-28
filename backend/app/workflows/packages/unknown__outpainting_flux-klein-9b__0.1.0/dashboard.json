@@ -99,7 +99,7 @@
           "input_id": "ctrl-node-157-text",
           "label": "Prompt",
           "layout": {
-            "h": 13,
+            "h": 10,
             "min_h": 4,
             "min_w": 5,
             "w": 12,
@@ -120,7 +120,7 @@
             "min_w": 6,
             "w": 12,
             "x": 0,
-            "y": 13
+            "y": 10
           },
           "required": false,
           "type": "load_image"
@@ -135,8 +135,8 @@
             "min_h": 3,
             "min_w": 4,
             "w": 8,
-            "x": 16,
-            "y": 23
+            "x": 8,
+            "y": 20
           },
           "required": false,
           "type": "int_field"
@@ -152,7 +152,7 @@
             "min_w": 4,
             "w": 8,
             "x": 0,
-            "y": 23
+            "y": 20
           },
           "required": false,
           "type": "int_field"
@@ -167,8 +167,8 @@
             "min_h": 3,
             "min_w": 4,
             "w": 8,
-            "x": 8,
-            "y": 23
+            "x": 24,
+            "y": 20
           },
           "required": false,
           "type": "int_field"
@@ -183,8 +183,8 @@
             "min_h": 3,
             "min_w": 4,
             "w": 8,
-            "x": 24,
-            "y": 23
+            "x": 16,
+            "y": 20
           },
           "required": false,
           "type": "int_field"
@@ -194,7 +194,7 @@
           "id": "ctrl-node-142-output_image",
           "label": "Result",
           "layout": {
-            "h": 21,
+            "h": 18,
             "min_h": 6,
             "min_w": 6,
             "w": 20,

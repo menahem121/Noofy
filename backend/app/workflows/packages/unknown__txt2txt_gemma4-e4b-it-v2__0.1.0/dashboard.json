@@ -73,7 +73,7 @@
           "input_id": "ctrl-node-1-prompt",
           "label": "Prompt",
           "layout": {
-            "h": 19,
+            "h": 18,
             "min_h": 4,
             "min_w": 5,
             "w": 14,
@@ -89,12 +89,12 @@
           "input_id": "ctrl-node-12-audio",
           "label": "Optional audio",
           "layout": {
-            "h": 8,
+            "h": 6,
             "min_h": 4,
             "min_w": 6,
             "w": 7,
             "x": 7,
-            "y": 19
+            "y": 18
           },
           "required": false,
           "type": "load_audio"
@@ -105,12 +105,12 @@
           "input_id": "ctrl-node-13-image",
           "label": "Optional image",
           "layout": {
-            "h": 8,
+            "h": 6,
             "min_h": 6,
             "min_w": 6,
             "w": 7,
             "x": 0,
-            "y": 19
+            "y": 18
           },
           "required": false,
           "type": "load_image"
@@ -136,7 +136,7 @@
           "id": "ctrl-node-4-output_text",
           "label": "Result",
           "layout": {
-            "h": 25,
+            "h": 22,
             "min_h": 5,
             "min_w": 6,
             "w": 18,

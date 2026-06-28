@@ -151,7 +151,11 @@ class WorkflowLibraryService:
         summary = self.workflow_summary(package)
         model_summary = None
         try:
-            model_summary = self.model_availability_service.summarize(package)
+            model_summary = self._summarize_models(
+                package,
+                fast=True,
+                verify_hashes=False,
+            )
         except Exception as exc:
             self.log_store.add(
                 "warning",

@@ -51,7 +51,7 @@
           "input_id": "ctrl-node-107-text",
           "label": "Prompt",
           "layout": {
-            "h": 16,
+            "h": 14,
             "min_h": 4,
             "min_w": 5,
             "w": 11,
@@ -72,7 +72,7 @@
             "min_w": 6,
             "w": 11,
             "x": 0,
-            "y": 16
+            "y": 14
           },
           "required": false,
           "type": "load_image"
@@ -82,7 +82,7 @@
           "id": "ctrl-node-9-output_image",
           "label": "Result",
           "layout": {
-            "h": 23,
+            "h": 22,
             "min_h": 6,
             "min_w": 6,
             "w": 21,

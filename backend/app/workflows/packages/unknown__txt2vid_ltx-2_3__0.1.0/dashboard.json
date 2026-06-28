@@ -118,7 +118,7 @@
             "min_w": 6,
             "w": 12,
             "x": 0,
-            "y": 23
+            "y": 20
           },
           "required": false,
           "type": "slider"
@@ -142,7 +142,7 @@
             "min_w": 6,
             "w": 12,
             "x": 0,
-            "y": 15
+            "y": 12
           },
           "required": false,
           "type": "slider"
@@ -158,7 +158,7 @@
             "min_w": 6,
             "w": 12,
             "x": 0,
-            "y": 19
+            "y": 16
           },
           "required": false,
           "type": "slider"
@@ -168,7 +168,7 @@
           "id": "ctrl-node-75-output_video",
           "label": "Output video",
           "layout": {
-            "h": 25,
+            "h": 22,
             "min_h": 7,
             "min_w": 8,
             "w": 20,
@@ -189,7 +189,7 @@
           "description": "",
           "id": "group-1",
           "layout": {
-            "h": 15,
+            "h": 12,
             "min_h": 6,
             "min_w": 6,
             "w": 12,

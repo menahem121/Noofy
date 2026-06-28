@@ -109,7 +109,7 @@
           "input_id": "ctrl-node-13-image",
           "label": "Input image",
           "layout": {
-            "h": 11,
+            "h": 9,
             "min_h": 6,
             "min_w": 6,
             "w": 12,
@@ -146,7 +146,7 @@
             "min_w": 4,
             "w": 5,
             "x": 0,
-            "y": 23
+            "y": 20
           },
           "required": false,
           "type": "int_field"
@@ -162,7 +162,7 @@
             "min_w": 4,
             "w": 7,
             "x": 5,
-            "y": 23
+            "y": 20
           },
           "required": false,
           "type": "seed_widget"
@@ -172,7 +172,7 @@
           "id": "ctrl-node-9-output_image",
           "label": "Result",
           "layout": {
-            "h": 25,
+            "h": 22,
             "min_h": 6,
             "min_w": 6,
             "w": 20,
@@ -193,12 +193,12 @@
           "description": "",
           "id": "group-1",
           "layout": {
-            "h": 12,
+            "h": 11,
             "min_h": 6,
             "min_w": 6,
             "w": 12,
             "x": 0,
-            "y": 11
+            "y": 9
           },
           "title": "Prompt"
         }
