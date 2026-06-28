@@ -19,6 +19,7 @@ from app.runtime.dependencies.isolation import CapsuleLock, InstallStatus, Smoke
 from app.runtime.profiles import RuntimeProfileErrorCode, RuntimeProfileResolutionError, load_runtime_profile_catalog
 from app.runtime.storage.workspace_preparer import RuntimeWorkspacePreparer
 from app.runtime.storage.workspace_store import DependencyEnvManifestStore, RunnerWorkspaceManifestStore
+from app.source_policy import SourcePolicy
 
 
 class _FakeDependencyEnvInstaller:
@@ -103,6 +104,21 @@ def _dependency_lock_for_capsule(capsule: CapsuleLock) -> ResolvedDependencyLock
             resolver=ResolverMetadata(name="uv", version="0.9.0"),
             wheels=[],
         )
+    )
+
+
+def _community_source_policy(package_source_type: str) -> SourcePolicy:
+    return SourcePolicy(
+        trust_level="quarantined_community",
+        source_policy="explicit_opt_in_and_isolated_capsule_required",
+        package_source_type=package_source_type,
+        automatic_preparation_allowed=True,
+        allowed_source_origins=["explicit-metadata", "registry-locked"],
+        allowed_model_origins=["hashed-download", "huggingface.co", "user-local"],
+        model_source_trust="hashed",
+        community_preparation_opt_in_required=True,
+        community_preparation_opted_in=True,
+        trust_verification_status="not_required",
     )
 
 
@@ -537,6 +553,84 @@ def test_prepare_merges_core_lock_with_custom_node_dependency_lock(tmp_path: Pat
     assert installed_lock.lock_hash != base.runtime.dependency_lock_hash
     assert [wheel.name for wheel in installed_lock.wheels] == ["demo-package"]
     assert lock_store.exists(installed_lock.lock_hash)
+
+
+def test_prepare_ignores_stale_core_lock_source_policy_when_merging_custom_node_lock(
+    tmp_path: Path,
+) -> None:
+    policy = _community_source_policy("noofy_archive_import")
+    data = _capsule_lock().model_dump(mode="json")
+    data["workflow"]["trust_level"] = "quarantined_community"
+    data["workflow"]["source"] = "noofy_archive_import"
+    data["dependencies"]["install_policy"] = "isolated-community-index-build-v2"
+    data["trust"] = {"level": "quarantined_community", "publisher": "Noofy"}
+    data["source_policy"] = policy.model_dump(mode="json")
+    capsule = CapsuleLock.model_validate(data)
+    stale_core_lock = ResolvedDependencyLock(
+        lock_hash=capsule.runtime.dependency_lock_hash,
+        runtime_profile_id=capsule.runtime.runtime_profile_id,
+        runtime_profile_variant_id=capsule.runtime.runtime_profile_variant_id,
+        runtime_profile_manifest_hash=capsule.runtime.runtime_profile_manifest_hash,
+        install_policy_version=capsule.dependencies.install_policy,
+        source_policy=_community_source_policy("unknown"),
+        resolver=ResolverMetadata(name="noofy-managed-core", version="0.1.0"),
+        wheels=[],
+    )
+    custom_lock = ResolvedDependencyLock(
+        runtime_profile_id=capsule.runtime.runtime_profile_id,
+        runtime_profile_variant_id=capsule.runtime.runtime_profile_variant_id,
+        runtime_profile_manifest_hash=capsule.runtime.runtime_profile_manifest_hash,
+        install_policy_version=capsule.dependencies.install_policy,
+        resolver=ResolverMetadata(name="uv", version="0.9.0"),
+        wheels=[
+            ResolvedDependencyWheel(
+                name="Demo_Package",
+                version="1.0.0",
+                wheel_filename="demo-package-1.0.0-py3-none-any.whl",
+                sha256="sha256:" + ("a" * 64),
+                source_kind=DependencySourceKind.APPROVED_CACHE,
+                approved_cache_ref="demo-package-1.0.0-py3-none-any.whl",
+                platform_tags=["py3-none-any"],
+                relationship=DependencyRelationship.DIRECT,
+                requested_by=["node-a"],
+                resolver_name="uv",
+                resolver_version="0.9.0",
+            )
+        ],
+    )
+    source_files_dir = tmp_path / "source-files"
+    (source_files_dir / "custom_nodes" / "node-a").mkdir(parents=True)
+    (source_files_dir / "custom_nodes" / "node-a" / "requirements.txt").write_text(
+        "demo-package==1.0.0\n",
+        encoding="utf-8",
+    )
+
+    class FakeResolver:
+        def resolve(self, request) -> ResolvedDependencyLock:
+            return with_computed_lock_hash(
+                custom_lock.model_copy(update={"source_policy": request.source_policy})
+            )
+
+    installer = _FakeDependencyEnvInstaller()
+    lock_store = ResolvedDependencyLockStore(tmp_path / "dependency-locks")
+    lock_store.write(stale_core_lock)
+    preparer = RuntimeWorkspacePreparer(
+        dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
+        runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
+        dependency_env_installer=installer,
+        dependency_lock_store=lock_store,
+        dependency_lock_resolver=FakeResolver(),
+        custom_node_source_files_dir=source_files_dir,
+        dependency_transactions_dir=tmp_path / "transactions",
+        log_store=LogStore(),
+    )
+
+    prepared = preparer.prepare(capsule)
+
+    installed_lock = installer.requests[0].lock
+    assert installed_lock.source_policy == policy
+    assert installed_lock.lock_hash == prepared.dependency_env_manifest.dependency_lock_hash
+    assert [wheel.name for wheel in installed_lock.wheels] == ["demo-package"]
 
 
 def test_prepare_generates_candidate_dependency_lock_from_cached_non_bundled_source(tmp_path: Path) -> None:

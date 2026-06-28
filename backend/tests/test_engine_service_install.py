@@ -19,7 +19,10 @@ from app.engine.service import (
     EngineService,
     _workflow_runner_unavailable_result,
 )
-from app.runtime.runners.lifecycle_service import _smoke_execution_fixture_for_capsule
+from app.runtime.runners.lifecycle_service import (
+    _smoke_execution_fixture_for_capsule,
+    _workflow_source_files_dir,
+)
 from app.runtime.capsule_installer import CapsuleInstaller
 from app.runtime.install_state import InstallStateStore
 from app.runtime.dependencies.isolation import (
@@ -624,6 +627,30 @@ def test_smoke_execution_fixture_resolver_does_not_generate_default_for_custom_n
     )
 
     assert fixture is None
+
+
+def test_workflow_source_files_dir_accepts_bundled_package_root_custom_nodes(
+    tmp_path: Path,
+) -> None:
+    packages_dir = tmp_path / "packages"
+    capsule_payload = _runner_capsule_payload(runner_char="7")
+    _write_workflow_with_capsule(packages_dir, "runner_workflow", capsule_payload)
+    custom_node_dir = (
+        packages_dir / "runner_workflow" / "custom_nodes" / "custom-node-a"
+    )
+    custom_node_dir.mkdir(parents=True)
+    (custom_node_dir / "node.py").write_text(
+        "NODE_CLASS_MAPPINGS = {}\n",
+        encoding="utf-8",
+    )
+    loader = WorkflowPackageLoader(packages_dir)
+
+    source_dir = _workflow_source_files_dir(
+        "runner_workflow",
+        workflow_loader=loader,
+    )
+
+    assert source_dir == packages_dir / "runner_workflow"
 
 
 @pytest.mark.anyio

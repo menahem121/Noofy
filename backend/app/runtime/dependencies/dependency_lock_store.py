@@ -5,7 +5,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from app.runtime.dependencies.dependency_lock import ResolvedDependencyLock, resolved_dependency_lock_hash
+from app.runtime.dependencies.dependency_lock import (
+    ResolvedDependencyLock,
+    dependency_lock_source_policy_matches,
+    resolved_dependency_lock_hash,
+)
+from app.source_policy import SourcePolicy
 
 
 class ResolvedDependencyLockStore:
@@ -29,6 +34,11 @@ class ResolvedDependencyLockStore:
         )
         return self.root_dir / _safe_fingerprint(lock_hash) / f"dependency-lock.{runtime_identity}.json"
 
+    def disambiguated_path_for_lock(self, lock: ResolvedDependencyLock) -> Path:
+        base_path = self.path_for_lock(lock)
+        lock_identity = _safe_fingerprint(resolved_dependency_lock_hash(lock))
+        return base_path.with_name(f"{base_path.stem}.{lock_identity}.json")
+
     def exists(self, lock_hash: str) -> bool:
         return any(path.exists() for path in self._candidate_paths(lock_hash))
 
@@ -47,7 +57,9 @@ class ResolvedDependencyLockStore:
         runtime_profile_variant_id: str,
         runtime_profile_manifest_hash: str,
         install_policy_version: str,
+        source_policy: SourcePolicy | None = None,
     ) -> ResolvedDependencyLock | None:
+        no_policy_fallback: ResolvedDependencyLock | None = None
         for path in self._candidate_paths(lock_hash):
             if not path.exists():
                 continue
@@ -61,7 +73,19 @@ class ResolvedDependencyLockStore:
                 and lock.runtime_profile_manifest_hash == runtime_profile_manifest_hash
                 and lock.install_policy_version == install_policy_version
             ):
-                return lock
+                if source_policy is None:
+                    return lock
+                if dependency_lock_source_policy_matches(lock, source_policy):
+                    return lock
+                if (
+                    lock.source_policy is None
+                    and not lock.wheels
+                    and not lock.requirements
+                    and no_policy_fallback is None
+                ):
+                    no_policy_fallback = lock
+        if source_policy is not None:
+            return no_policy_fallback
         return None
 
     def write(self, lock: ResolvedDependencyLock) -> Path:
@@ -74,7 +98,13 @@ class ResolvedDependencyLockStore:
                 if path.exists():
                     existing = self._read_path(path)
                     if existing != lock:
-                        raise ValueError("Existing resolved dependency lock differs for hash.")
+                        path = self.disambiguated_path_for_lock(lock)
+                        if path.exists():
+                            existing = self._read_path(path)
+                            if existing != lock:
+                                raise ValueError("Existing resolved dependency lock differs for hash.")
+                            return path
+                        return self._write_path(path, lock)
                     return path
                 return self._write_path(path, lock)
             return path

@@ -477,7 +477,6 @@ def create_default_engine_service() -> EngineService:
             custom_node_source_files_dir_resolver=lambda workflow_id: _workflow_source_files_dir(
                 workflow_id,
                 workflow_loader=loader,
-                imported_package_store=imported_package_store,
             ),
             custom_node_source_cache_dir=paths.custom_node_cache_dir,
             dependency_transactions_dir=paths.install_transactions_dir,

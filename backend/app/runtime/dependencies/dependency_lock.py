@@ -550,6 +550,19 @@ def validate_dependency_lock_source_policy(
         )
 
 
+def dependency_lock_source_policy_matches(
+    lock: ResolvedDependencyLock,
+    expected_policy: SourcePolicy | None,
+) -> bool:
+    if expected_policy is None:
+        return True
+    if lock.source_policy is None:
+        return False
+    return _source_policy_identity(lock.source_policy) == _source_policy_identity(
+        expected_policy
+    )
+
+
 def inspect_dependency_marker_files(source_dir: Path) -> DependencyMarkerInspection:
     """Read standard dependency marker files as data without importing code."""
     declarations: list[DependencyDeclaration] = []

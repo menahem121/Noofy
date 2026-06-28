@@ -2438,20 +2438,20 @@ def _workflow_source_files_dir(
     workflow_id: str,
     *,
     workflow_loader: WorkflowPackageLoader,
-    imported_package_store: ImportedWorkflowPackageStore,
 ) -> Path | None:
     try:
-        package = workflow_loader.get_package(workflow_id)
+        _package, package_dir = workflow_loader.get_package_with_dir(workflow_id)
     except KeyError:
         return None
-    if package.import_metadata is None:
-        return None
-    try:
-        package_dir = imported_package_store.package_dir(package)
-    except NoofyImportError:
-        return None
+
     source_files_dir = package_dir / "source-files"
-    return source_files_dir if source_files_dir.exists() else None
+    if (source_files_dir / "custom_nodes").is_dir():
+        return source_files_dir
+    if (package_dir / "custom_nodes").is_dir():
+        return package_dir
+    if source_files_dir.exists():
+        return source_files_dir
+    return None
 
 
 def _smoke_execution_fixture_for_capsule(

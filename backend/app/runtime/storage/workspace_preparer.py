@@ -29,6 +29,7 @@ from app.runtime.dependencies.dependency_env import (
 from app.runtime.dependencies.dependency_lock import (
     ResolvedDependencyLock,
     core_dependency_lock_from_capsule,
+    dependency_lock_source_policy_matches,
     dependency_env_fingerprint_for_resolved_lock,
     merge_resolved_dependency_locks,
     resolved_dependency_lock_hash,
@@ -553,6 +554,7 @@ class RuntimeWorkspacePreparer:
             runtime_profile_variant_id=manifest.runtime_profile_variant_id,
             runtime_profile_manifest_hash=manifest.runtime_profile_manifest_hash,
             install_policy_version=manifest.install_policy_version,
+            source_policy=source_policy,
         )
         source_dirs = self._custom_node_dependency_source_dirs(workflow_id, None)
         if lock is None and self.dependency_lock_resolver is not None and source_dirs:
@@ -609,6 +611,7 @@ class RuntimeWorkspacePreparer:
         runtime_profile_variant_id: str | None = None,
         runtime_profile_manifest_hash: str | None = None,
         install_policy_version: str | None = None,
+        source_policy: SourcePolicy | None = None,
     ) -> ResolvedDependencyLock | None:
         if (
             runtime_profile_id is not None
@@ -624,15 +627,21 @@ class RuntimeWorkspacePreparer:
                 install_policy_version=install_policy_version,
             )
             lock = self.dependency_locks.get(cache_key)
-            if lock is not None:
+            if lock is not None and _dependency_lock_source_policy_compatible(
+                lock, source_policy
+            ):
                 return lock
             lock = self.dependency_locks.get(lock_hash)
-            if lock is not None and _dependency_lock_matches_runtime(
-                lock,
-                runtime_profile_id=runtime_profile_id,
-                runtime_profile_variant_id=runtime_profile_variant_id,
-                runtime_profile_manifest_hash=runtime_profile_manifest_hash,
-                install_policy_version=install_policy_version,
+            if (
+                lock is not None
+                and _dependency_lock_matches_runtime(
+                    lock,
+                    runtime_profile_id=runtime_profile_id,
+                    runtime_profile_variant_id=runtime_profile_variant_id,
+                    runtime_profile_manifest_hash=runtime_profile_manifest_hash,
+                    install_policy_version=install_policy_version,
+                )
+                and _dependency_lock_source_policy_compatible(lock, source_policy)
             ):
                 self.dependency_locks[cache_key] = lock
                 return lock
@@ -643,6 +652,7 @@ class RuntimeWorkspacePreparer:
                     runtime_profile_variant_id=runtime_profile_variant_id,
                     runtime_profile_manifest_hash=runtime_profile_manifest_hash,
                     install_policy_version=install_policy_version,
+                    source_policy=source_policy,
                 )
                 if lock is not None:
                     self.dependency_locks[cache_key] = lock
@@ -977,6 +987,7 @@ class RuntimeWorkspacePreparer:
                 runtime_profile_variant_id=manifest.runtime_profile_variant_id,
                 runtime_profile_manifest_hash=manifest.runtime_profile_manifest_hash,
                 install_policy_version=manifest.install_policy_version,
+                source_policy=source_policy,
             )
             custom_node_lock = self.dependency_lock_resolver.resolve(
                 DependencyResolutionRequest(
@@ -1012,6 +1023,7 @@ class RuntimeWorkspacePreparer:
                 runtime_profile_variant_id=manifest.runtime_profile_variant_id,
                 runtime_profile_manifest_hash=manifest.runtime_profile_manifest_hash,
                 install_policy_version=manifest.install_policy_version,
+                source_policy=source_policy,
             )
         if lock is None:
             return manifest
@@ -1325,6 +1337,17 @@ def _dependency_lock_matches_runtime(
         and lock.runtime_profile_manifest_hash == runtime_profile_manifest_hash
         and lock.install_policy_version == install_policy_version
     )
+
+
+def _dependency_lock_source_policy_compatible(
+    lock: ResolvedDependencyLock,
+    source_policy: SourcePolicy | None,
+) -> bool:
+    if source_policy is None:
+        return True
+    if lock.source_policy is None:
+        return not lock.wheels and not lock.requirements
+    return dependency_lock_source_policy_matches(lock, source_policy)
 
 
 def _uv_python_platform(os_name: str, architecture: str) -> str | None:
