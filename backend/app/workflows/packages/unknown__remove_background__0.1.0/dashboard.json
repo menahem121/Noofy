@@ -1,0 +1,118 @@
+{
+  "inputs": [
+    {
+      "binding": {
+        "input_name": "image",
+        "node_id": "2"
+      },
+      "control": "load_image",
+      "default": {
+        "asset_id": "input-defaults/5e28955043c3917b-greendog.png",
+        "content_type": "image/png",
+        "filename": "greenDog.png",
+        "kind": "image",
+        "sha256": "sha256:5e28955043c3917bcb749e55ed5b3e808b2d257428ea3755f58011c4d8d6bb98",
+        "size_bytes": 1444887,
+        "source": "package_asset"
+      },
+      "default_pinned": true,
+      "id": "ctrl-node-2-image",
+      "label": "Input image",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "model",
+        "node_id": "359"
+      },
+      "control": "select",
+      "default": "BiRefNet-HR",
+      "default_pinned": true,
+      "id": "ctrl-node-359-model",
+      "label": "Model",
+      "validation": {
+        "options": [
+          "BiRefNet-general",
+          "BiRefNet_512x512",
+          "BiRefNet-HR",
+          "BiRefNet-portrait",
+          "BiRefNet-matting",
+          "BiRefNet-HR-matting",
+          "BiRefNet_lite",
+          "BiRefNet_lite-2K",
+          "BiRefNet_dynamic",
+          "BiRefNet_lite-matting",
+          "BiRefNet_toonout"
+        ]
+      }
+    }
+  ],
+  "outputs": [
+    {
+      "id": "image",
+      "kind": "image",
+      "label": "Result",
+      "node_id": "370",
+      "type": "image"
+    }
+  ],
+  "sections": [
+    {
+      "controls": [
+        {
+          "description": "Choose an image from your computer.",
+          "id": "ctrl-node-2-image",
+          "input_id": "ctrl-node-2-image",
+          "label": "Input image",
+          "layout": {
+            "h": 12,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 10,
+            "x": 0,
+            "y": 7
+          },
+          "required": false,
+          "type": "load_image"
+        },
+        {
+          "description": "",
+          "id": "ctrl-node-359-model",
+          "input_id": "ctrl-node-359-model",
+          "label": "Model",
+          "layout": {
+            "h": 4,
+            "min_h": 3,
+            "min_w": 5,
+            "w": 10,
+            "x": 0,
+            "y": 19
+          },
+          "required": false,
+          "type": "select"
+        },
+        {
+          "description": "Generated image will appear here.",
+          "id": "ctrl-node-370-output_image",
+          "label": "Result",
+          "layout": {
+            "h": 24,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 22,
+            "x": 10,
+            "y": 2
+          },
+          "output_id": "image",
+          "required": false,
+          "type": "display_image"
+        }
+      ],
+      "groups": [],
+      "id": "main",
+      "title": "Main"
+    }
+  ],
+  "status": "configured",
+  "version": "0.1.0"
+}

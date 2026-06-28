@@ -1,0 +1,212 @@
+{
+  "inputs": [
+    {
+      "binding": {
+        "input_name": "image",
+        "node_id": "13"
+      },
+      "control": "load_image",
+      "default": {
+        "asset_id": "input-defaults/5e28955043c3917b-greendog.png",
+        "content_type": "image/png",
+        "filename": "greenDog.png",
+        "kind": "image",
+        "sha256": "sha256:5e28955043c3917bcb749e55ed5b3e808b2d257428ea3755f58011c4d8d6bb98",
+        "size_bytes": 1444887,
+        "source": "package_asset"
+      },
+      "default_pinned": true,
+      "id": "ctrl-node-13-image",
+      "label": "Input image",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "prompt",
+        "node_id": "22:4"
+      },
+      "control": "textarea",
+      "default": "the dog sleep lying on the floor",
+      "default_pinned": true,
+      "id": "ctrl-node-22:4-prompt",
+      "label": "Positive Prompt",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "prompt",
+        "node_id": "22:5"
+      },
+      "control": "textarea",
+      "default": "",
+      "default_pinned": true,
+      "id": "ctrl-node-22:5-prompt",
+      "label": "Negative Prompt",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "megapixels",
+        "node_id": "22:14"
+      },
+      "control": "int_field",
+      "default": 1,
+      "default_pinned": true,
+      "id": "ctrl-node-22:14-megapixels",
+      "label": "Megapixels",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "seed",
+        "node_id": "22:7"
+      },
+      "control": "seed_widget",
+      "default": 296272782664687,
+      "default_pinned": true,
+      "id": "ctrl-node-22:7-seed",
+      "label": "Variation ID",
+      "validation": {
+        "seed_mode": "randomize"
+      }
+    },
+    {
+      "binding": {
+        "input_name": "upscale_method",
+        "node_id": "22:14"
+      },
+      "control": "select",
+      "default": "nearest-exact",
+      "default_pinned": true,
+      "id": "ctrl-node-22:14-upscale_method",
+      "label": "Upscale method",
+      "validation": {
+        "options": [
+          "nearest-exact",
+          "bilinear",
+          "area",
+          "bicubic",
+          "lanczos"
+        ]
+      }
+    }
+  ],
+  "outputs": [
+    {
+      "id": "image",
+      "kind": "image",
+      "label": "Result",
+      "node_id": "9",
+      "type": "image"
+    }
+  ],
+  "sections": [
+    {
+      "controls": [
+        {
+          "description": "Choose an image from your computer.",
+          "id": "ctrl-node-13-image",
+          "input_id": "ctrl-node-13-image",
+          "label": "Input image",
+          "layout": {
+            "h": 11,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 12,
+            "x": 0,
+            "y": 0
+          },
+          "required": false,
+          "type": "load_image"
+        },
+        {
+          "description": "Describe what you want to create.",
+          "id": "ctrl-node-22:4-prompt",
+          "input_id": "ctrl-node-22:4-prompt",
+          "label": "Positive Prompt",
+          "required": false,
+          "type": "textarea"
+        },
+        {
+          "description": "Describe what you don't want to create.",
+          "id": "ctrl-node-22:5-prompt",
+          "input_id": "ctrl-node-22:5-prompt",
+          "label": "Negative Prompt",
+          "required": false,
+          "type": "textarea"
+        },
+        {
+          "description": "The input image will be be upscaled to X megapixels",
+          "id": "ctrl-node-22:14-megapixels",
+          "input_id": "ctrl-node-22:14-megapixels",
+          "label": "Megapixels",
+          "layout": {
+            "h": 4,
+            "min_h": 3,
+            "min_w": 4,
+            "w": 5,
+            "x": 0,
+            "y": 23
+          },
+          "required": false,
+          "type": "int_field"
+        },
+        {
+          "description": "Change the seed to get a different variation.",
+          "id": "ctrl-node-22:7-seed",
+          "input_id": "ctrl-node-22:7-seed",
+          "label": "Variation ID",
+          "layout": {
+            "h": 4,
+            "min_h": 3,
+            "min_w": 4,
+            "w": 7,
+            "x": 5,
+            "y": 23
+          },
+          "required": false,
+          "type": "seed_widget"
+        },
+        {
+          "description": "Generated image will appear here.",
+          "id": "ctrl-node-9-output_image",
+          "label": "Result",
+          "layout": {
+            "h": 25,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 20,
+            "x": 12,
+            "y": 2
+          },
+          "output_id": "image",
+          "required": false,
+          "type": "display_image"
+        }
+      ],
+      "groups": [
+        {
+          "control_ids": [
+            "ctrl-node-22:4-prompt",
+            "ctrl-node-22:5-prompt"
+          ],
+          "description": "",
+          "id": "group-1",
+          "layout": {
+            "h": 12,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 12,
+            "x": 0,
+            "y": 11
+          },
+          "title": "Prompt"
+        }
+      ],
+      "id": "main",
+      "title": "Main"
+    }
+  ],
+  "status": "configured",
+  "version": "0.1.0"
+}

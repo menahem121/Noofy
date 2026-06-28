@@ -1,0 +1,127 @@
+{
+  "custom_nodes": [],
+  "dependencies": {
+    "install_policy": "isolated-community-index-build-v2",
+    "lock_file": "community-runtime.lock"
+  },
+  "engine": {
+    "comfyui_version": "v0.25.0",
+    "core_source_hash": "sha256:ed3735102510df396ba3c7974a465f0ddb37faca32df678630ac470bf26ae37f",
+    "type": "comfyui"
+  },
+  "hardware_observations": {
+    "backend": "cuda",
+    "gpu_name": "cuda:0 NVIDIA L40S : cudaMallocAsync",
+    "observed_peak_ram_mb": 12810,
+    "observed_peak_vram_mb": 38454,
+    "tested_batch_size": 1
+  },
+  "models": [
+    {
+      "comfyui_folder": "checkpoints",
+      "filename": "ltx-2.3-22b-dev-fp8.safetensors",
+      "id": "checkpoints/ltx-2.3-22b-dev-fp8.safetensors",
+      "sha256": "sha256:28606c5b5a06ce56f896d4dfcb20f212739e07a68fbe48e53638188449d26450",
+      "size_bytes": 29145431166,
+      "source_urls": []
+    },
+    {
+      "comfyui_folder": "loras",
+      "filename": "ltx_2.3_22b_distilled_1.1_lora_dynamic_fro09_avg_rank_111_bf16.safetensors",
+      "id": "https://huggingface.co/Comfy-Org/ltx-2.3/resolve/main/split_files/loras/ltx_2.3_22b_distilled_1.1_lora_dynamic_fro09_avg_rank_111_bf16.safetensors",
+      "sha256": "sha256:31e0c0195fb841bf31af78e8b60858f489e87ddcea4a5239abc80943da65e3ac",
+      "size_bytes": 2741024390,
+      "source_urls": [
+        "https://huggingface.co/Comfy-Org/ltx-2.3/resolve/main/split_files/loras/ltx_2.3_22b_distilled_1.1_lora_dynamic_fro09_avg_rank_111_bf16.safetensors"
+      ]
+    },
+    {
+      "comfyui_folder": "latent_upscale_models",
+      "filename": "ltx-2.3-spatial-upscaler-x2-1.1.safetensors",
+      "id": "https://huggingface.co/Lightricks/LTX-2.3/resolve/main/ltx-2.3-spatial-upscaler-x2-1.1.safetensors",
+      "sha256": "sha256:5f416311fa8172b65af67530758964708d29a317b830d689a51143b7f91913ed",
+      "size_bytes": 995743560,
+      "source_urls": [
+        "https://huggingface.co/Lightricks/LTX-2.3/resolve/main/ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
+      ]
+    },
+    {
+      "comfyui_folder": "loras",
+      "filename": "gemma-3-12b-it-abliterated_lora_rank64_bf16.safetensors",
+      "id": "https://huggingface.co/Comfy-Org/ltx-2/resolve/main/split_files/loras/gemma-3-12b-it-abliterated_lora_rank64_bf16.safetensors",
+      "sha256": "sha256:87bcabeac9bec9f374232b5122d6511c2b2112d479e50176149e944b3712eb4a",
+      "size_bytes": 628203616,
+      "source_urls": [
+        "https://huggingface.co/Comfy-Org/ltx-2/resolve/main/split_files/loras/gemma-3-12b-it-abliterated_lora_rank64_bf16.safetensors"
+      ]
+    },
+    {
+      "comfyui_folder": "text_encoders",
+      "filename": "gemma_3_12B_it_fp4_mixed.safetensors",
+      "id": "https://huggingface.co/Comfy-Org/ltx-2/resolve/main/split_files/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors",
+      "sha256": "sha256:aaca463d11e6d8d2a4bdb0d6299214c15ef78a3f73e0ef8113d5a9d0219b3f6d",
+      "size_bytes": 9447702218,
+      "source_urls": [
+        "https://huggingface.co/Comfy-Org/ltx-2/resolve/main/split_files/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors"
+      ]
+    }
+  ],
+  "runtime": {
+    "architecture": "x64",
+    "attention_backend": "auto",
+    "capsule_fingerprint": "sha256:9dee27851c54b9e20bc09b1f96c9dd50ee3c34f381d3eef866c5262e7ee951d4",
+    "dependency_env_fingerprint": "sha256:7d96a87e31f9e296b1008edc2a9dff76c0b0abb00078936f60557e27c5f0f2c2",
+    "dependency_lock_hash": "sha256:d4619fe9e961cfc7e044fba7f8acce276bb0c4a43848a89dad1430a52dcd8986",
+    "fingerprint_schema_version": "0.2.0",
+    "gpu_backend": "cuda",
+    "noofy_environment": {},
+    "os": "linux",
+    "precision_policy": "auto",
+    "preview_method": "auto",
+    "preview_size": 512,
+    "python_build_id": "cpython-3.13-noofy-v1",
+    "python_version": "3.13",
+    "runner_fingerprint": "sha256:27a79cdf68682797a9f5f44c6c20e4e2673d249976eafbed6102c3bc27eefdb2",
+    "runner_workspace_hash": "sha256:27a79cdf68682797a9f5f44c6c20e4e2673d249976eafbed6102c3bc27eefdb2",
+    "runtime_profile_catalog_version": "0.1.0",
+    "runtime_profile_id": "noofy-comfyui-v1-default",
+    "runtime_profile_manifest_hash": "sha256:fcb7d601f610529d2d0e85a94f307f746b9b1c48d5b44cbc7203adbeaabd1897",
+    "runtime_profile_variant_id": "linux-x64-cuda130",
+    "vram_mode": "auto"
+  },
+  "schema_version": "0.1.0",
+  "source_policy": {
+    "allowed_model_origins": [
+      "hashed-download",
+      "huggingface.co",
+      "user-local"
+    ],
+    "allowed_registry_origins": [],
+    "allowed_source_origins": [
+      "explicit-metadata",
+      "registry-locked"
+    ],
+    "automatic_preparation_allowed": true,
+    "community_preparation_opt_in_required": true,
+    "community_preparation_opted_in": true,
+    "model_source_trust": "hashed",
+    "package_source_type": "noofy_archive_import",
+    "policy_status": "active",
+    "policy_version": "phase6-local-0.1",
+    "source_policy": "explicit_opt_in_and_isolated_capsule_required",
+    "trust_level": "quarantined_community",
+    "trust_verification_status": "not_required"
+  },
+  "trust": {
+    "level": "quarantined_community",
+    "publisher": "unknown",
+    "signatures": []
+  },
+  "workflow": {
+    "package_id": "txt2vid_ltx-2_3",
+    "publisher_id": "unknown",
+    "source": "noofy_archive_import",
+    "trust_level": "quarantined_community",
+    "version": "0.1.0"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "asset_id": "input-defaults/b665eb01c48d5927-greendog2048x2048.png",
+  "content_type": "image/png",
+  "filename": "GreenDog2048x2048.png",
+  "kind": "image",
+  "sha256": "sha256:b665eb01c48d59278e7ecd2e7ab6f552ec58dcf8ff93b93b371b215e26c6673a",
+  "size_bytes": 5779967,
+  "source": "package_asset"
+}

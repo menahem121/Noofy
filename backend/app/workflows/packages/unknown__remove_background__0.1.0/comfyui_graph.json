@@ -1,0 +1,63 @@
+{
+  "2": {
+    "_meta": {
+      "title": "Load Image"
+    },
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "__noofy_runtime_image_input_required__"
+    },
+    "is_changed": [
+      "5e28955043c3917bcb749e55ed5b3e808b2d257428ea3755f58011c4d8d6bb98"
+    ]
+  },
+  "359": {
+    "_meta": {
+      "title": "BiRefNet Remove Background (RMBG)"
+    },
+    "class_type": "BiRefNetRMBG",
+    "inputs": {
+      "background": "Alpha",
+      "background_color": "#222222",
+      "image": [
+        "2",
+        0
+      ],
+      "invert_output": false,
+      "mask_blur": 0,
+      "mask_offset": 0,
+      "model": "BiRefNet-HR",
+      "refine_foreground": false
+    }
+  },
+  "368": {
+    "_meta": {
+      "title": "Crop To Object (RMBG) \ud83d\uddbc\ufe0f\ud83c\udfad"
+    },
+    "class_type": "AILab_CropObject",
+    "inputs": {
+      "image": [
+        "359",
+        0
+      ],
+      "mask": [
+        "359",
+        1
+      ],
+      "padding": 0
+    }
+  },
+  "370": {
+    "_meta": {
+      "title": "Save Image"
+    },
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": [
+        "368",
+        0
+      ]
+    }
+  }
+}

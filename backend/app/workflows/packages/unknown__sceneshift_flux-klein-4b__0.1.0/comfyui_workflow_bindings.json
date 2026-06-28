@@ -1,0 +1,78 @@
+{
+  "nodes": {
+    "123": {
+      "cfg": 3,
+      "control_after_generate": 1,
+      "denoise": 6,
+      "sampler_name": 4,
+      "scheduler": 5,
+      "seed": 0,
+      "steps": 2
+    },
+    "146": {
+      "crop": 4,
+      "height": 1,
+      "keep_proportions": 2,
+      "upscale_method": 3,
+      "width": 0
+    },
+    "170": {
+      "resize_source": 2,
+      "x": 0,
+      "y": 1
+    },
+    "184": {
+      "filename_prefix": 0
+    },
+    "359": {
+      "background": 5,
+      "background_color": 6,
+      "invert_output": 3,
+      "mask_blur": 1,
+      "mask_offset": 2,
+      "model": 0,
+      "refine_foreground": 4
+    },
+    "390": {
+      "blur_radius": 4,
+      "decay_factor": 6,
+      "expand": 0,
+      "fill_holes": 7,
+      "flip_input": 3,
+      "incremental_expandrate": 1,
+      "lerp_alpha": 5,
+      "tapered_corners": 2
+    },
+    "393": {
+      "vae_name": 0
+    },
+    "394": {
+      "unet_name": 0,
+      "weight_dtype": 1
+    },
+    "395": {
+      "clip_name": 0,
+      "device": 2,
+      "type": 1
+    },
+    "396": {
+      "text": 0
+    },
+    "397": {
+      "megapixels": 1,
+      "resolution_steps": 2,
+      "upscale_method": 0
+    },
+    "398": {
+      "$$node-text-preview": 0
+    },
+    "400": {
+      "guidance": 0
+    },
+    "401": {
+      "image": 0,
+      "upload": 1
+    }
+  },
+  "schema_version": "0.1.0"
+}

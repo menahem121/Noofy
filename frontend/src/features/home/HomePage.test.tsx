@@ -419,10 +419,10 @@ describe("HomePage", () => {
         return Promise.resolve(
           jsonResponse([
             {
-              id: "text_to_image_v0",
-              name: "Text to Image",
+              id: "medium_workflow",
+              name: "Medium Workflow",
               version: "0.1.0",
-              description: "Milestone 1 text-to-image workflow package.",
+              description: "May need more memory than usual.",
               trust_level: "noofy_verified",
               hardware_warning: mediumHardwareWarning,
               trust: {
@@ -466,8 +466,10 @@ describe("HomePage", () => {
     expect((await screen.findAllByText("Ready")).length).toBeGreaterThan(0);
     expect(screen.getAllByRole("heading", { name: "Text to Image" }).length).toBeGreaterThan(0);
     expect(screen.getByText("2 built-in workflows available.")).toBeInTheDocument();
-    expect(screen.getAllByText("Installed").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Noofy Verified")).toHaveLength(2);
+    expect(screen.queryByText("Installed")).not.toBeInTheDocument();
+    expect(screen.queryByText("Noofy Verified")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Run Medium Workflow" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Run Too Large Workflow" })).toBeInTheDocument();
     expect(screen.getByText("May be heavy")).toHaveAttribute(
       "title",
       "This workflow may run slowly or fail on this machine, depending on settings and available memory. You can still try it.",
@@ -553,7 +555,7 @@ describe("HomePage", () => {
       onConfigureDashboard,
     });
 
-    expect(await screen.findByText("Configure")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Configure dashboard for Text to Image" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Configure dashboard for Text to Image" }));
     expect(onConfigureDashboard).toHaveBeenCalledWith("setup_workflow", "Setup Workflow");
     expect(onOpenWorkflow).not.toHaveBeenCalled();
@@ -1097,7 +1099,27 @@ describe("HomePage", () => {
     expect(screen.queryByRole("menuitem", { name: "Remove workflow" })).not.toBeInTheDocument();
   });
 
-  it("groups native Text to Image and Image to Image variants behind Home page model selectors", async () => {
+  it("lists bundled default workflow groups with the requested default choices", async () => {
+    const builtInWorkflow = (
+      id: string,
+      name: string,
+      category: string,
+      description = "Bundled workflow.",
+    ) => ({
+      id,
+      name,
+      version: "0.1.0",
+      description,
+      category,
+      trust_level: "noofy_verified",
+      source_label: "Native Noofy",
+      status: "installed",
+      status_label: "Installed",
+      can_remove: false,
+      can_export_noofy: true,
+      can_export_comfyui_json: true,
+    });
+
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
 
@@ -1106,76 +1128,94 @@ describe("HomePage", () => {
       if (url.endsWith("/api/workflows")) {
         return Promise.resolve(
           jsonResponse([
-            {
-              id: "native_txt_sdxl",
-              name: "Text to Image \u2014 SDXL",
-              version: "1.0.0",
-              description: "Native SDXL generation.",
-              category: "Txt2img",
-              trust_level: "noofy_verified",
-              source_label: "Native Noofy",
-              status: "installed",
-              status_label: "Installed",
-              can_remove: false,
-              can_export_noofy: true,
-              can_export_comfyui_json: true,
-            },
-            {
-              id: "native_txt_flux",
-              name: "Text to Image \u2014 Flux",
-              version: "1.0.0",
-              description: "Native Flux generation.",
-              category: "Txt2img",
-              trust_level: "noofy_verified",
-              source_label: "Native Noofy",
-              status: "installed",
-              status_label: "Installed",
-              can_remove: false,
-              can_export_noofy: true,
-              can_export_comfyui_json: true,
-            },
-            {
-              id: "native_img_sdxl",
-              name: "Image to Image \u2014 SDXL",
-              version: "1.0.0",
-              description: "Native SDXL image guidance.",
-              category: "Img2img",
-              trust_level: "noofy_verified",
-              source_label: "Native Noofy",
-              status: "installed",
-              status_label: "Installed",
-              can_remove: false,
-              can_export_noofy: true,
-              can_export_comfyui_json: true,
-            },
-            {
-              id: "native_img_flux",
-              name: "Image to Image \u2014 Flux",
-              version: "1.0.0",
-              description: "Native Flux image guidance.",
-              category: "Img2img",
-              trust_level: "noofy_verified",
-              source_label: "Native Noofy",
-              status: "installed",
-              status_label: "Installed",
-              can_remove: false,
-              can_export_noofy: true,
-              can_export_comfyui_json: true,
-            },
-            {
-              id: "community_txt",
-              name: "Text to Image \u2014 Community",
-              version: "1.0.0",
-              description: "Imported community generation.",
-              category: "Txt2img",
-              trust_level: "quarantined_community",
-              source_label: "Imported",
-              status: "imported",
-              status_label: "Imported",
-              can_remove: true,
-              can_export_noofy: true,
-              can_export_comfyui_json: true,
-            },
+            builtInWorkflow("text_to_image_v0", "Text to Image", "Txt2img"),
+            builtInWorkflow(
+              "unknown__txt2img_anima__0.1.0",
+              "txt2img_Anima",
+              "Txt2img",
+            ),
+            builtInWorkflow(
+              "unknown__txt2img_flux-klein-4b-turbo__0.1.0",
+              "txt2img_flux-klein-4b-turbo",
+              "Txt2img",
+            ),
+            builtInWorkflow(
+              "unknown__img2img_anima__0.1.0",
+              "img2img_Anima",
+              "Img2img",
+            ),
+            builtInWorkflow(
+              "unknown__img2img_flux-klein-4b-turbo__0.1.0",
+              "img2img_flux-klein-4b-turbo",
+              "Img2img",
+            ),
+            builtInWorkflow(
+              "unknown__hiresfix_flux-klein-4b.noofy__0.1.0",
+              "HiresFix_flux-klein-4b.noofy",
+              "Upscaling",
+            ),
+            builtInWorkflow("unknown__upscalex2__0.1.0", "upscaleX2", "Upscaling"),
+            builtInWorkflow("unknown__upscalex4__0.1.0", "upscaleX4", "Upscaling"),
+            builtInWorkflow(
+              "unknown__remove_background__0.1.0",
+              "Remove_background",
+              "Background Removal",
+            ),
+            builtInWorkflow(
+              "unknown__outpainting_flux-klein-4b-turbo__0.1.0",
+              "outpainting_flux-klein-4b-turbo",
+              "Outpainting",
+            ),
+            builtInWorkflow(
+              "unknown__outpainting_flux-klein-9b__0.1.0",
+              "outpainting_flux-klein-9b",
+              "Outpainting",
+            ),
+            builtInWorkflow(
+              "unknown__inpainting_flux-klein-4b-turbo__0.1.0",
+              "inpainting_flux-klein-4b-turbo",
+              "Inpainting",
+            ),
+            builtInWorkflow(
+              "unknown__sceneshift_flux-klein-4b__0.1.0",
+              "sceneshift_flux-klein-4b",
+              "Background Replacement",
+            ),
+            builtInWorkflow(
+              "unknown__img2threed_3d-triposplat__0.1.0",
+              "img2threeD_3D-triposplat",
+              "imgTo3D",
+            ),
+            builtInWorkflow(
+              "unknown__img2threed_3d-hunyuan3d-v2.1__0.1.0",
+              "img2threeD_3d-hunyuan3d",
+              "imgTo3D",
+            ),
+            builtInWorkflow(
+              "unknown__txt2audio_moss-tts__0.1.0",
+              "txt2audio_MOSS-TTS",
+              "txt2audio",
+            ),
+            builtInWorkflow(
+              "unknown__txt2vid_ltx-2_3__0.1.0",
+              "txt2vid_LTX-2_3",
+              "txt2vid",
+            ),
+            builtInWorkflow(
+              "unknown__txt2vid_wan2_2_14b__0.1.0",
+              "txt2vid_wan2_2_14B",
+              "txt2vid",
+            ),
+            builtInWorkflow(
+              "unknown__txt2txt_gemma4-e4b-it-v2__0.1.0",
+              "txt2txt_gemma4-e4b-it",
+              "txt2txt",
+            ),
+            builtInWorkflow(
+              "unknown__img2vid_wan2_2_14b__0.1.0",
+              "img2vid_wan2_2_14B",
+              "img2vid",
+            ),
           ]),
         );
       }
@@ -1185,25 +1225,60 @@ describe("HomePage", () => {
 
     renderHomePage();
 
-    const textSelector = await screen.findByLabelText("Text to Image model workflow");
-    const imageSelector = screen.getByLabelText("Image to Image model workflow");
+    await screen.findByRole("heading", { name: "Text to Image" });
 
-    expect(screen.queryByRole("heading", { name: "Text to Image \u2014 SDXL" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "Text to Image \u2014 Flux" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "Text to Image \u2014 Community" })).not.toBeInTheDocument();
-    expect(textSelector).toHaveValue("native_txt_sdxl");
-    expect(within(textSelector).getByRole("option", { name: "Flux" })).toBeInTheDocument();
-    expect(imageSelector).toHaveValue("native_img_sdxl");
-    expect(within(imageSelector).getByRole("option", { name: "Flux" })).toBeInTheDocument();
+    for (const title of [
+      "Text to Image",
+      "Image to Image",
+      "Enhance Image",
+      "Upscale Image",
+      "Remove Background",
+      "Outpainting",
+      "Inpainting",
+      "Replace Background",
+      "Image to 3D",
+      "Text to Audio",
+      "Text to Video",
+      "Text to Text",
+      "Image to Video",
+    ]) {
+      expect(screen.getByRole("heading", { name: title })).toBeInTheDocument();
+    }
 
-    fireEvent.change(textSelector, { target: { value: "native_txt_flux" } });
-    const selectedTextSelector = screen.getByLabelText("Text to Image model workflow");
-    expect(selectedTextSelector).toHaveValue("native_txt_flux");
+    expect(screen.queryByRole("heading", { name: "Erase Object" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Text to 3D" })).not.toBeInTheDocument();
+
+    expect(screen.getByLabelText("Text to Image workflow choice")).toHaveValue(
+      "unknown__txt2img_flux-klein-4b-turbo__0.1.0",
+    );
+    expect(screen.getByLabelText("Image to Image workflow choice")).toHaveValue(
+      "unknown__img2img_flux-klein-4b-turbo__0.1.0",
+    );
+    expect(screen.queryByLabelText("Enhance Image workflow choice")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Enhance Image workflow")).toHaveTextContent("HiresFix Flux Klein 4B");
+    expect(screen.getByLabelText("Upscale Image workflow choice")).toHaveValue(
+      "unknown__upscalex2__0.1.0",
+    );
+    expect(screen.getByLabelText("Image to 3D workflow choice")).toHaveValue(
+      "unknown__img2threed_3d-hunyuan3d-v2.1__0.1.0",
+    );
+    expect(screen.queryByLabelText("Inpainting workflow choice")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Inpainting workflow")).toHaveTextContent("Flux Klein 4B turbo");
+    expect(screen.getByLabelText("Text to Video workflow choice")).toHaveValue(
+      "unknown__txt2vid_wan2_2_14b__0.1.0",
+    );
+
+    const textSelector = screen.getByLabelText("Text to Image workflow choice");
+    expect(within(textSelector).queryByRole("option", { name: "Text to Image" })).not.toBeInTheDocument();
+
+    fireEvent.change(textSelector, { target: { value: "unknown__txt2img_anima__0.1.0" } });
+    const selectedTextSelector = screen.getByLabelText("Text to Image workflow choice");
+    expect(selectedTextSelector).toHaveValue("unknown__txt2img_anima__0.1.0");
     const textCard = selectedTextSelector.closest("article");
     expect(textCard).not.toBeNull();
-    fireEvent.click(within(textCard as HTMLElement).getByRole("button", { name: "Open Text to Image" }));
+    fireEvent.click(within(textCard as HTMLElement).getByRole("button", { name: "Run Text to Image" }));
 
-    expect(onOpenWorkflow).toHaveBeenCalledWith("native_txt_flux");
+    expect(onOpenWorkflow).toHaveBeenCalledWith("unknown__txt2img_anima__0.1.0");
   });
 
   it("shows starter content and a clear status when the backend is unavailable", async () => {
@@ -1214,7 +1289,7 @@ describe("HomePage", () => {
     expect(await screen.findByText("Noofy is reconnecting")).toBeInTheDocument();
     expect(screen.getAllByText("Offline")).toHaveLength(1);
     expect(screen.getAllByRole("heading", { name: "Text to Image" }).length).toBeGreaterThan(0);
-    expect(screen.getByText("Reconnect")).toBeInTheDocument();
+    expect(screen.getAllByText("Planned").length).toBeGreaterThan(0);
   });
 
   it("keeps Ready status visible without putting imported cached workflows in Built-in Workflows", async () => {

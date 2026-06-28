@@ -1,0 +1,18 @@
+{
+  "nodes": {
+    "46": {
+      "filename_prefix": 0
+    },
+    "60": {
+      "cfg": 2,
+      "clip_name": 5,
+      "denoise": 7,
+      "seed": 3,
+      "steps": 1,
+      "text": 0,
+      "unet_name": 4,
+      "vae_name": 6
+    }
+  },
+  "schema_version": "0.1.0"
+}

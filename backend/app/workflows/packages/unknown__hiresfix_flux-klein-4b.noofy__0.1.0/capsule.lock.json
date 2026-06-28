@@ -1,0 +1,103 @@
+{
+  "custom_nodes": [],
+  "dependencies": {
+    "install_policy": "isolated-community-index-build-v2",
+    "lock_file": "community-runtime.lock"
+  },
+  "engine": {
+    "comfyui_version": "v0.25.0",
+    "core_source_hash": "sha256:ed3735102510df396ba3c7974a465f0ddb37faca32df678630ac470bf26ae37f",
+    "type": "comfyui"
+  },
+  "hardware_observations": {
+    "backend": "cuda",
+    "gpu_name": "cuda:0 NVIDIA A10G : cudaMallocAsync",
+    "observed_peak_ram_mb": 9640,
+    "observed_peak_vram_mb": 13326,
+    "tested_batch_size": 1
+  },
+  "models": [
+    {
+      "comfyui_folder": "diffusion_models",
+      "filename": "flux-2-klein-4b-fp8.safetensors",
+      "id": "diffusion_models/flux-2-klein-4b-fp8.safetensors",
+      "sha256": "sha256:97ed34fe0567e436200f2faee3939b88f2b5d99f8af2a4dc16532c4245c0ccb6",
+      "size_bytes": 4070624520,
+      "source_urls": []
+    },
+    {
+      "comfyui_folder": "text_encoders",
+      "filename": "qwen_3_4b.safetensors",
+      "id": "text_encoders/qwen_3_4b.safetensors",
+      "sha256": "sha256:6c671498573ac2f7a5501502ccce8d2b08ea6ca2f661c458e708f36b36edfc5a",
+      "size_bytes": 8044982048,
+      "source_urls": []
+    },
+    {
+      "comfyui_folder": "vae",
+      "filename": "flux2-vae.safetensors",
+      "id": "vae/flux2-vae.safetensors",
+      "sha256": "sha256:d64f3a68e1cc4f9f4e29b6e0da38a0204fe9a49f2d4053f0ec1fa1ca02f9c4b5",
+      "size_bytes": 336213556,
+      "source_urls": []
+    }
+  ],
+  "runtime": {
+    "architecture": "x64",
+    "attention_backend": "auto",
+    "capsule_fingerprint": "sha256:4924490755a09d3d9d554f8720528f5cecd627ea33d0f4c08f8b916380094ead",
+    "dependency_env_fingerprint": "sha256:7d96a87e31f9e296b1008edc2a9dff76c0b0abb00078936f60557e27c5f0f2c2",
+    "dependency_lock_hash": "sha256:d4619fe9e961cfc7e044fba7f8acce276bb0c4a43848a89dad1430a52dcd8986",
+    "fingerprint_schema_version": "0.2.0",
+    "gpu_backend": "cuda",
+    "noofy_environment": {},
+    "os": "linux",
+    "precision_policy": "auto",
+    "preview_method": "auto",
+    "preview_size": 512,
+    "python_build_id": "cpython-3.13-noofy-v1",
+    "python_version": "3.13",
+    "runner_fingerprint": "sha256:3bacc71e64e24121cc9495e8576b211edd7de8caa8f4a077cf5c78ea4f8be814",
+    "runner_workspace_hash": "sha256:3bacc71e64e24121cc9495e8576b211edd7de8caa8f4a077cf5c78ea4f8be814",
+    "runtime_profile_catalog_version": "0.1.0",
+    "runtime_profile_id": "noofy-comfyui-v1-default",
+    "runtime_profile_manifest_hash": "sha256:fcb7d601f610529d2d0e85a94f307f746b9b1c48d5b44cbc7203adbeaabd1897",
+    "runtime_profile_variant_id": "linux-x64-cuda130",
+    "vram_mode": "auto"
+  },
+  "schema_version": "0.1.0",
+  "source_policy": {
+    "allowed_model_origins": [
+      "hashed-download",
+      "huggingface.co",
+      "user-local"
+    ],
+    "allowed_registry_origins": [],
+    "allowed_source_origins": [
+      "explicit-metadata",
+      "registry-locked"
+    ],
+    "automatic_preparation_allowed": true,
+    "community_preparation_opt_in_required": true,
+    "community_preparation_opted_in": true,
+    "model_source_trust": "hashed",
+    "package_source_type": "noofy_archive_import",
+    "policy_status": "active",
+    "policy_version": "phase6-local-0.1",
+    "source_policy": "explicit_opt_in_and_isolated_capsule_required",
+    "trust_level": "quarantined_community",
+    "trust_verification_status": "not_required"
+  },
+  "trust": {
+    "level": "quarantined_community",
+    "publisher": "unknown",
+    "signatures": []
+  },
+  "workflow": {
+    "package_id": "hiresfix_flux-klein-4b.noofy",
+    "publisher_id": "unknown",
+    "source": "noofy_archive_import",
+    "trust_level": "quarantined_community",
+    "version": "0.1.0"
+  }
+}

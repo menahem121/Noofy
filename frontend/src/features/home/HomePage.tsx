@@ -110,7 +110,7 @@ function workflowCardsFromBackend(workflows: WorkflowSummary[]): WorkflowCard[] 
       id: workflow.id,
       title: workflowDisplayName(workflow),
       description: friendlyDescription(workflow),
-      category: workflow.trust_level === "quarantined_community" ? "Imported" : "Installed",
+      category: workflow.trust_level === "quarantined_community" ? "Imported" : workflow.category ?? "Workflow",
       status,
       statusLabel:
         status === "needs_input_setup"
@@ -169,59 +169,149 @@ function formatOpenedAt(value: string | null | undefined) {
   return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" }).format(opened);
 }
 
-type NativeHomeWorkflowKind = "text_to_image" | "image_to_image";
-
 interface NativeHomeWorkflowGroup {
-  id: NativeHomeWorkflowKind;
-  title: "Text to Image" | "Image to Image";
+  id: string;
+  title: string;
   description: string;
+  category: string;
+  defaultWorkflowId?: string;
+  matches: (workflow: WorkflowSummary) => boolean;
 }
 
-const nativeHomeWorkflowGroups: Record<NativeHomeWorkflowKind, NativeHomeWorkflowGroup> = {
-  text_to_image: {
+const nativeHomeWorkflowGroups: NativeHomeWorkflowGroup[] = [
+  {
     id: "text_to_image",
     title: "Text to Image",
-    description: "Generate new images from a simple text prompt.",
+    description: "Generate new images from a simple prompt.",
+    category: "Image Generation",
+    defaultWorkflowId: "unknown__txt2img_flux-klein-4b-turbo__0.1.0",
+    matches: (workflow) => workflowCategoryKey(workflow) === "txt2img",
   },
-  image_to_image: {
+  {
     id: "image_to_image",
     title: "Image to Image",
     description: "Use a reference image to guide a new generation.",
+    category: "Image Generation",
+    defaultWorkflowId: "unknown__img2img_flux-klein-4b-turbo__0.1.0",
+    matches: (workflow) => workflowCategoryKey(workflow) === "img2img",
   },
-};
+  {
+    id: "enhance_image",
+    title: "Enhance Image",
+    description: "Increase clarity and detail with the HiresFix workflow.",
+    category: "Image Editing",
+    defaultWorkflowId: "unknown__hiresfix_flux-klein-4b.noofy__0.1.0",
+    matches: (workflow) => workflowNameKey(workflow).includes("hiresfix"),
+  },
+  {
+    id: "upscale",
+    title: "Upscale Image",
+    description: "Increase image size while preserving important detail.",
+    category: "Image Editing",
+    defaultWorkflowId: "unknown__upscalex2__0.1.0",
+    matches: (workflow) => workflowCategoryKey(workflow) === "upscaling" && !workflowNameKey(workflow).includes("hiresfix"),
+  },
+  {
+    id: "remove_background",
+    title: "Remove Background",
+    description: "Remove the background from an image automatically.",
+    category: "Image Editing",
+    matches: (workflow) => workflowCategoryKey(workflow) === "backgroundremoval",
+  },
+  {
+    id: "outpainting",
+    title: "Outpainting",
+    description: "Extend an image beyond its original frame.",
+    category: "Image Editing",
+    defaultWorkflowId: "unknown__outpainting_flux-klein-4b-turbo__0.1.0",
+    matches: (workflow) => workflowCategoryKey(workflow) === "outpainting",
+  },
+  {
+    id: "inpainting",
+    title: "Inpainting",
+    description: "Edit selected parts of an image while keeping the rest intact.",
+    category: "Image Editing",
+    defaultWorkflowId: "unknown__inpainting_flux-klein-4b-turbo__0.1.0",
+    matches: (workflow) => workflowCategoryKey(workflow) === "inpainting",
+  },
+  {
+    id: "replace_background",
+    title: "Replace Background",
+    description: "Keep the subject and create a new background scene.",
+    category: "Image Editing",
+    matches: (workflow) => workflowCategoryKey(workflow) === "backgroundreplacement",
+  },
+  {
+    id: "image_to_3d",
+    title: "Image to 3D",
+    description: "Turn a reference image into a 3D asset.",
+    category: "3D Generation",
+    defaultWorkflowId: "unknown__img2threed_3d-hunyuan3d-v2.1__0.1.0",
+    matches: (workflow) => workflowCategoryKey(workflow) === "imgto3d",
+  },
+  {
+    id: "text_to_audio",
+    title: "Text to Audio",
+    description: "Create audio from written text.",
+    category: "Audio Generation",
+    matches: (workflow) => workflowCategoryKey(workflow) === "txt2audio",
+  },
+  {
+    id: "text_to_video",
+    title: "Text to Video",
+    description: "Generate a video from a written prompt.",
+    category: "Video Generation",
+    defaultWorkflowId: "unknown__txt2vid_wan2_2_14b__0.1.0",
+    matches: (workflow) => workflowCategoryKey(workflow) === "txt2vid",
+  },
+  {
+    id: "text_to_text",
+    title: "Text to Text",
+    description: "Generate or transform text with a local language workflow.",
+    category: "Text Generation",
+    matches: (workflow) => workflowCategoryKey(workflow) === "txt2txt",
+  },
+  {
+    id: "image_to_video",
+    title: "Image to Video",
+    description: "Animate a still image into a short video.",
+    category: "Video Generation",
+    matches: (workflow) => workflowCategoryKey(workflow) === "img2vid",
+  },
+];
 
 function homeWorkflowCardsFromBackend(
   workflows: WorkflowSummary[],
   selectedVariants: Record<string, string | undefined>,
 ): WorkflowCard[] {
-  const grouped = new Map<NativeHomeWorkflowKind, WorkflowSummary[]>();
+  const grouped = new Map<string, WorkflowSummary[]>();
   const ungrouped: WorkflowSummary[] = [];
 
   for (const workflow of workflows) {
     if (!isNativeBundledWorkflow(workflow)) continue;
-    const groupKind = nativeHomeWorkflowKind(workflow);
-    if (groupKind) {
-      grouped.set(groupKind, [...(grouped.get(groupKind) ?? []), workflow]);
+    const group = nativeHomeWorkflowGroups.find((candidate) => candidate.matches(workflow));
+    if (group) {
+      grouped.set(group.id, [...(grouped.get(group.id) ?? []), workflow]);
     } else {
       ungrouped.push(workflow);
     }
   }
 
   const cards: WorkflowCard[] = [];
-  for (const kind of Object.keys(nativeHomeWorkflowGroups) as NativeHomeWorkflowKind[]) {
-    const variants = grouped.get(kind);
+  for (const group of nativeHomeWorkflowGroups) {
+    const variants = grouped.get(group.id);
     if (!variants?.length) continue;
 
-    const selectedId = selectedVariants[kind];
+    const selectedId = selectedVariants[group.id] ?? group.defaultWorkflowId;
     const selectedWorkflow = variants.find((variant) => variant.id === selectedId) ?? variants[0];
     const selectedCard = workflowCardsFromBackend([selectedWorkflow])[0];
-    const group = nativeHomeWorkflowGroups[kind];
 
     cards.push({
       ...selectedCard,
       title: group.title,
       description: group.description,
-      category: "Image Generation",
+      category: group.category,
+      variantGroupId: group.id,
       variants: variants.map((variant) => workflowCardVariant(variant, group)),
     });
   }
@@ -229,21 +319,8 @@ function homeWorkflowCardsFromBackend(
   return [...cards, ...workflowCardsFromBackend(ungrouped)];
 }
 
-function nativeHomeWorkflowKind(workflow: WorkflowSummary): NativeHomeWorkflowKind | null {
-  if (!isNativeBundledWorkflow(workflow)) return null;
-
-  const normalizedName = normalizeWorkflowName(workflowDisplayName(workflow));
-  const category = workflow.category?.toLowerCase();
-  if (matchesNativeWorkflowName(normalizedName, "text to image") || category === "txt2img") {
-    return "text_to_image";
-  }
-  if (matchesNativeWorkflowName(normalizedName, "image to image") || category === "img2img") {
-    return "image_to_image";
-  }
-  return null;
-}
-
 function isNativeBundledWorkflow(workflow: WorkflowSummary) {
+  if (workflow.id === "text_to_image_v0") return false;
   if (workflow.source_label === "Imported" || workflow.trust_level === "quarantined_community" || workflow.can_remove) {
     return false;
   }
@@ -259,25 +336,62 @@ function normalizeWorkflowName(value: string) {
     .toLowerCase();
 }
 
-function matchesNativeWorkflowName(normalizedName: string, baseName: string) {
-  return normalizedName === baseName || normalizedName.startsWith(`${baseName} - `) || normalizedName.startsWith(`${baseName}: `);
+function workflowNameKey(workflow: WorkflowSummary) {
+  return normalizeWorkflowName(`${workflow.id} ${workflowDisplayName(workflow)}`);
+}
+
+function workflowCategoryKey(workflow: WorkflowSummary) {
+  return (workflow.category ?? "")
+    .replace(/[^a-z0-9]/gi, "")
+    .toLowerCase();
 }
 
 function workflowCardVariant(workflow: WorkflowSummary, group: NativeHomeWorkflowGroup): WorkflowCardVariant {
   const displayName = workflowDisplayName(workflow);
-  const rawLabel = displayName
-    .replace(new RegExp(`^${group.title.replace(/\s+/g, "\\s+")}`, "i"), "")
-    .replace(/^[\s:\u2014\u2013-]+/, "")
-    .trim();
+  const rawLabel = variantLabelFromDisplayName(displayName, group.title);
   const modelLabel = workflow.main_model?.name && workflow.main_model.name !== "No model detected"
     ? workflow.main_model.name.replace(/\.(safetensors|ckpt|gguf|pt|pth)$/i, "")
     : null;
 
   return {
     id: workflow.id,
-    label: rawLabel || modelLabel || displayName,
+    label: rawLabel || humanizeVariantLabel(modelLabel ?? displayName),
     title: displayName,
   };
+}
+
+function variantLabelFromDisplayName(displayName: string, groupTitle: string) {
+  const groupPrefix = new RegExp(`^${groupTitle.replace(/\s+/g, "\\s+")}`, "i");
+  const withoutGroup = displayName
+    .replace(groupPrefix, "")
+    .replace(/^[\s:\u2014\u2013-]+/, "")
+    .trim();
+  const raw = withoutGroup || displayName;
+  return humanizeVariantLabel(raw);
+}
+
+function humanizeVariantLabel(value: string) {
+  return value
+    .replace(/\.noofy$/i, "")
+    .replace(/^(txt2img|img2img|txt2audio|txt2vid|img2vid|txt2txt|img2threeD|inpainting|outpainting|upscale)[_\s-]*/i, "")
+    .replace(/^image[_\s-]+/i, "")
+    .replace(/copy$/i, "")
+    .replace(/[_-]+/g, " ")
+    .replace(/\bflux\b/gi, "Flux")
+    .replace(/\bklein\b/gi, "Klein")
+    .replace(/\blongcat\b/gi, "LongCat")
+    .replace(/\banima\b/gi, "Anima")
+    .replace(/\bdreamshaperxl\b/gi, "DreamShaper XL")
+    .replace(/\bchroma1\b/gi, "Chroma 1")
+    .replace(/\bwan2\b/gi, "Wan 2")
+    .replace(/\bltx\b/gi, "LTX")
+    .replace(/\bmoss\b/gi, "MOSS")
+    .replace(/\bgemma4\b/gi, "Gemma 4")
+    .replace(/\bhiresfix\b/gi, "HiresFix")
+    .replace(/\b([349])b\b/gi, "$1B")
+    .replace(/\b3d\b/gi, "3D")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function workflowStatusFromSummary(workflow: WorkflowSummary): WorkflowStatus {
@@ -452,12 +566,11 @@ export function HomePage({
 
   const workflowCards = useMemo(() => {
     const backendCards = homeWorkflowCardsFromBackend(workflowLibrary.workflows, selectedNativeVariants);
-    const fallbackCards = backendCards.length > 0 ? backendCards : [fallbackWorkflow];
     const starterWithoutDuplicates = starterWorkflows.filter(
-      (starter) => !fallbackCards.some((card) => card.id === starter.id || card.title === starter.title),
+      (starter) => !backendCards.some((card) => card.id === starter.id || card.title === starter.title),
     );
 
-    return [...fallbackCards, ...starterWithoutDuplicates].slice(0, 8);
+    return [...backendCards, ...starterWithoutDuplicates];
   }, [selectedNativeVariants, workflowLibrary.workflows]);
   const builtInCount = useMemo(
     () => workflowLibrary.workflows.filter(isNativeBundledWorkflow).length,
@@ -1228,12 +1341,10 @@ function WorkflowRemovalDialog({
 }
 
 function nativeVariantSelectionKey(workflow: WorkflowCard) {
-  if (workflow.title === "Text to Image") return "text_to_image";
-  if (workflow.title === "Image to Image") return "image_to_image";
-  return workflow.id;
+  return workflow.variantGroupId ?? workflow.id;
 }
 
-function WorkflowVariantSelect({
+function WorkflowVariantField({
   title,
   value,
   variants,
@@ -1244,14 +1355,27 @@ function WorkflowVariantSelect({
   variants: WorkflowCardVariant[];
   onChange: (workflowId: string) => void;
 }) {
+  if (variants.length < 2) {
+    const variant = variants[0];
+    if (!variant) return null;
+
+    return (
+      <div className="workflow-variant-field">
+        <span>Workflow</span>
+        <div className="workflow-variant-static" aria-label={`${title} workflow`}>
+          {variant.label}
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <label className="workflow-variant-select">
-      <span>Model</span>
+    <label className="workflow-variant-field">
+      <span>Workflow</span>
       <div className="workflow-variant-select__control">
         <select
-          aria-label={`${title} model workflow`}
+          aria-label={`${title} workflow choice`}
           value={value}
-          disabled={variants.length < 2}
           onChange={(event) => onChange(event.target.value)}
         >
           {variants.map((variant) => (
@@ -1298,8 +1422,10 @@ function WorkflowCardView({
   const StatusIcon = workflowIconStatus(workflow.status);
   const needsSetup =
     workflow.status === "needs_input_setup" || workflow.status === "cannot_prepare_automatically";
-  const canOpen = workflow.source === "backend" || workflow.id === "text_to_image_v0";
+  const canOpen = workflow.source === "backend";
   const canShowActions = workflow.source === "backend";
+  const showFooterStatus = !(workflow.source === "backend" && (workflow.status === "installed" || workflow.status === "ready"));
+  const primaryActionLabel = needsSetup ? "Configure" : "Run";
   const selectedWorkflowTitle = activeWorkflowTitle(workflow);
 
   function handleClick() {
@@ -1322,14 +1448,6 @@ function WorkflowCardView({
         <div className="workflow-card__meta">
           <div className="workflow-card__badges">
             <span className="category-badge">{workflow.category}</span>
-            {workflow.trustLabel ? (
-              <span
-                className={`trust-badge trust-badge--${workflow.trustTone ?? "verified"}`}
-                title={workflow.trustSummary}
-              >
-                {workflow.trustLabel}
-              </span>
-            ) : null}
             {workflow.hardwareWarning ? <HardwareWarningPill warning={workflow.hardwareWarning} /> : null}
           </div>
           {canShowActions ? (
@@ -1360,27 +1478,29 @@ function WorkflowCardView({
       <h3>{workflow.title}</h3>
       <p>{workflow.description}</p>
       {workflow.variants ? (
-        <WorkflowVariantSelect
+        <WorkflowVariantField
           title={workflow.title}
           value={workflow.id}
           variants={workflow.variants}
           onChange={onVariantChange}
         />
       ) : null}
-      <div className="workflow-card__footer">
-        <span className={`workflow-status workflow-status--${workflow.status}`}>
-          <StatusIcon size={14} aria-hidden="true" />
-          {workflow.statusLabel}
-        </span>
+      <div className={`workflow-card__footer${showFooterStatus ? " workflow-card__footer--with-status" : ""}`}>
+        {showFooterStatus ? (
+          <span className={`workflow-status workflow-status--${workflow.status}`}>
+            <StatusIcon size={14} aria-hidden="true" />
+            {workflow.statusLabel}
+          </span>
+        ) : null}
         <button
-          className="icon-button icon-button--card"
+          className="workflow-card__run-button"
           type="button"
-          aria-label={needsSetup ? `Configure dashboard for ${workflow.title}` : `Open ${workflow.title}`}
+          aria-label={needsSetup ? `Configure dashboard for ${workflow.title}` : `Run ${workflow.title}`}
           title={needsSetup ? "Configure dashboard" : undefined}
           disabled={!needsSetup && !canOpen}
           onClick={handleClick}
         >
-          <ArrowRight size={17} aria-hidden="true" />
+          {primaryActionLabel}
         </button>
       </div>
     </article>

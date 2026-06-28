@@ -1,0 +1,236 @@
+{
+  "inputs": [
+    {
+      "binding": {
+        "input_name": "text",
+        "node_id": "128:89"
+      },
+      "control": "textarea",
+      "default": "A cute purple cartoon cat dancing the polka joyfully, full body visible, lively and expressive movements, 3D animated Pixar-style character, big bright eyes, fluffy fur, charming smile, wearing a small traditional polka outfit with suspenders and a tiny hat, spinning and stepping rhythmically on a colorful wooden dance floor, festive village party background, warm cinematic lighting, vibrant colors, smooth animation, playful mood, high detail, adorable character design, family-friendly, professional 3D animation quality",
+      "default_pinned": true,
+      "id": "ctrl-node-128:89-text",
+      "label": "Positive prompt",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "value",
+        "node_id": "128:126"
+      },
+      "control": "slider",
+      "default": 5,
+      "default_pinned": true,
+      "id": "ctrl-node-128:126-value",
+      "label": "Video duration (in seconds)",
+      "validation": {
+        "max": 9,
+        "min": 3,
+        "step": 1
+      }
+    },
+    {
+      "binding": {
+        "input_name": "value",
+        "node_id": "128:129"
+      },
+      "control": "toggle",
+      "default": true,
+      "default_pinned": true,
+      "id": "ctrl-node-128:129-value",
+      "label": "Turbo mode",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "text",
+        "node_id": "128:72"
+      },
+      "control": "textarea",
+      "default": "overexposed, static, blurry details, subtitles, style, artwork, painting, image, still, overall grayish, worst quality, low quality, JPEG compression residue, ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn faces, deformed, disfigured, distorted limbs, fingers fused together, static image, cluttered background, three legs, many people in the background, walking backwards",
+      "default_pinned": true,
+      "id": "ctrl-node-128:72-text",
+      "label": "Negative prompt",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "height",
+        "node_id": "128:74"
+      },
+      "control": "slider",
+      "default": 640,
+      "default_pinned": true,
+      "id": "ctrl-node-128:74-height",
+      "label": "Height",
+      "validation": {
+        "max": 2048,
+        "min": 256,
+        "step": 64
+      }
+    },
+    {
+      "binding": {
+        "input_name": "width",
+        "node_id": "128:74"
+      },
+      "control": "slider",
+      "default": 640,
+      "default_pinned": true,
+      "id": "ctrl-node-128:74-width",
+      "label": "Width",
+      "validation": {
+        "max": 2048,
+        "min": 256,
+        "step": 64
+      }
+    },
+    {
+      "binding": {
+        "input_name": "noise_seed",
+        "node_id": "128:81"
+      },
+      "control": "seed_widget",
+      "default": 64379706589253,
+      "default_pinned": true,
+      "id": "ctrl-node-128:81-noise_seed",
+      "label": "Noise seed",
+      "validation": {
+        "seed_mode": "randomize"
+      }
+    }
+  ],
+  "outputs": [
+    {
+      "id": "video",
+      "kind": "video",
+      "label": "Output video",
+      "node_id": "80",
+      "type": "video"
+    }
+  ],
+  "sections": [
+    {
+      "controls": [
+        {
+          "description": "Describe what you want to create.",
+          "id": "ctrl-node-128:89-text",
+          "input_id": "ctrl-node-128:89-text",
+          "label": "Positive prompt",
+          "required": false,
+          "type": "textarea"
+        },
+        {
+          "description": "",
+          "id": "ctrl-node-128:126-value",
+          "input_id": "ctrl-node-128:126-value",
+          "label": "Video duration (in seconds)",
+          "layout": {
+            "h": 4,
+            "min_h": 4,
+            "min_w": 6,
+            "w": 6,
+            "x": 20,
+            "y": 23
+          },
+          "required": false,
+          "type": "slider"
+        },
+        {
+          "description": "Lightning Lora",
+          "id": "ctrl-node-128:129-value",
+          "input_id": "ctrl-node-128:129-value",
+          "label": "Turbo mode",
+          "layout": {
+            "h": 4,
+            "min_h": 1,
+            "min_w": 4,
+            "w": 6,
+            "x": 26,
+            "y": 23
+          },
+          "required": false,
+          "type": "toggle"
+        },
+        {
+          "description": "Describe what you don't want to create.",
+          "id": "ctrl-node-128:72-text",
+          "input_id": "ctrl-node-128:72-text",
+          "label": "Negative prompt",
+          "required": false,
+          "type": "textarea"
+        },
+        {
+          "description": "Output height in pixels.",
+          "id": "ctrl-node-128:74-height",
+          "input_id": "ctrl-node-128:74-height",
+          "label": "Height",
+          "layout": {
+            "h": 4,
+            "min_h": 4,
+            "min_w": 6,
+            "w": 10,
+            "x": 10,
+            "y": 23
+          },
+          "required": false,
+          "type": "slider"
+        },
+        {
+          "description": "Output width in pixels.",
+          "id": "ctrl-node-128:74-width",
+          "input_id": "ctrl-node-128:74-width",
+          "label": "Width",
+          "layout": {
+            "h": 4,
+            "min_h": 4,
+            "min_w": 6,
+            "w": 10,
+            "x": 0,
+            "y": 23
+          },
+          "required": false,
+          "type": "slider"
+        },
+        {
+          "description": "",
+          "id": "ctrl-node-80-output_video",
+          "label": "Output video",
+          "layout": {
+            "h": 21,
+            "min_h": 7,
+            "min_w": 8,
+            "w": 20,
+            "x": 12,
+            "y": 2
+          },
+          "output_id": "video",
+          "required": false,
+          "type": "display_video"
+        }
+      ],
+      "groups": [
+        {
+          "control_ids": [
+            "ctrl-node-128:89-text",
+            "ctrl-node-128:72-text"
+          ],
+          "description": "",
+          "id": "group-1",
+          "layout": {
+            "h": 23,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 12,
+            "x": 0,
+            "y": 0
+          },
+          "title": "Positive prompt + Negative prompt"
+        }
+      ],
+      "id": "main",
+      "title": "Main"
+    }
+  ],
+  "status": "configured",
+  "version": "0.1.0"
+}

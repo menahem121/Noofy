@@ -1,0 +1,196 @@
+{
+  "inputs": [
+    {
+      "binding": {
+        "input_name": "text",
+        "node_id": "75:74"
+      },
+      "control": "textarea",
+      "default": "turn the scene to night time, nice warm lantern lightning",
+      "default_pinned": true,
+      "id": "ctrl-node-75:74-text",
+      "label": "Positive prompt",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "image",
+        "node_id": "76"
+      },
+      "control": "load_image",
+      "default": {
+        "asset_id": "input-defaults/5e28955043c3917b-greendog.png",
+        "content_type": "image/png",
+        "filename": "greenDog.png",
+        "kind": "image",
+        "sha256": "sha256:5e28955043c3917bcb749e55ed5b3e808b2d257428ea3755f58011c4d8d6bb98",
+        "size_bytes": 1444887,
+        "source": "package_asset"
+      },
+      "default_pinned": true,
+      "id": "ctrl-node-76-image",
+      "label": "Input image",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "text",
+        "node_id": "75:67"
+      },
+      "control": "textarea",
+      "default": "",
+      "default_pinned": true,
+      "id": "ctrl-node-75:67-text",
+      "label": "Negative prompt",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "steps",
+        "node_id": "75:62"
+      },
+      "control": "slider",
+      "default": 25,
+      "default_pinned": true,
+      "id": "ctrl-node-75:62-steps",
+      "label": "Refinement Level",
+      "validation": {
+        "max": 100,
+        "min": 1,
+        "step": 1
+      }
+    },
+    {
+      "binding": {
+        "input_name": "noise_seed",
+        "node_id": "75:73"
+      },
+      "control": "seed_widget",
+      "default": 1033682429694652,
+      "default_pinned": true,
+      "id": "ctrl-node-75:73-noise_seed",
+      "label": "Noise seed",
+      "validation": {
+        "seed_mode": "randomize"
+      }
+    }
+  ],
+  "outputs": [
+    {
+      "id": "image",
+      "kind": "image",
+      "label": "Result",
+      "node_id": "9",
+      "type": "image"
+    }
+  ],
+  "sections": [
+    {
+      "controls": [
+        {
+          "description": "Describe what you want to create.",
+          "id": "ctrl-node-75:74-text",
+          "input_id": "ctrl-node-75:74-text",
+          "label": "Positive prompt",
+          "required": false,
+          "type": "textarea"
+        },
+        {
+          "description": "Choose an image from your computer.",
+          "id": "ctrl-node-76-image",
+          "input_id": "ctrl-node-76-image",
+          "label": "Input image",
+          "layout": {
+            "h": 13,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 12,
+            "x": 0,
+            "y": 14
+          },
+          "required": false,
+          "type": "load_image"
+        },
+        {
+          "description": "Describe what you want to create.",
+          "id": "ctrl-node-75:67-text",
+          "input_id": "ctrl-node-75:67-text",
+          "label": "Negative prompt",
+          "required": false,
+          "type": "textarea"
+        },
+        {
+          "description": "More passes can add detail but take longer.",
+          "id": "ctrl-node-75:62-steps",
+          "input_id": "ctrl-node-75:62-steps",
+          "label": "Refinement Level",
+          "layout": {
+            "h": 4,
+            "min_h": 4,
+            "min_w": 6,
+            "w": 12,
+            "x": 12,
+            "y": 23
+          },
+          "required": false,
+          "type": "slider"
+        },
+        {
+          "description": "",
+          "id": "ctrl-node-75:73-noise_seed",
+          "input_id": "ctrl-node-75:73-noise_seed",
+          "label": "Noise seed",
+          "layout": {
+            "h": 4,
+            "min_h": 3,
+            "min_w": 4,
+            "w": 8,
+            "x": 24,
+            "y": 23
+          },
+          "required": false,
+          "type": "seed_widget"
+        },
+        {
+          "description": "Generated image will appear here.",
+          "id": "ctrl-node-9-output_image",
+          "label": "Result",
+          "layout": {
+            "h": 21,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 20,
+            "x": 12,
+            "y": 2
+          },
+          "output_id": "image",
+          "required": false,
+          "type": "display_image"
+        }
+      ],
+      "groups": [
+        {
+          "control_ids": [
+            "ctrl-node-75:74-text",
+            "ctrl-node-75:67-text"
+          ],
+          "description": "",
+          "id": "group-1",
+          "layout": {
+            "h": 14,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 12,
+            "x": 0,
+            "y": 0
+          },
+          "title": "prompt"
+        }
+      ],
+      "id": "main",
+      "title": "Main"
+    }
+  ],
+  "status": "configured",
+  "version": "0.1.0"
+}

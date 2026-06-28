@@ -1,0 +1,158 @@
+{
+  "inputs": [
+    {
+      "binding": {
+        "input_name": "prompt",
+        "node_id": "1"
+      },
+      "control": "textarea",
+      "default": "Introduce yourself",
+      "default_pinned": true,
+      "id": "ctrl-node-1-prompt",
+      "label": "Prompt",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "audio",
+        "node_id": "12"
+      },
+      "control": "load_audio",
+      "default": null,
+      "default_pinned": true,
+      "id": "ctrl-node-12-audio",
+      "label": "Optional audio",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "image",
+        "node_id": "13"
+      },
+      "control": "load_image",
+      "default": null,
+      "default_pinned": true,
+      "id": "ctrl-node-13-image",
+      "label": "Optional image",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "thinking",
+        "node_id": "1"
+      },
+      "control": "toggle",
+      "default": false,
+      "default_pinned": true,
+      "id": "ctrl-node-1-thinking",
+      "label": "Thinking",
+      "validation": {}
+    }
+  ],
+  "outputs": [
+    {
+      "id": "text",
+      "kind": "text",
+      "label": "Result",
+      "node_id": "4",
+      "type": "text"
+    }
+  ],
+  "presentation": {
+    "action_bar": {
+      "x": 908,
+      "y": 10
+    }
+  },
+  "sections": [
+    {
+      "controls": [
+        {
+          "description": "Describe what you want to create.",
+          "id": "ctrl-node-1-prompt",
+          "input_id": "ctrl-node-1-prompt",
+          "label": "Prompt",
+          "layout": {
+            "h": 19,
+            "min_h": 4,
+            "min_w": 5,
+            "w": 14,
+            "x": 0,
+            "y": 0
+          },
+          "required": false,
+          "type": "textarea"
+        },
+        {
+          "description": "Pick an audio file",
+          "id": "ctrl-node-12-audio",
+          "input_id": "ctrl-node-12-audio",
+          "label": "Optional audio",
+          "layout": {
+            "h": 8,
+            "min_h": 4,
+            "min_w": 6,
+            "w": 7,
+            "x": 7,
+            "y": 19
+          },
+          "required": false,
+          "type": "load_audio"
+        },
+        {
+          "description": "Pick an image",
+          "id": "ctrl-node-13-image",
+          "input_id": "ctrl-node-13-image",
+          "label": "Optional image",
+          "layout": {
+            "h": 8,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 7,
+            "x": 0,
+            "y": 19
+          },
+          "required": false,
+          "type": "load_image"
+        },
+        {
+          "description": "Operate in thinking mode if the model supports it.",
+          "id": "ctrl-node-1-thinking",
+          "input_id": "ctrl-node-1-thinking",
+          "label": "Thinking",
+          "layout": {
+            "h": 2,
+            "min_h": 1,
+            "min_w": 4,
+            "w": 5,
+            "x": 14,
+            "y": 0
+          },
+          "required": false,
+          "type": "toggle"
+        },
+        {
+          "description": "Generated text will appear here.",
+          "id": "ctrl-node-4-output_text",
+          "label": "Result",
+          "layout": {
+            "h": 25,
+            "min_h": 5,
+            "min_w": 6,
+            "w": 18,
+            "x": 14,
+            "y": 2
+          },
+          "output_id": "text",
+          "required": false,
+          "type": "display_text"
+        }
+      ],
+      "groups": [],
+      "id": "main",
+      "title": "Main"
+    }
+  ],
+  "status": "configured",
+  "version": "0.1.0"
+}

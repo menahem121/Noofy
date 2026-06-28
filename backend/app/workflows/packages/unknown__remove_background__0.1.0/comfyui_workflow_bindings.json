@@ -1,0 +1,24 @@
+{
+  "nodes": {
+    "2": {
+      "image": 0,
+      "upload": 1
+    },
+    "359": {
+      "background": 5,
+      "background_color": 6,
+      "invert_output": 3,
+      "mask_blur": 1,
+      "mask_offset": 2,
+      "model": 0,
+      "refine_foreground": 4
+    },
+    "368": {
+      "padding": 0
+    },
+    "370": {
+      "filename_prefix": 0
+    }
+  },
+  "schema_version": "0.1.0"
+}

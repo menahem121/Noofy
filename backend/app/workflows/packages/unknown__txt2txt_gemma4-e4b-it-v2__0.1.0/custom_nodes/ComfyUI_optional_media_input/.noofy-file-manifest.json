@@ -1,0 +1,52 @@
+{
+  "excluded_count": 2,
+  "files": [
+    {
+      "path": "README.md",
+      "sha256": "f1573532dbcd01e735f867c3205c423b5fa3071a26c3034d5b0f9c826abf93db",
+      "size_bytes": 4435
+    },
+    {
+      "path": "__init__.py",
+      "sha256": "975e0923236225119bb9ad344328975ef9aa285cb795e37e24a46c41d6704f87",
+      "size_bytes": 535
+    },
+    {
+      "path": "example_workflow.json",
+      "sha256": "c1ae8d660c840493cec152330c71f4fa15943683f1cad01accce1e1e82f9fe79",
+      "size_bytes": 1250
+    },
+    {
+      "path": "llm_gemma4_text_gen_true_optional_image.json",
+      "sha256": "b596c15732c8ee5d3eaa76a9ca5c1f379971cca7ff80eb710ee75b75f2c4a93f",
+      "size_bytes": 8691
+    },
+    {
+      "path": "llm_gemma4_text_gen_true_optional_image_api.json",
+      "sha256": "c1ae8d660c840493cec152330c71f4fa15943683f1cad01accce1e1e82f9fe79",
+      "size_bytes": 1250
+    },
+    {
+      "path": "nodes.py",
+      "sha256": "efc8f7d6221114742e855471b153623b4e2f0fc3564c9b9b1bfb22aa1dc024f8",
+      "size_bytes": 11355
+    },
+    {
+      "path": "pyproject.toml",
+      "sha256": "dd7380a16e7faec504c60d527b227f95a25f7b27c375ebb29db841f16142c191",
+      "size_bytes": 352
+    },
+    {
+      "path": "tests/test_nodes.py",
+      "sha256": "32f5c12ea4e49e2303c58c70d8b985910f4fc86a2de3c856b9eadeac3997ea6a",
+      "size_bytes": 7229
+    },
+    {
+      "path": "web/optional_audio.js",
+      "sha256": "2472d3e05e13d27a3955329daab879535c8f88b78efb78ffebc602e2750aac93",
+      "size_bytes": 647
+    }
+  ],
+  "schema_version": "0.1.0",
+  "sha256_manifest": "3cc70e835e6d623651d2b38ac816839e28582925d41cabfd97007f2f144f509f"
+}

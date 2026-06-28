@@ -1,0 +1,225 @@
+{
+  "inputs": [
+    {
+      "binding": {
+        "input_name": "text",
+        "node_id": "19"
+      },
+      "control": "textarea",
+      "default": "blur, ugly, extra legs, wrong anatomy, this is negative prompt",
+      "default_pinned": true,
+      "id": "ctrl-node-19-text",
+      "label": "Negative Prompt",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "width",
+        "node_id": "100"
+      },
+      "control": "slider",
+      "default": 1024,
+      "default_pinned": true,
+      "id": "ctrl-node-100-width",
+      "label": "Width",
+      "validation": {
+        "max": 4096,
+        "min": 64,
+        "step": 64
+      }
+    },
+    {
+      "binding": {
+        "input_name": "height",
+        "node_id": "100"
+      },
+      "control": "slider",
+      "default": 1024,
+      "default_pinned": true,
+      "id": "ctrl-node-100-height",
+      "label": "Height",
+      "validation": {
+        "max": 4096,
+        "min": 64,
+        "step": 64
+      }
+    },
+    {
+      "binding": {
+        "input_name": "text",
+        "node_id": "6"
+      },
+      "control": "textarea",
+      "default": "a green horse riding on the moon",
+      "default_pinned": true,
+      "id": "ctrl-node-6-text",
+      "label": "Prompt",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "steps",
+        "node_id": "98"
+      },
+      "control": "slider",
+      "default": 4,
+      "default_pinned": true,
+      "id": "ctrl-node-98-steps",
+      "label": "Refinement Level",
+      "validation": {
+        "max": 12,
+        "min": 1,
+        "step": 1
+      }
+    },
+    {
+      "binding": {
+        "input_name": "seed",
+        "node_id": "98"
+      },
+      "control": "seed_widget",
+      "default": 323956037610255,
+      "default_pinned": true,
+      "id": "ctrl-node-98-seed",
+      "label": "Variation ID",
+      "validation": {
+        "seed_mode": "randomize"
+      }
+    }
+  ],
+  "outputs": [
+    {
+      "id": "image",
+      "kind": "image",
+      "label": "Result",
+      "node_id": "99",
+      "type": "image"
+    }
+  ],
+  "sections": [
+    {
+      "controls": [
+        {
+          "description": "Describe what you don't want to create.",
+          "id": "ctrl-node-19-text",
+          "input_id": "ctrl-node-19-text",
+          "label": "Negative Prompt",
+          "required": false,
+          "type": "textarea"
+        },
+        {
+          "description": "",
+          "id": "ctrl-node-100-width",
+          "input_id": "ctrl-node-100-width",
+          "label": "Width",
+          "required": false,
+          "type": "slider"
+        },
+        {
+          "description": "",
+          "id": "ctrl-node-100-height",
+          "input_id": "ctrl-node-100-height",
+          "label": "Height",
+          "required": false,
+          "type": "slider"
+        },
+        {
+          "description": "Describe what you want to create.",
+          "id": "ctrl-node-6-text",
+          "input_id": "ctrl-node-6-text",
+          "label": "Prompt",
+          "required": false,
+          "type": "textarea"
+        },
+        {
+          "description": "More passes can add detail but take longer.",
+          "id": "ctrl-node-98-steps",
+          "input_id": "ctrl-node-98-steps",
+          "label": "Refinement Level",
+          "layout": {
+            "h": 4,
+            "min_h": 4,
+            "min_w": 6,
+            "w": 13,
+            "x": 19,
+            "y": 23
+          },
+          "required": false,
+          "type": "slider"
+        },
+        {
+          "description": "Lock or change to get a different variation.",
+          "id": "ctrl-node-98-seed",
+          "input_id": "ctrl-node-98-seed",
+          "label": "Variation ID",
+          "layout": {
+            "h": 4,
+            "min_h": 3,
+            "min_w": 4,
+            "w": 7,
+            "x": 12,
+            "y": 23
+          },
+          "required": false,
+          "type": "seed_widget"
+        },
+        {
+          "description": "Generated image will appear here.",
+          "id": "ctrl-node-99-output_image",
+          "label": "Result",
+          "layout": {
+            "h": 21,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 20,
+            "x": 12,
+            "y": 2
+          },
+          "output_id": "image",
+          "required": false,
+          "type": "display_image"
+        }
+      ],
+      "groups": [
+        {
+          "control_ids": [
+            "ctrl-node-6-text",
+            "ctrl-node-19-text"
+          ],
+          "description": "",
+          "id": "group-1",
+          "layout": {
+            "h": 20,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 12,
+            "x": 0,
+            "y": 0
+          },
+          "title": "Prompt"
+        },
+        {
+          "control_ids": [
+            "ctrl-node-100-width",
+            "ctrl-node-100-height"
+          ],
+          "description": "(in pixels)",
+          "id": "group-2",
+          "layout": {
+            "h": 7,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 12,
+            "x": 0,
+            "y": 20
+          },
+          "title": "Image dimensions"
+        }
+      ],
+      "id": "main",
+      "title": "Main"
+    }
+  ],
+  "status": "configured",
+  "version": "0.1.0"
+}

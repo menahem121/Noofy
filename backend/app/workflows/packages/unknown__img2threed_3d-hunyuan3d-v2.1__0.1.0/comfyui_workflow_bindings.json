@@ -1,0 +1,43 @@
+{
+  "nodes": {
+    "1": {
+      "ckpt_name": 0
+    },
+    "10": {
+      "filename_prefix": 0,
+      "image": 1
+    },
+    "13": {
+      "crop": 0
+    },
+    "2": {
+      "image": 0,
+      "upload": 1
+    },
+    "3": {
+      "shift": 0
+    },
+    "4": {
+      "batch_size": 1,
+      "resolution": 0
+    },
+    "7": {
+      "cfg": 3,
+      "control_after_generate": 1,
+      "denoise": 6,
+      "sampler_name": 4,
+      "scheduler": 5,
+      "seed": 0,
+      "steps": 2
+    },
+    "8": {
+      "num_chunks": 0,
+      "octree_resolution": 1
+    },
+    "9": {
+      "algorithm": 0,
+      "threshold": 1
+    }
+  },
+  "schema_version": "0.1.0"
+}

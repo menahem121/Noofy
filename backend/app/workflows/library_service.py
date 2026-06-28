@@ -66,6 +66,8 @@ from app.workflows.store_paths import (
     safe_store_segment,
 )
 
+_USER_HIDDEN_WORKFLOW_IDS = frozenset({"text_to_image_v0"})
+
 
 @dataclass
 class _WorkflowModelVerificationJob:
@@ -120,6 +122,7 @@ class WorkflowLibraryService:
                 hardware_warning_local_summaries=hardware_warning_local_summaries,
             )
             for package in self.workflow_loader.list_packages()
+            if not _is_user_hidden_workflow(package)
         ]
 
     def record_workflow_opened(self, workflow_id: str) -> dict[str, object]:
@@ -1022,6 +1025,10 @@ class WorkflowLibraryService:
 def _is_primary_model_type(model_type: str | None, folder: str | None) -> bool:
     value = f"{model_type or ''} {folder or ''}".casefold()
     return any(token in value for token in ("checkpoint", "diffusion", "unet", "ckpt"))
+
+
+def _is_user_hidden_workflow(package: WorkflowPackage) -> bool:
+    return package.metadata.id in _USER_HIDDEN_WORKFLOW_IDS
 
 
 def _dashboard_needs_setup(package: WorkflowPackage) -> bool:

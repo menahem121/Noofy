@@ -1,0 +1,134 @@
+{
+  "inputs": [
+    {
+      "binding": {
+        "input_name": "text",
+        "node_id": "75:74"
+      },
+      "control": "textarea",
+      "default": "Blow it up",
+      "default_pinned": true,
+      "id": "ctrl-node-75:74-text",
+      "label": "Positive prompt",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "text",
+        "node_id": "75:67"
+      },
+      "control": "textarea",
+      "default": "",
+      "default_pinned": true,
+      "id": "ctrl-node-75:67-text",
+      "label": "Negative prompt",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "image",
+        "node_id": "76"
+      },
+      "control": "load_image",
+      "default": {
+        "asset_id": "input-defaults/1821ec4e615012f9-villageonrock.png",
+        "content_type": "image/png",
+        "filename": "villageOnRock.png",
+        "kind": "image",
+        "sha256": "sha256:1821ec4e615012f932e9b1833966ed83d4df04c7d689c27e4185a027c5d87a59",
+        "size_bytes": 3548096,
+        "source": "package_asset"
+      },
+      "default_pinned": true,
+      "id": "ctrl-node-76-image",
+      "label": "Input image",
+      "validation": {}
+    }
+  ],
+  "outputs": [
+    {
+      "id": "image",
+      "kind": "image",
+      "label": "Result",
+      "node_id": "9",
+      "type": "image"
+    }
+  ],
+  "sections": [
+    {
+      "controls": [
+        {
+          "description": "Describe what you want to create.",
+          "id": "ctrl-node-75:74-text",
+          "input_id": "ctrl-node-75:74-text",
+          "label": "Positive prompt",
+          "required": false,
+          "type": "textarea"
+        },
+        {
+          "description": "Describe what you want to create.",
+          "id": "ctrl-node-75:67-text",
+          "input_id": "ctrl-node-75:67-text",
+          "label": "Negative prompt",
+          "required": false,
+          "type": "textarea"
+        },
+        {
+          "description": "Choose an image from your computer.",
+          "id": "ctrl-node-76-image",
+          "input_id": "ctrl-node-76-image",
+          "label": "Input image",
+          "layout": {
+            "h": 11,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 12,
+            "x": 0,
+            "y": 15
+          },
+          "required": false,
+          "type": "load_image"
+        },
+        {
+          "description": "Generated image will appear here.",
+          "id": "ctrl-node-9-output_image",
+          "label": "Result",
+          "layout": {
+            "h": 24,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 20,
+            "x": 12,
+            "y": 2
+          },
+          "output_id": "image",
+          "required": false,
+          "type": "display_image"
+        }
+      ],
+      "groups": [
+        {
+          "control_ids": [
+            "ctrl-node-75:74-text",
+            "ctrl-node-75:67-text"
+          ],
+          "description": "",
+          "id": "group-1",
+          "layout": {
+            "h": 13,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 12,
+            "x": 0,
+            "y": 2
+          },
+          "title": "prompt"
+        }
+      ],
+      "id": "main",
+      "title": "Main"
+    }
+  ],
+  "status": "configured",
+  "version": "0.1.0"
+}

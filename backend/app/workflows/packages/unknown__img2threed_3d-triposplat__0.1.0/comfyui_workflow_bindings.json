@@ -1,0 +1,28 @@
+{
+  "nodes": {
+    "51": {
+      "filename_prefix": 0,
+      "image": 1
+    },
+    "88": {
+      "$$canvas-image-preview": 9,
+      "bg_removal_name": 7,
+      "clip_name": 4,
+      "num_gaussians_1": 1,
+      "seed": 2,
+      "switch": 0,
+      "switch_1": 8,
+      "unet_name": 3,
+      "vae_name": 5,
+      "vae_name_1": 6
+    },
+    "92": {
+      "format": 0
+    },
+    "99": {
+      "image": 0,
+      "upload": 1
+    }
+  },
+  "schema_version": "0.1.0"
+}

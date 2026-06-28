@@ -1,0 +1,76 @@
+{
+  "nodes": {
+    "134": {
+      "clip_name": 0,
+      "device": 2,
+      "type": 1
+    },
+    "135": {
+      "control_after_generate": 1,
+      "noise_seed": 0
+    },
+    "136": {
+      "cfg": 0
+    },
+    "137": {
+      "sampler_name": 0
+    },
+    "138": {
+      "height": 2,
+      "steps": 0,
+      "width": 1
+    },
+    "139": {
+      "batch_size": 2,
+      "height": 1,
+      "width": 0
+    },
+    "142": {
+      "filename_prefix": 0
+    },
+    "143": {
+      "$$node-text-preview": 0
+    },
+    "147": {
+      "megapixels": 1,
+      "resolution_steps": 2,
+      "upscale_method": 0
+    },
+    "157": {
+      "text": 0
+    },
+    "158": {
+      "unet_name": 0,
+      "weight_dtype": 1
+    },
+    "159": {
+      "image": 0,
+      "upload": 1
+    },
+    "161": {
+      "vae_name": 0
+    },
+    "164": {
+      "bottom": 3,
+      "feathering": 4,
+      "left": 0,
+      "right": 2,
+      "top": 1
+    },
+    "165": {
+      "megapixels": 1,
+      "resolution_steps": 2,
+      "upscale_method": 0
+    },
+    "166": {
+      "color": 0,
+      "device": 1
+    },
+    "167": {
+      "method": 0,
+      "multithread": 2,
+      "strength": 1
+    }
+  },
+  "schema_version": "0.1.0"
+}

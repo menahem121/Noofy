@@ -51,8 +51,8 @@ const modelFolders = {
 };
 
 const textToImageWorkflow = {
-  id: "text_to_image_v0",
-  name: "Text to Image",
+  id: "unknown__txt2img_flux-klein-4b-turbo__0.1.0",
+  name: "txt2img_flux-klein-4b-turbo",
   version: "0.1.0",
   description: "Generate new images from a simple text prompt.",
   source_label: "Native Noofy",
@@ -71,9 +71,9 @@ const textToImageWorkflow = {
 
 const fluxWorkflow = {
   ...textToImageWorkflow,
-  id: "text_to_image_flux",
-  name: "Text to Image - Flux",
-  main_model: { name: "Flux", type: "checkpoint", size_bytes: 1 },
+  id: "unknown__txt2img_anima__0.1.0",
+  name: "txt2img_Anima",
+  main_model: { name: "Anima", type: "checkpoint", size_bytes: 1 },
 };
 
 const textToImageNeedsSetup = {
@@ -299,13 +299,13 @@ describe("FirstLaunchOnboarding", () => {
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
 
-    fireEvent.change(screen.getByLabelText("Text to Image model workflow"), {
-      target: { value: "text_to_image_flux" },
+    fireEvent.change(screen.getByLabelText("Text to Image workflow choice"), {
+      target: { value: "unknown__txt2img_anima__0.1.0" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Start Creating" }));
 
     await waitFor(() => {
-      expect(onOpenWorkflow).toHaveBeenCalledWith("text_to_image_flux", "Text to Image - Flux");
+      expect(onOpenWorkflow).toHaveBeenCalledWith("unknown__txt2img_anima__0.1.0", "txt2img_Anima");
     });
   });
 

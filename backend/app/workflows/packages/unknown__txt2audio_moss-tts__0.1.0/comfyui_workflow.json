@@ -1,0 +1,160 @@
+{
+  "config": {},
+  "extra": {
+    "ds": {
+      "offset": [
+        78.71770380722018,
+        141.02486438479494
+      ],
+      "scale": 0.9517048254854175
+    },
+    "frontendVersion": "1.42.15"
+  },
+  "groups": [],
+  "id": "00000000-0000-0000-0000-000000000000",
+  "last_link_id": 4,
+  "last_node_id": 3,
+  "links": [
+    [
+      3,
+      1,
+      0,
+      2,
+      0,
+      "MOSS_TTS_PIPE"
+    ],
+    [
+      4,
+      2,
+      0,
+      3,
+      0,
+      "AUDIO"
+    ]
+  ],
+  "nodes": [
+    {
+      "flags": {},
+      "id": 1,
+      "inputs": [],
+      "mode": 0,
+      "order": 0,
+      "outputs": [
+        {
+          "links": [
+            3
+          ],
+          "name": "MOSS_TTS_PIPE",
+          "type": "MOSS_TTS_PIPE"
+        }
+      ],
+      "pos": [
+        66.47849712833107,
+        130.004226689059
+      ],
+      "properties": {
+        "Node name for S&R": "MossTTSModelLoader",
+        "aux_id": "richservo/comfyui-moss-tts",
+        "ver": "84d097e1fd52155f6c54affbcdc6900648254988"
+      },
+      "size": [
+        363.04998779296875,
+        180.39999389648438
+      ],
+      "type": "MossTTSModelLoader",
+      "widgets_values": [
+        "MOSS-TTS (Delay 8B)",
+        "",
+        ""
+      ]
+    },
+    {
+      "flags": {},
+      "id": 2,
+      "inputs": [
+        {
+          "link": 3,
+          "name": "moss_pipe",
+          "type": "MOSS_TTS_PIPE"
+        },
+        {
+          "link": null,
+          "name": "reference_audio",
+          "shape": 7,
+          "type": "AUDIO"
+        }
+      ],
+      "mode": 0,
+      "order": 1,
+      "outputs": [
+        {
+          "links": [
+            4
+          ],
+          "name": "audio",
+          "type": "AUDIO"
+        }
+      ],
+      "pos": [
+        469.98947237863695,
+        130.00422493971647
+      ],
+      "properties": {
+        "Node name for S&R": "MossTTSGenerate",
+        "aux_id": "richservo/comfyui-moss-tts",
+        "ver": "84d097e1fd52155f6c54affbcdc6900648254988"
+      },
+      "size": [
+        400,
+        514.6666870117188
+      ],
+      "type": "MossTTSGenerate",
+      "widgets_values": [
+        "auto",
+        "I hope you like Noofy.\n\nThis is a simple text-to-speech workflow demo.\nType your text, choose a voice, press Run, and let Noofy create the audio for you.\n\nNo nodes. No complicated setup. Just your words, spoken out loud.",
+        806859614244461,
+        "randomize",
+        1.7,
+        0.8,
+        25,
+        1,
+        4096,
+        false,
+        325,
+        0,
+        0
+      ]
+    },
+    {
+      "flags": {},
+      "id": 3,
+      "inputs": [
+        {
+          "link": 4,
+          "name": "audio",
+          "type": "AUDIO"
+        }
+      ],
+      "mode": 0,
+      "order": 2,
+      "outputs": [],
+      "pos": [
+        969.9941828375948,
+        130.00422493971647
+      ],
+      "properties": {
+        "Node name for S&R": "PreviewAudio",
+        "cnr_id": "comfy-core",
+        "ver": "0.20.1"
+      },
+      "size": [
+        270,
+        140
+      ],
+      "type": "PreviewAudio",
+      "widgets_values": []
+    }
+  ],
+  "revision": 0,
+  "version": 0.4
+}

@@ -1,0 +1,146 @@
+{
+  "inputs": [
+    {
+      "binding": {
+        "input_name": "text",
+        "node_id": "396"
+      },
+      "control": "textarea",
+      "default": "move him into a nice beach, same anime style",
+      "default_pinned": true,
+      "id": "ctrl-node-396-text",
+      "label": "Prompt",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "image",
+        "node_id": "401"
+      },
+      "control": "load_image",
+      "default": {
+        "asset_id": "input-defaults/5e28955043c3917b-greendog.png",
+        "content_type": "image/png",
+        "filename": "greenDog.png",
+        "kind": "image",
+        "sha256": "sha256:5e28955043c3917bcb749e55ed5b3e808b2d257428ea3755f58011c4d8d6bb98",
+        "size_bytes": 1444887,
+        "source": "package_asset"
+      },
+      "default_pinned": true,
+      "id": "input-401-image",
+      "label": "Input image",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "model",
+        "node_id": "359"
+      },
+      "control": "select",
+      "default": "BiRefNet-HR",
+      "default_pinned": true,
+      "id": "ctrl-node-359-model",
+      "label": "Model used to countour the main subject",
+      "validation": {
+        "options": [
+          "BiRefNet-general",
+          "BiRefNet_512x512",
+          "BiRefNet-HR",
+          "BiRefNet-portrait",
+          "BiRefNet-matting",
+          "BiRefNet-HR-matting",
+          "BiRefNet_lite",
+          "BiRefNet_lite-2K",
+          "BiRefNet_dynamic",
+          "BiRefNet_lite-matting",
+          "BiRefNet_toonout"
+        ]
+      }
+    }
+  ],
+  "outputs": [
+    {
+      "id": "image",
+      "kind": "image",
+      "label": "Result",
+      "node_id": "184",
+      "type": "image"
+    }
+  ],
+  "sections": [
+    {
+      "controls": [
+        {
+          "description": "Describe what you want to create.",
+          "id": "ctrl-node-396-text",
+          "input_id": "ctrl-node-396-text",
+          "label": "Prompt",
+          "layout": {
+            "h": 10,
+            "min_h": 4,
+            "min_w": 5,
+            "w": 10,
+            "x": 0,
+            "y": 0
+          },
+          "required": false,
+          "type": "textarea"
+        },
+        {
+          "description": "Pick an image",
+          "id": "ctrl-node-401-image",
+          "input_id": "input-401-image",
+          "label": "Input image",
+          "layout": {
+            "h": 11,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 10,
+            "x": 0,
+            "y": 10
+          },
+          "required": false,
+          "type": "load_image"
+        },
+        {
+          "description": "This model detects the main subject\u2019s outline. If background elements are still included, try a different model.",
+          "id": "ctrl-node-359-model",
+          "input_id": "ctrl-node-359-model",
+          "label": "Model used to countour the main subject",
+          "layout": {
+            "h": 6,
+            "min_h": 3,
+            "min_w": 5,
+            "w": 10,
+            "x": 0,
+            "y": 21
+          },
+          "required": false,
+          "type": "select"
+        },
+        {
+          "description": "Generated image will appear here.",
+          "id": "ctrl-node-184-output_image",
+          "label": "Result",
+          "layout": {
+            "h": 25,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 22,
+            "x": 10,
+            "y": 2
+          },
+          "output_id": "image",
+          "required": false,
+          "type": "display_image"
+        }
+      ],
+      "groups": [],
+      "id": "main",
+      "title": "Main"
+    }
+  ],
+  "status": "configured",
+  "version": "0.1.0"
+}

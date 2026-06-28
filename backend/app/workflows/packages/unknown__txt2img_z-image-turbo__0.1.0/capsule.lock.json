@@ -1,0 +1,108 @@
+{
+  "schema_version": "0.1.0",
+  "workflow": {
+    "publisher_id": "unknown",
+    "package_id": "txt2img_z-image-turbo",
+    "version": "0.1.0",
+    "trust_level": "quarantined_community",
+    "source": "noofy_archive_import",
+    "signature": null
+  },
+  "engine": {
+    "type": "comfyui",
+    "comfyui_version": "v0.24.0-post.184009c2",
+    "core_source_hash": "sha256:cb1b555e57c269ecb9f152dc3a32c44b0de96181dbfb6bc31fb62fa1482eff0e"
+  },
+  "runtime": {
+    "runtime_profile_id": "noofy-comfyui-v1-default",
+    "runtime_profile_variant_id": "linux-x64-cuda130",
+    "runtime_profile_manifest_hash": "sha256:fc21f3c8d79afe72eee2788926b288aec1940514f7c4fd76ce6ec88bd6417c61",
+    "runtime_profile_catalog_version": "0.1.0",
+    "fingerprint_schema_version": "0.1.0",
+    "dependency_env_fingerprint": "sha256:d24a50965d55e819efcb20c60cacdaaac7c3781419fe93928934fef50e46e8dd",
+    "runner_fingerprint": "sha256:03af298207fd22284502ecf33516a4723cf56176e0e730a22a20cadc93c1f619",
+    "runner_process_compatibility_key": null,
+    "capsule_fingerprint": "sha256:a8c02e8b98bc8fc86fa31f70b244d192a59031b1e17f1c1a7509bc09bfcea3bd",
+    "preview_method": "auto",
+    "preview_size": 512,
+    "os": "linux",
+    "architecture": "x64",
+    "python_version": "3.13",
+    "python_build_id": "cpython-3.13-noofy-v1",
+    "gpu_backend": "cuda",
+    "dependency_lock_hash": "sha256:1b727aad6ad34a1cbcd126ff17f9fda0a9b6f22bf22ea8bb0c118987164bce55",
+    "runner_workspace_hash": "sha256:03af298207fd22284502ecf33516a4723cf56176e0e730a22a20cadc93c1f619"
+  },
+  "custom_nodes": [],
+  "dependencies": {
+    "lock_file": "community-runtime.lock",
+    "install_policy": "quarantined-community-v1"
+  },
+  "models": [
+    {
+      "id": "diffusion_models/z_image_turbo_nvfp4.safetensors",
+      "sha256": "sha256:a553c889dbcb910de4c98293237573219a37007c1074a3f04576646a088bd5c8",
+      "size_bytes": 4509509600,
+      "source_urls": [],
+      "comfyui_folder": "diffusion_models",
+      "filename": "z_image_turbo_nvfp4.safetensors"
+    },
+    {
+      "id": "vae/ae.safetensors",
+      "sha256": "sha256:afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38",
+      "size_bytes": 335304388,
+      "source_urls": [],
+      "comfyui_folder": "vae",
+      "filename": "ae.safetensors"
+    },
+    {
+      "id": "text_encoders/qwen_3_4b_fp4_mixed.safetensors",
+      "sha256": "sha256:7ca32dcf07dfe7692945d80fff86e3a74cb83c6206b9b223ac6836b939bb85d6",
+      "size_bytes": 3479416193,
+      "source_urls": [],
+      "comfyui_folder": "text_encoders",
+      "filename": "qwen_3_4b_fp4_mixed.safetensors"
+    }
+  ],
+  "hardware_observations": {
+    "observed_peak_vram_mb": 8706,
+    "observed_peak_ram_mb": 9084,
+    "tested_resolution": null,
+    "tested_batch_size": 1,
+    "gpu_name": "cuda:0 NVIDIA A10G : cudaMallocAsync",
+    "os": null,
+    "backend": "cuda",
+    "precision": null,
+    "recommended_vram_mb": null,
+    "recommended_ram_mb": null
+  },
+  "trust": {
+    "level": "quarantined_community",
+    "publisher": "unknown",
+    "signatures": []
+  },
+  "source_policy": {
+    "policy_version": "phase6-local-0.1",
+    "trust_level": "quarantined_community",
+    "source_policy": "explicit_opt_in_and_isolated_capsule_required",
+    "package_source_type": "noofy_archive_import",
+    "automatic_preparation_allowed": true,
+    "allowed_registry_origins": [],
+    "allowed_source_origins": [
+      "explicit-metadata",
+      "registry-locked"
+    ],
+    "allowed_model_origins": [
+      "hashed-download",
+      "huggingface.co",
+      "user-local"
+    ],
+    "registry_id": null,
+    "registry_snapshot_hash": null,
+    "model_source_trust": "hashed",
+    "community_preparation_opt_in_required": true,
+    "community_preparation_opted_in": true,
+    "trust_verification_status": "not_required",
+    "policy_status": "active"
+  }
+}

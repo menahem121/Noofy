@@ -1,0 +1,225 @@
+{
+  "inputs": [
+    {
+      "binding": {
+        "input_name": "text",
+        "node_id": "13:4"
+      },
+      "control": "textarea",
+      "default": "High-fashion portrait of a man with a shaved head and stubble, head tilted back and gazing upward. His skin and thick-knitted dark green turtleneck sweater are bathed in a monochromatic teal-green light, creating a uniform, matte finish. He wears round, thin-framed sunglasses with reflective amber-orange lenses that catch the light. The background is a solid, vibrant burnt orange, creating a bold, high-contrast color palette. The lighting is hard and directional, casting sharp shadows on his face. Hyper-detailed, photorealistic, sharp focus on facial features and fabric texture, editorial photography, 8K.",
+      "default_pinned": true,
+      "id": "ctrl-node-13:4-text",
+      "label": "Prompt",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "height",
+        "node_id": "13:6"
+      },
+      "control": "slider",
+      "default": 1024,
+      "default_pinned": true,
+      "id": "ctrl-node-13:6-height",
+      "label": "Height",
+      "validation": {
+        "max": 2048,
+        "min": 64,
+        "step": 64
+      }
+    },
+    {
+      "binding": {
+        "input_name": "width",
+        "node_id": "13:6"
+      },
+      "control": "slider",
+      "default": 1024,
+      "default_pinned": true,
+      "id": "ctrl-node-13:6-width",
+      "label": "Width",
+      "validation": {
+        "max": 2048,
+        "min": 64,
+        "step": 64
+      }
+    },
+    {
+      "binding": {
+        "input_name": "steps",
+        "node_id": "13:7"
+      },
+      "control": "slider",
+      "default": 20,
+      "default_pinned": true,
+      "id": "ctrl-node-13:7-steps",
+      "label": "Refinement Level",
+      "validation": {
+        "max": 120,
+        "min": 1,
+        "step": 1
+      }
+    },
+    {
+      "binding": {
+        "input_name": "seed",
+        "node_id": "13:7"
+      },
+      "control": "seed_widget",
+      "default": 117106883331687,
+      "default_pinned": true,
+      "id": "ctrl-node-13:7-seed",
+      "label": "Variation ID",
+      "validation": {
+        "seed_mode": "randomize"
+      }
+    },
+    {
+      "binding": {
+        "input_name": "text",
+        "node_id": "13:5"
+      },
+      "control": "textarea",
+      "default": "blurry, low resolution, oversaturated, harsh lighting, messy composition, distorted face, extra fingers, bad anatomy, cheap jewelry, plastic texture, cartoon, illustration, anime, watermark, text, logo",
+      "default_pinned": true,
+      "id": "ctrl-node-13:5-text",
+      "label": "Prompt",
+      "validation": {}
+    }
+  ],
+  "outputs": [
+    {
+      "id": "image",
+      "kind": "image",
+      "label": "Result",
+      "node_id": "9",
+      "type": "image"
+    }
+  ],
+  "sections": [
+    {
+      "controls": [
+        {
+          "description": "Describe what you want to create.",
+          "id": "ctrl-node-13:4-text",
+          "input_id": "ctrl-node-13:4-text",
+          "label": "Prompt",
+          "required": false,
+          "type": "textarea"
+        },
+        {
+          "description": "Output height in pixels.",
+          "id": "ctrl-node-13:6-height",
+          "input_id": "ctrl-node-13:6-height",
+          "label": "Height",
+          "required": false,
+          "type": "slider"
+        },
+        {
+          "description": "Output width in pixels.",
+          "id": "ctrl-node-13:6-width",
+          "input_id": "ctrl-node-13:6-width",
+          "label": "Width",
+          "required": false,
+          "type": "slider"
+        },
+        {
+          "description": "More passes can add detail but take longer.",
+          "id": "ctrl-node-13:7-steps",
+          "input_id": "ctrl-node-13:7-steps",
+          "label": "Refinement Level",
+          "layout": {
+            "h": 4,
+            "min_h": 4,
+            "min_w": 6,
+            "w": 13,
+            "x": 12,
+            "y": 23
+          },
+          "required": false,
+          "type": "slider"
+        },
+        {
+          "description": "Lock or change to get a different variation.",
+          "id": "ctrl-node-13:7-seed",
+          "input_id": "ctrl-node-13:7-seed",
+          "label": "Variation ID",
+          "layout": {
+            "h": 4,
+            "min_h": 3,
+            "min_w": 4,
+            "w": 7,
+            "x": 25,
+            "y": 23
+          },
+          "required": false,
+          "type": "seed_widget"
+        },
+        {
+          "description": "Describe what you want to create.",
+          "id": "ctrl-node-13:5-text",
+          "input_id": "ctrl-node-13:5-text",
+          "label": "Prompt",
+          "required": false,
+          "type": "textarea"
+        },
+        {
+          "description": "Generated image will appear here.",
+          "id": "ctrl-node-9-output_image",
+          "label": "Result",
+          "layout": {
+            "h": 21,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 20,
+            "x": 12,
+            "y": 2
+          },
+          "output_id": "image",
+          "required": false,
+          "type": "display_image"
+        }
+      ],
+      "groups": [
+        {
+          "control_ids": [
+            "ctrl-node-13:6-height",
+            "ctrl-node-13:6-width"
+          ],
+          "description": "",
+          "id": "group-1",
+          "layout": {
+            "h": 10,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 12,
+            "x": 0,
+            "y": 17
+          },
+          "title": "Height + Width"
+        },
+        {
+          "control_ids": [
+            "ctrl-node-13:4-text",
+            "ctrl-node-13:5-text"
+          ],
+          "description": "",
+          "id": "group-2",
+          "layout": {
+            "h": 17,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 12,
+            "x": 0,
+            "y": 0
+          },
+          "title": "Prompt + Prompt"
+        }
+      ],
+      "id": "main",
+      "title": "Main"
+    }
+  ],
+  "status": "configured",
+  "version": "0.1.0"
+}

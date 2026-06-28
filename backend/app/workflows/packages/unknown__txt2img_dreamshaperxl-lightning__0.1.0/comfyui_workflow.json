@@ -1,0 +1,544 @@
+{
+  "config": {},
+  "extra": {
+    "ds": {
+      "offset": [
+        290.8430426093756,
+        466.46429478320306
+      ],
+      "scale": 0.5644739300537773
+    },
+    "frontendVersion": "1.44.19"
+  },
+  "groups": [],
+  "id": "300355d8-613e-4bbd-a601-6e40fd7f8439",
+  "last_link_id": 61,
+  "last_node_id": 135,
+  "links": [
+    [
+      38,
+      8,
+      0,
+      28,
+      0,
+      "IMAGE"
+    ],
+    [
+      40,
+      29,
+      1,
+      19,
+      0,
+      "CLIP"
+    ],
+    [
+      41,
+      29,
+      1,
+      6,
+      0,
+      "CLIP"
+    ],
+    [
+      42,
+      29,
+      2,
+      8,
+      1,
+      "VAE"
+    ],
+    [
+      43,
+      29,
+      0,
+      30,
+      0,
+      "MODEL"
+    ],
+    [
+      44,
+      6,
+      0,
+      30,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      45,
+      19,
+      0,
+      30,
+      2,
+      "CONDITIONING"
+    ],
+    [
+      46,
+      5,
+      0,
+      30,
+      3,
+      "LATENT"
+    ],
+    [
+      47,
+      30,
+      0,
+      8,
+      0,
+      "LATENT"
+    ],
+    [
+      48,
+      121,
+      0,
+      30,
+      0,
+      "MODEL"
+    ],
+    [
+      49,
+      121,
+      2,
+      8,
+      1,
+      "VAE"
+    ],
+    [
+      52,
+      122,
+      0,
+      8,
+      0,
+      "LATENT"
+    ],
+    [
+      53,
+      125,
+      0,
+      122,
+      3,
+      "LATENT"
+    ],
+    [
+      54,
+      127,
+      0,
+      8,
+      0,
+      "LATENT"
+    ],
+    [
+      55,
+      121,
+      1,
+      128,
+      0,
+      "CLIP"
+    ],
+    [
+      56,
+      128,
+      0,
+      6,
+      0,
+      "CLIP"
+    ],
+    [
+      57,
+      128,
+      0,
+      19,
+      0,
+      "CLIP"
+    ],
+    [
+      58,
+      135,
+      0,
+      6,
+      0,
+      "CLIP"
+    ],
+    [
+      59,
+      135,
+      0,
+      19,
+      0,
+      "CLIP"
+    ],
+    [
+      60,
+      98,
+      0,
+      8,
+      0,
+      "LATENT"
+    ],
+    [
+      61,
+      100,
+      0,
+      98,
+      3,
+      "LATENT"
+    ]
+  ],
+  "nodes": [
+    {
+      "flags": {},
+      "id": 121,
+      "inputs": [],
+      "mode": 0,
+      "order": 0,
+      "outputs": [
+        {
+          "links": [
+            43,
+            48
+          ],
+          "name": "MODEL",
+          "slot_index": 0,
+          "type": "MODEL"
+        },
+        {
+          "links": [
+            40,
+            41,
+            55
+          ],
+          "name": "CLIP",
+          "slot_index": 1,
+          "type": "CLIP"
+        },
+        {
+          "links": [
+            42,
+            49
+          ],
+          "name": "VAE",
+          "slot_index": 2,
+          "type": "VAE"
+        }
+      ],
+      "pos": [
+        8,
+        45
+      ],
+      "properties": {
+        "Node name for S&R": "CheckpointLoaderSimple",
+        "cnr_id": "comfy-core",
+        "ver": "0.24.1"
+      },
+      "size": [
+        315,
+        130.6666717529297
+      ],
+      "type": "CheckpointLoaderSimple",
+      "widgets_values": [
+        "DreamShaperXL_Lightning.safetensors"
+      ]
+    },
+    {
+      "flags": {},
+      "id": 19,
+      "inputs": [
+        {
+          "link": 59,
+          "name": "clip",
+          "type": "CLIP"
+        }
+      ],
+      "mode": 0,
+      "order": 2,
+      "outputs": [
+        {
+          "links": [
+            45
+          ],
+          "name": "CONDITIONING",
+          "slot_index": 0,
+          "type": "CONDITIONING"
+        }
+      ],
+      "pos": [
+        691,
+        332
+      ],
+      "properties": {
+        "Node name for S&R": "CLIPTextEncode",
+        "cnr_id": "comfy-core",
+        "ver": "0.24.1"
+      },
+      "size": [
+        422.8500061035156,
+        164.31666564941406
+      ],
+      "type": "CLIPTextEncode",
+      "widgets_values": [
+        "blur, ugly, extra legs, wrong anatomy, this is negative prompt"
+      ]
+    },
+    {
+      "flags": {},
+      "id": 6,
+      "inputs": [
+        {
+          "link": 58,
+          "name": "clip",
+          "type": "CLIP"
+        }
+      ],
+      "mode": 0,
+      "order": 3,
+      "outputs": [
+        {
+          "links": [
+            44
+          ],
+          "name": "CONDITIONING",
+          "slot_index": 0,
+          "type": "CONDITIONING"
+        }
+      ],
+      "pos": [
+        692,
+        128
+      ],
+      "properties": {
+        "Node name for S&R": "CLIPTextEncode",
+        "cnr_id": "comfy-core",
+        "ver": "0.24.1"
+      },
+      "size": [
+        422.8500061035156,
+        164.31666564941406
+      ],
+      "type": "CLIPTextEncode",
+      "widgets_values": [
+        "a green horse riding on the moon"
+      ]
+    },
+    {
+      "flags": {},
+      "id": 8,
+      "inputs": [
+        {
+          "link": 60,
+          "name": "samples",
+          "type": "LATENT"
+        },
+        {
+          "link": 49,
+          "name": "vae",
+          "type": "VAE"
+        }
+      ],
+      "mode": 0,
+      "order": 4,
+      "outputs": [
+        {
+          "links": [
+            38
+          ],
+          "name": "IMAGE",
+          "slot_index": 0,
+          "type": "IMAGE"
+        }
+      ],
+      "pos": [
+        1627,
+        50
+      ],
+      "properties": {
+        "Node name for S&R": "VAEDecode",
+        "cnr_id": "comfy-core",
+        "ver": "0.24.1"
+      },
+      "size": [
+        225,
+        72
+      ],
+      "type": "VAEDecode",
+      "widgets_values": []
+    },
+    {
+      "flags": {},
+      "id": 99,
+      "inputs": [
+        {
+          "link": 38,
+          "name": "images",
+          "type": "IMAGE"
+        }
+      ],
+      "mode": 0,
+      "order": 6,
+      "outputs": [],
+      "pos": [
+        1895,
+        49
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.24.1"
+      },
+      "size": [
+        504.3166809082031,
+        469.9333190917969
+      ],
+      "type": "SaveImage",
+      "widgets_values": [
+        "text2image"
+      ]
+    },
+    {
+      "flags": {},
+      "id": 135,
+      "inputs": [
+        {
+          "link": 55,
+          "name": "clip",
+          "type": "CLIP"
+        }
+      ],
+      "mode": 0,
+      "order": 7,
+      "outputs": [
+        {
+          "links": [
+            56,
+            57,
+            58,
+            59
+          ],
+          "name": "CLIP",
+          "slot_index": 0,
+          "type": "CLIP"
+        }
+      ],
+      "pos": [
+        312,
+        307
+      ],
+      "properties": {
+        "Node name for S&R": "CLIPSetLastLayer",
+        "cnr_id": "comfy-core",
+        "ver": "0.24.1"
+      },
+      "showAdvanced": true,
+      "size": [
+        315,
+        108
+      ],
+      "type": "CLIPSetLastLayer",
+      "widgets_values": [
+        -2
+      ]
+    },
+    {
+      "flags": {},
+      "id": 98,
+      "inputs": [
+        {
+          "link": 48,
+          "name": "model",
+          "type": "MODEL"
+        },
+        {
+          "link": 44,
+          "name": "positive",
+          "type": "CONDITIONING"
+        },
+        {
+          "link": 45,
+          "name": "negative",
+          "type": "CONDITIONING"
+        },
+        {
+          "link": 61,
+          "name": "latent_image",
+          "type": "LATENT"
+        }
+      ],
+      "mode": 0,
+      "order": 5,
+      "outputs": [
+        {
+          "links": [
+            47,
+            52,
+            54,
+            60
+          ],
+          "name": "LATENT",
+          "slot_index": 0,
+          "type": "LATENT"
+        }
+      ],
+      "pos": [
+        1220,
+        36
+      ],
+      "properties": {
+        "Node name for S&R": "KSampler",
+        "cnr_id": "comfy-core",
+        "ver": "0.24.1"
+      },
+      "size": [
+        315,
+        317.3333435058594
+      ],
+      "type": "KSampler",
+      "widgets_values": [
+        323956037610255,
+        "randomize",
+        4,
+        2,
+        "dpmpp_sde_gpu",
+        "karras",
+        1
+      ]
+    },
+    {
+      "flags": {},
+      "id": 100,
+      "inputs": [],
+      "mode": 0,
+      "order": 1,
+      "outputs": [
+        {
+          "links": [
+            46,
+            53,
+            61
+          ],
+          "name": "LATENT",
+          "slot_index": 0,
+          "type": "LATENT"
+        }
+      ],
+      "pos": [
+        812,
+        569
+      ],
+      "properties": {
+        "Node name for S&R": "EmptyLatentImage",
+        "cnr_id": "comfy-core",
+        "ver": "0.24.1"
+      },
+      "size": [
+        315,
+        144
+      ],
+      "type": "EmptyLatentImage",
+      "widgets_values": [
+        1024,
+        1024,
+        1
+      ]
+    }
+  ],
+  "revision": 0,
+  "version": 0.4
+}

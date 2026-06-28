@@ -1,0 +1,104 @@
+{
+  "inputs": [
+    {
+      "binding": {
+        "input_name": "text",
+        "node_id": "107"
+      },
+      "control": "textarea",
+      "default": "add him some big muscles",
+      "default_pinned": true,
+      "id": "ctrl-node-107-text",
+      "label": "Prompt",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "image",
+        "node_id": "151"
+      },
+      "control": "load_image",
+      "default": {
+        "asset_id": "input-defaults/735acab502bd1a3a-flux2-klein_00002_-mask.png",
+        "content_type": "image/png",
+        "filename": "Flux2-Klein_00002_-mask.png",
+        "kind": "image",
+        "sha256": "sha256:735acab502bd1a3ac15d7f022fbbc803173dc381d2830af092e57b4a1d1272a8",
+        "size_bytes": 1616385,
+        "source": "package_asset"
+      },
+      "default_pinned": true,
+      "id": "ctrl-node-151-image",
+      "label": "Input image",
+      "validation": {}
+    }
+  ],
+  "outputs": [
+    {
+      "id": "image",
+      "kind": "image",
+      "label": "Result",
+      "node_id": "9",
+      "type": "image"
+    }
+  ],
+  "sections": [
+    {
+      "controls": [
+        {
+          "description": "Describe what you want to create.",
+          "id": "ctrl-node-107-text",
+          "input_id": "ctrl-node-107-text",
+          "label": "Prompt",
+          "layout": {
+            "h": 16,
+            "min_h": 4,
+            "min_w": 5,
+            "w": 11,
+            "x": 0,
+            "y": 0
+          },
+          "required": false,
+          "type": "textarea"
+        },
+        {
+          "description": "Choose an image from your computer.",
+          "id": "ctrl-node-151-image",
+          "input_id": "ctrl-node-151-image",
+          "label": "Input image",
+          "layout": {
+            "h": 10,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 11,
+            "x": 0,
+            "y": 16
+          },
+          "required": false,
+          "type": "load_image"
+        },
+        {
+          "description": "Generated image will appear here.",
+          "id": "ctrl-node-9-output_image",
+          "label": "Result",
+          "layout": {
+            "h": 23,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 21,
+            "x": 11,
+            "y": 2
+          },
+          "output_id": "image",
+          "required": false,
+          "type": "display_image"
+        }
+      ],
+      "groups": [],
+      "id": "main",
+      "title": "Main"
+    }
+  ],
+  "status": "configured",
+  "version": "0.1.0"
+}

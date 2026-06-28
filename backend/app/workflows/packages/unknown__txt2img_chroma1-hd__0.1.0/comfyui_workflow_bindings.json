@@ -1,0 +1,59 @@
+{
+  "nodes": {
+    "694": {
+      "cfg": 0
+    },
+    "700": {
+      "sampler_name": 0
+    },
+    "701": {
+      "shift": 0
+    },
+    "710": {
+      "vae_name": 0
+    },
+    "718": {
+      "control_after_generate": 1,
+      "noise_seed": 0
+    },
+    "731": {
+      "unet_name": 0,
+      "weight_dtype": 1
+    },
+    "733": {
+      "clip_name": 0,
+      "device": 2,
+      "type": 1
+    },
+    "734": {
+      "denoise": 2,
+      "scheduler": 0,
+      "steps": 1
+    },
+    "737": {
+      "batch_size": 2,
+      "height": 1,
+      "width": 0
+    },
+    "739": {
+      "text": 0
+    },
+    "740": {
+      "filename_prefix": 0
+    },
+    "741": {
+      "min_length": 1,
+      "min_padding": 0
+    },
+    "742": {
+      "text": 0
+    },
+    "748": {
+      "text": 0
+    },
+    "749": {
+      "text": 0
+    }
+  },
+  "schema_version": "0.1.0"
+}

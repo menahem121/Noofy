@@ -1,0 +1,87 @@
+{
+  "custom_nodes": [],
+  "dependencies": {
+    "install_policy": "isolated-community-index-build-v2",
+    "lock_file": "community-runtime.lock"
+  },
+  "engine": {
+    "comfyui_version": "v0.25.0",
+    "core_source_hash": "sha256:ed3735102510df396ba3c7974a465f0ddb37faca32df678630ac470bf26ae37f",
+    "type": "comfyui"
+  },
+  "hardware_observations": {
+    "backend": "cuda",
+    "gpu_name": "cuda:0 NVIDIA A10G : cudaMallocAsync",
+    "observed_peak_ram_mb": 6713,
+    "observed_peak_vram_mb": 8382,
+    "tested_batch_size": 1
+  },
+  "models": [
+    {
+      "comfyui_folder": "checkpoints",
+      "filename": "DreamShaperXL_Lightning.safetensors",
+      "id": "checkpoints/DreamShaperXL_Lightning.safetensors",
+      "sha256": "sha256:fdbe56354b8f876b736f24d3ad867ecd4140c019f57642ec8ddd878088d44f64",
+      "size_bytes": 6939220250,
+      "source_urls": []
+    }
+  ],
+  "runtime": {
+    "architecture": "x64",
+    "attention_backend": "auto",
+    "capsule_fingerprint": "sha256:86651cb036891bc62ab77bcaf71491f0b658a84aebc4ba2b92f629c5614e2d02",
+    "dependency_env_fingerprint": "sha256:7d96a87e31f9e296b1008edc2a9dff76c0b0abb00078936f60557e27c5f0f2c2",
+    "dependency_lock_hash": "sha256:d4619fe9e961cfc7e044fba7f8acce276bb0c4a43848a89dad1430a52dcd8986",
+    "fingerprint_schema_version": "0.2.0",
+    "gpu_backend": "cuda",
+    "noofy_environment": {},
+    "os": "linux",
+    "precision_policy": "auto",
+    "preview_method": "auto",
+    "preview_size": 512,
+    "python_build_id": "cpython-3.13-noofy-v1",
+    "python_version": "3.13",
+    "runner_fingerprint": "sha256:66fde932643794d3918fda04f210cfe1084c8544bd4ed431bcc5c17a49295112",
+    "runner_workspace_hash": "sha256:66fde932643794d3918fda04f210cfe1084c8544bd4ed431bcc5c17a49295112",
+    "runtime_profile_catalog_version": "0.1.0",
+    "runtime_profile_id": "noofy-comfyui-v1-default",
+    "runtime_profile_manifest_hash": "sha256:fcb7d601f610529d2d0e85a94f307f746b9b1c48d5b44cbc7203adbeaabd1897",
+    "runtime_profile_variant_id": "linux-x64-cuda130",
+    "vram_mode": "auto"
+  },
+  "schema_version": "0.1.0",
+  "source_policy": {
+    "allowed_model_origins": [
+      "hashed-download",
+      "huggingface.co",
+      "user-local"
+    ],
+    "allowed_registry_origins": [],
+    "allowed_source_origins": [
+      "explicit-metadata",
+      "registry-locked"
+    ],
+    "automatic_preparation_allowed": true,
+    "community_preparation_opt_in_required": true,
+    "community_preparation_opted_in": true,
+    "model_source_trust": "hashed",
+    "package_source_type": "noofy_archive_import",
+    "policy_status": "active",
+    "policy_version": "phase6-local-0.1",
+    "source_policy": "explicit_opt_in_and_isolated_capsule_required",
+    "trust_level": "quarantined_community",
+    "trust_verification_status": "not_required"
+  },
+  "trust": {
+    "level": "quarantined_community",
+    "publisher": "unknown",
+    "signatures": []
+  },
+  "workflow": {
+    "package_id": "txt2img_dreamshaperxl-lightning",
+    "publisher_id": "unknown",
+    "source": "noofy_archive_import",
+    "trust_level": "quarantined_community",
+    "version": "0.1.0"
+  }
+}

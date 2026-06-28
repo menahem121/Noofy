@@ -1,0 +1,223 @@
+{
+  "inputs": [
+    {
+      "binding": {
+        "input_name": "text",
+        "node_id": "748"
+      },
+      "control": "textarea",
+      "default": "This is a nature documentary close-up photograph of the right side of the face of a tiger. The photograph is centered on it's highly detailed and speckled eye surrounded by intricately detailed fur. Overlaid at the center of the image is a title text that says \"CHROMA1-HD\" in a large white 3D letters. Amateur photography. Unfiltered. Real life. Natural light. Subtle shadows. ",
+      "default_pinned": true,
+      "id": "ctrl-node-748-text",
+      "label": "Prompt",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "width",
+        "node_id": "737"
+      },
+      "control": "slider",
+      "default": 1024,
+      "default_pinned": true,
+      "id": "ctrl-node-737-width",
+      "label": "Width",
+      "validation": {
+        "max": 4096,
+        "min": 64,
+        "step": 64
+      }
+    },
+    {
+      "binding": {
+        "input_name": "height",
+        "node_id": "737"
+      },
+      "control": "slider",
+      "default": 1024,
+      "default_pinned": true,
+      "id": "ctrl-node-737-height",
+      "label": "Height",
+      "validation": {
+        "max": 4096,
+        "min": 64,
+        "step": 64
+      }
+    },
+    {
+      "binding": {
+        "input_name": "steps",
+        "node_id": "734"
+      },
+      "control": "slider",
+      "default": 26,
+      "default_pinned": true,
+      "id": "ctrl-node-734-steps",
+      "label": "Refinement Level",
+      "validation": {
+        "max": 120,
+        "min": 1,
+        "step": 1
+      }
+    },
+    {
+      "binding": {
+        "input_name": "noise_seed",
+        "node_id": "718"
+      },
+      "control": "seed_widget",
+      "default": 57968108221220,
+      "default_pinned": true,
+      "id": "ctrl-node-718-noise_seed",
+      "label": "Variation ID",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "text",
+        "node_id": "749"
+      },
+      "control": "textarea",
+      "default": "This low quality greyscale unfinished sketch is inaccurate and flawed. The image is very blurred and lacks detail with excessive chromatic aberrations and artifacts. The image is overly saturated with excessive bloom. It has a toony aesthetic with bold outlines and flat colors. ",
+      "default_pinned": true,
+      "id": "ctrl-node-749-text",
+      "label": "Negative prompt",
+      "validation": {}
+    }
+  ],
+  "outputs": [
+    {
+      "id": "image",
+      "kind": "image",
+      "label": "Result",
+      "node_id": "740",
+      "type": "image"
+    }
+  ],
+  "sections": [
+    {
+      "controls": [
+        {
+          "description": "Describe what you want to create.",
+          "id": "ctrl-node-748-text",
+          "input_id": "ctrl-node-748-text",
+          "label": "Prompt",
+          "required": false,
+          "type": "textarea"
+        },
+        {
+          "description": "",
+          "id": "ctrl-node-737-width",
+          "input_id": "ctrl-node-737-width",
+          "label": "Width",
+          "required": false,
+          "type": "slider"
+        },
+        {
+          "description": "",
+          "id": "ctrl-node-737-height",
+          "input_id": "ctrl-node-737-height",
+          "label": "Height",
+          "required": false,
+          "type": "slider"
+        },
+        {
+          "description": "More passes can add detail but take longer.",
+          "id": "ctrl-node-734-steps",
+          "input_id": "ctrl-node-734-steps",
+          "label": "Refinement Level",
+          "layout": {
+            "h": 4,
+            "min_h": 4,
+            "min_w": 6,
+            "w": 13,
+            "x": 12,
+            "y": 23
+          },
+          "required": false,
+          "type": "slider"
+        },
+        {
+          "description": "",
+          "id": "ctrl-node-718-noise_seed",
+          "input_id": "ctrl-node-718-noise_seed",
+          "label": "Variation ID",
+          "layout": {
+            "h": 4,
+            "min_h": 3,
+            "min_w": 4,
+            "w": 7,
+            "x": 25,
+            "y": 23
+          },
+          "required": false,
+          "type": "seed_widget"
+        },
+        {
+          "description": "Describe what you don't want to create.",
+          "id": "ctrl-node-749-text",
+          "input_id": "ctrl-node-749-text",
+          "label": "Negative prompt",
+          "required": false,
+          "type": "textarea"
+        },
+        {
+          "description": "Generated image will appear here.",
+          "id": "ctrl-node-740-output_image",
+          "label": "Result",
+          "layout": {
+            "h": 21,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 20,
+            "x": 12,
+            "y": 2
+          },
+          "output_id": "image",
+          "required": false,
+          "type": "display_image"
+        }
+      ],
+      "groups": [
+        {
+          "control_ids": [
+            "ctrl-node-748-text",
+            "ctrl-node-749-text"
+          ],
+          "description": "",
+          "id": "group-1",
+          "layout": {
+            "h": 19,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 12,
+            "x": 0,
+            "y": 0
+          },
+          "title": "Prompt + Negative prompt"
+        },
+        {
+          "control_ids": [
+            "ctrl-node-737-width",
+            "ctrl-node-737-height"
+          ],
+          "description": "(in pixels)",
+          "id": "group-2",
+          "layout": {
+            "h": 8,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 12,
+            "x": 0,
+            "y": 19
+          },
+          "title": "Image dimensions"
+        }
+      ],
+      "id": "main",
+      "title": "Main"
+    }
+  ],
+  "status": "configured",
+  "version": "0.1.0"
+}

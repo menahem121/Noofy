@@ -1,0 +1,142 @@
+{
+  "46": {
+    "_meta": {
+      "title": "Save Image"
+    },
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "Anima",
+      "images": [
+        "60:8",
+        0
+      ]
+    }
+  },
+  "60:11": {
+    "_meta": {
+      "title": "CLIP Text Encode (Positive Prompt)"
+    },
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "60:45",
+        0
+      ],
+      "text": " [masterpiece, best quality, ultra refined anime aesthetics, breathtaking dreamlike anime illustration, highly detailed anime lineart,\n\nbeautiful anime girl aiming a fantasy sniper rifle, intimate close-up composition, upper body dominating the entire frame, face occupying most of the image, soft silver-blonde hair flowing gently through a quiet night breeze, a few loose strands crossing her cheek naturally,\n\none eye softly closed, the other carefully looking through the scope, subtle concentration, relaxed breathing, calm and emotionally immersive expression, not aggressive, not combat-focused, simply absorbed in the moment,\n\nextremely beautiful anime facial structure, large luminous blue-violet eyes, delicate eyelashes, translucent skin shading, soft blush, subtle glossy lips, highly aesthetic facial harmony, natural beauty, emotionally believable presence,\n\nholding an elegant dreamlike sniper rifle crafted from crystal glass, moonlight reflections, pearl-like materials and delicate silver details, refined fantasy craftsmanship, beautiful curves and translucent surfaces, magical but believable design,\n\nfinger resting lightly on the trigger, quiet anticipation, gentle tension in the shoulders and hands, realistic posture without exaggeration,\n\nsurrounded by a dreamlike night sky filled with soft clouds, distant stars and subtle floating reflections, only a few large translucent bubbles drifting quietly near the rifle barrel, delicate rainbow reflections visible on their surfaces, restrained fantasy elements,\n\nsoft moonlight illuminating her face, cinematic depth of field, highly detailed but clean rendering, intimate emotional framing, beautiful facial focus, elegant composition, dreamlike atmosphere,\n\nbeautiful anime masterpiece, unforgettable visual beauty, dreamlike serenity, gentle emotional atmosphere]"
+    }
+  },
+  "60:12": {
+    "_meta": {
+      "title": "CLIP Text Encode (Negative Prompt)"
+    },
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "60:45",
+        0
+      ],
+      "text": "worst quality, low quality, score_1, score_2, score_3, blurry, jpeg artifacts, sepia"
+    }
+  },
+  "60:15": {
+    "_meta": {
+      "title": "Load VAE"
+    },
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "qwen_image_vae.safetensors"
+    }
+  },
+  "60:19": {
+    "_meta": {
+      "title": "KSampler"
+    },
+    "class_type": "KSampler",
+    "inputs": {
+      "cfg": 1.0,
+      "denoise": 1.0,
+      "latent_image": [
+        "60:79",
+        0
+      ],
+      "model": [
+        "60:77",
+        0
+      ],
+      "negative": [
+        "60:12",
+        0
+      ],
+      "positive": [
+        "60:11",
+        0
+      ],
+      "sampler_name": "er_sde",
+      "scheduler": "simple",
+      "seed": 875817230929465,
+      "steps": 8
+    }
+  },
+  "60:44": {
+    "_meta": {
+      "title": "Load Diffusion Model"
+    },
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "anima-base-v1.0.safetensors",
+      "weight_dtype": "default"
+    }
+  },
+  "60:45": {
+    "_meta": {
+      "title": "Load CLIP"
+    },
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen_3_06b_base.safetensors",
+      "device": "default",
+      "type": "stable_diffusion"
+    }
+  },
+  "60:77": {
+    "_meta": {
+      "title": "Load LoRA"
+    },
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "lora_name": "Anima_Turbo_LoRA.safetensors",
+      "model": [
+        "60:44",
+        0
+      ],
+      "strength_model": 1.0
+    }
+  },
+  "60:79": {
+    "_meta": {
+      "title": "EmptySD3LatentImage"
+    },
+    "class_type": "EmptySD3LatentImage",
+    "inputs": {
+      "batch_size": 1,
+      "height": 1024,
+      "width": 1024
+    }
+  },
+  "60:8": {
+    "_meta": {
+      "title": "VAE Decode"
+    },
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "60:19",
+        0
+      ],
+      "vae": [
+        "60:15",
+        0
+      ]
+    }
+  }
+}

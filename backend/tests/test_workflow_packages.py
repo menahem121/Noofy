@@ -500,7 +500,8 @@ def test_bundled_package_model_identity_is_not_weaker_than_capsule_lock() -> Non
             key = (locked.get("comfyui_folder"), locked.get("filename"))
             package_model = package_models.get(key)
             assert package_model is not None, f"{package_file} is missing locked model {key}"
-            expected_checksum = f"sha256:{locked['sha256']}"
+            locked_sha256 = locked["sha256"]
+            expected_checksum = locked_sha256 if locked_sha256.startswith("sha256:") else f"sha256:{locked_sha256}"
             assert package_model.get("checksum") == expected_checksum
             assert package_model.get("size_bytes") == locked.get("size_bytes")
             assert package_model.get("verification_level") == ModelVerificationLevel.SHA256_SIZE.value

@@ -1,14 +1,18 @@
 import type { LucideIcon } from "lucide-react";
 import {
+  Box,
   Brush,
   Eraser,
   Expand,
+  FileAudio,
+  FileText,
   FolderClock,
   ImagePlus,
   Images,
   Library,
   LucideWandSparkles,
   PackageOpen,
+  Video,
   Wand2,
 } from "lucide-react";
 import type { WorkflowHardwareWarning } from "../../lib/api/noofyApi";
@@ -40,6 +44,7 @@ export interface WorkflowCard {
   icon?: string;
   Icon: LucideIcon;
   source: "backend" | "starter";
+  variantGroupId?: string;
   variants?: WorkflowCardVariant[];
 }
 
@@ -50,10 +55,10 @@ export interface WorkflowCardVariant {
 }
 
 export const fallbackWorkflow: WorkflowCard = {
-  id: "text_to_image_v0",
-  title: "Text to Image",
-  description: "Generate new images from a simple text prompt.",
-  category: "Image Generation",
+  id: "workflow-library-offline",
+  title: "Built-in Workflows",
+  description: "Noofy is reconnecting to your local workflow library.",
+  category: "Workflows",
   status: "offline",
   statusLabel: "Reconnect",
   Icon: ImagePlus,
@@ -61,6 +66,16 @@ export const fallbackWorkflow: WorkflowCard = {
 };
 
 export const starterWorkflows: WorkflowCard[] = [
+  {
+    id: "text-to-image",
+    title: "Text to Image",
+    description: "Generate new images from a simple prompt.",
+    category: "Image Generation",
+    status: "planned",
+    statusLabel: "Planned",
+    Icon: ImagePlus,
+    source: "starter",
+  },
   {
     id: "remove-background",
     title: "Remove Background",
@@ -72,13 +87,13 @@ export const starterWorkflows: WorkflowCard[] = [
     source: "starter",
   },
   {
-    id: "erase-object",
-    title: "Erase Object",
-    description: "Brush over something unwanted and fill the scene naturally.",
+    id: "outpainting",
+    title: "Outpainting",
+    description: "Extend an image beyond its original frame.",
     category: "Image Editing",
     status: "planned",
     statusLabel: "Planned",
-    Icon: Brush,
+    Icon: Expand,
     source: "starter",
   },
   {
@@ -102,6 +117,16 @@ export const starterWorkflows: WorkflowCard[] = [
     source: "starter",
   },
   {
+    id: "inpainting",
+    title: "Inpainting",
+    description: "Edit selected parts of an image while keeping the rest intact.",
+    category: "Image Editing",
+    status: "planned",
+    statusLabel: "Planned",
+    Icon: Brush,
+    source: "starter",
+  },
+  {
     id: "image-to-image",
     title: "Image to Image",
     description: "Use a reference image to guide a new generation.",
@@ -112,6 +137,16 @@ export const starterWorkflows: WorkflowCard[] = [
     source: "starter",
   },
   {
+    id: "image-to-3d",
+    title: "Image to 3D",
+    description: "Turn a reference image into a 3D asset.",
+    category: "3D Generation",
+    status: "planned",
+    statusLabel: "Planned",
+    Icon: Box,
+    source: "starter",
+  },
+  {
     id: "replace-background",
     title: "Replace Background",
     description: "Keep the subject and create a new background scene.",
@@ -119,6 +154,46 @@ export const starterWorkflows: WorkflowCard[] = [
     status: "planned",
     statusLabel: "Planned",
     Icon: Wand2,
+    source: "starter",
+  },
+  {
+    id: "text-to-audio",
+    title: "Text to Audio",
+    description: "Create audio from written text.",
+    category: "Audio Generation",
+    status: "planned",
+    statusLabel: "Planned",
+    Icon: FileAudio,
+    source: "starter",
+  },
+  {
+    id: "text-to-video",
+    title: "Text to Video",
+    description: "Generate a video from a written prompt.",
+    category: "Video Generation",
+    status: "planned",
+    statusLabel: "Planned",
+    Icon: Video,
+    source: "starter",
+  },
+  {
+    id: "text-to-text",
+    title: "Text to Text",
+    description: "Generate or transform text with a local language workflow.",
+    category: "Text Generation",
+    status: "planned",
+    statusLabel: "Planned",
+    Icon: FileText,
+    source: "starter",
+  },
+  {
+    id: "image-to-video",
+    title: "Image to Video",
+    description: "Animate a still image into a short video.",
+    category: "Video Generation",
+    status: "planned",
+    statusLabel: "Planned",
+    Icon: Video,
     source: "starter",
   },
 ];

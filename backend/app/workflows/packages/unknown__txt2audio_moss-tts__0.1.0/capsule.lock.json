@@ -1,0 +1,88 @@
+{
+  "custom_nodes": [
+    {
+      "node_types": [
+        "MossTTSGenerate",
+        "MossTTSModelLoader"
+      ],
+      "package_id": "comfyui-moss-tts",
+      "source": "bundled_from_creator_machine",
+      "trust_level": "quarantined_community"
+    }
+  ],
+  "dependencies": {
+    "install_policy": "isolated-community-index-build-v2",
+    "lock_file": "community-runtime.lock"
+  },
+  "engine": {
+    "comfyui_version": "v0.25.0",
+    "core_source_hash": "sha256:ed3735102510df396ba3c7974a465f0ddb37faca32df678630ac470bf26ae37f",
+    "type": "comfyui"
+  },
+  "hardware_observations": {
+    "backend": "cuda",
+    "gpu_name": "cuda:0 NVIDIA L40S : cudaMallocAsync",
+    "observed_peak_ram_mb": 6201,
+    "observed_peak_vram_mb": 23995,
+    "tested_batch_size": 1
+  },
+  "models": [],
+  "runtime": {
+    "architecture": "x64",
+    "attention_backend": "auto",
+    "capsule_fingerprint": "sha256:48439877e1f2790ba20b1ac8ffffb11081fd7c482f930745d7a161aa2aa3d753",
+    "dependency_env_fingerprint": "sha256:7d96a87e31f9e296b1008edc2a9dff76c0b0abb00078936f60557e27c5f0f2c2",
+    "dependency_lock_hash": "sha256:d4619fe9e961cfc7e044fba7f8acce276bb0c4a43848a89dad1430a52dcd8986",
+    "fingerprint_schema_version": "0.2.0",
+    "gpu_backend": "cuda",
+    "noofy_environment": {},
+    "os": "linux",
+    "precision_policy": "auto",
+    "preview_method": "auto",
+    "preview_size": 512,
+    "python_build_id": "cpython-3.13-noofy-v1",
+    "python_version": "3.13",
+    "runner_fingerprint": "sha256:d10e76ccc0ae47904f55f3a7aa8fd8ee312be8e8d8e28be677375a8d8137e043",
+    "runner_workspace_hash": "sha256:d10e76ccc0ae47904f55f3a7aa8fd8ee312be8e8d8e28be677375a8d8137e043",
+    "runtime_profile_catalog_version": "0.1.0",
+    "runtime_profile_id": "noofy-comfyui-v1-default",
+    "runtime_profile_manifest_hash": "sha256:fcb7d601f610529d2d0e85a94f307f746b9b1c48d5b44cbc7203adbeaabd1897",
+    "runtime_profile_variant_id": "linux-x64-cuda130",
+    "vram_mode": "auto"
+  },
+  "schema_version": "0.1.0",
+  "source_policy": {
+    "allowed_model_origins": [
+      "hashed-download",
+      "huggingface.co",
+      "user-local"
+    ],
+    "allowed_registry_origins": [],
+    "allowed_source_origins": [
+      "explicit-metadata",
+      "registry-locked"
+    ],
+    "automatic_preparation_allowed": true,
+    "community_preparation_opt_in_required": true,
+    "community_preparation_opted_in": true,
+    "model_source_trust": "none",
+    "package_source_type": "noofy_archive_import",
+    "policy_status": "active",
+    "policy_version": "phase6-local-0.1",
+    "source_policy": "explicit_opt_in_and_isolated_capsule_required",
+    "trust_level": "quarantined_community",
+    "trust_verification_status": "not_required"
+  },
+  "trust": {
+    "level": "quarantined_community",
+    "publisher": "unknown",
+    "signatures": []
+  },
+  "workflow": {
+    "package_id": "txt2audio_moss-tts",
+    "publisher_id": "unknown",
+    "source": "noofy_archive_import",
+    "trust_level": "quarantined_community",
+    "version": "0.1.0"
+  }
+}

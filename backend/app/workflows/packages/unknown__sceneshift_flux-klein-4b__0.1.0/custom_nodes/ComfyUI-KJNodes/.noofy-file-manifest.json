@@ -1,0 +1,302 @@
+{
+  "excluded_count": 0,
+  "files": [
+    {
+      "path": ".github/workflows/publish.yml",
+      "sha256": "15c4c1bc3d7770cf0d2e062baf6322d92bd0b72637b870315ef35df5a1916bf5",
+      "size_bytes": 644
+    },
+    {
+      "path": ".gitignore",
+      "sha256": "0542d315fcd3afb11180b750159ae1361ccbb8424a400e15cdba95085833f538",
+      "size_bytes": 130
+    },
+    {
+      "path": "LICENSE",
+      "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+      "size_bytes": 35149
+    },
+    {
+      "path": "README.md",
+      "sha256": "9f9493fec728b782ec9bac709b2522fcc01b456db78a97dd83f7b91eea0af136",
+      "size_bytes": 4304
+    },
+    {
+      "path": "__init__.py",
+      "sha256": "12347923b4dbbc1dc6d4f160b7a36ef56371580edabf91c7ff090e94fb827d0f",
+      "size_bytes": 28587
+    },
+    {
+      "path": "custom_dimensions_example.json",
+      "sha256": "fa89c10426a60f77abe2d72ec513e9b212743cadbecc4574de4e54fa4c41a265",
+      "size_bytes": 329
+    },
+    {
+      "path": "docs/images/2024-04-03_20_49_29-ComfyUI.png",
+      "sha256": "85805d3c7ca8f5d281886ea0ad61f9a78edad755ef8014b3870f91b871807ac9",
+      "size_bytes": 176158
+    },
+    {
+      "path": "docs/images/319121566-05f66385-7568-4b1f-8bbc-11053660b02f.png",
+      "sha256": "ea8fbfbd58fa2ef96257cf310f108f65f5b84f44b0165c3fb320db10a86432ec",
+      "size_bytes": 94315
+    },
+    {
+      "path": "docs/images/319121636-706b5081-9120-4a29-bd76-901691ada688.png",
+      "sha256": "3533db6b4921fc56457e28c16fcd87e6e2a3944a92a793c1f894aea2afc3b41b",
+      "size_bytes": 24783
+    },
+    {
+      "path": "example_workflows/leapfusion_hunyuuanvideo_i2v_native_testing.json",
+      "sha256": "21b58128a1a467580ee8f759d1e5e77b635852bd0c0a5a2660ff682832096540",
+      "size_bytes": 20396
+    },
+    {
+      "path": "fonts/FreeMono.ttf",
+      "sha256": "a7c692ad545c308b7b8fc2db770760c4a5d15ca50f12addf58c8f5360370e831",
+      "size_bytes": 343980
+    },
+    {
+      "path": "fonts/FreeMonoBoldOblique.otf",
+      "sha256": "96187651ee033d0d9791dc2beeebfba5d1f070ab410fce1a5c16483ca249c588",
+      "size_bytes": 237600
+    },
+    {
+      "path": "fonts/TTNorms-Black.otf",
+      "sha256": "710977e683bf0db6416d6d41b427e0363c914e6c503a5291fcb330f30b8448ea",
+      "size_bytes": 152736
+    },
+    {
+      "path": "kjweb_async/marked.min.js",
+      "sha256": "cb4cf2efefd2b1f602bf2f27d594fc0a26340d2661b60cddfcaac7a7b9261886",
+      "size_bytes": 35418
+    },
+    {
+      "path": "kjweb_async/purify.min.js",
+      "sha256": "a08d67f5c053edcaaf9bbc021218edb27fe4ffd5bdb55b7efde2de55638cfbc9",
+      "size_bytes": 21346
+    },
+    {
+      "path": "nodes/audioscheduler_nodes.py",
+      "sha256": "8fb0693437380cc438c1530ecfa1f1422d1cc99e56d007152a1fb93cee3413cc",
+      "size_bytes": 10708
+    },
+    {
+      "path": "nodes/batchcrop_nodes.py",
+      "sha256": "a6394d898f2ace16843afd0b8d2d1846396b205156d16161bd9b5a2aa3705eaf",
+      "size_bytes": 32069
+    },
+    {
+      "path": "nodes/curve_nodes.py",
+      "sha256": "27024564bd835c648f54d9d927c8544833380ee49ce04cd2e16ff8fffe1d6da0",
+      "size_bytes": 70471
+    },
+    {
+      "path": "nodes/hdr_preview_node.py",
+      "sha256": "853d0dd37a750b3c48bc01fe5267aad9edfb868385962ff4de15f2eda0dd07ab",
+      "size_bytes": 6779
+    },
+    {
+      "path": "nodes/image_nodes.py",
+      "sha256": "c255928bafb00fddc324602705c61693aa560270a3af98ce4c1bdb6d80a81c1b",
+      "size_bytes": 219351
+    },
+    {
+      "path": "nodes/image_transform_node.py",
+      "sha256": "dc32a0e6694aebddb6ef5cf834db7ee0a5307294f75ee6a1287296439d9b7f75",
+      "size_bytes": 29645
+    },
+    {
+      "path": "nodes/lora_nodes.py",
+      "sha256": "691d7ca28587271ce470dbbb3ab87f7b2094642e9d5c6c8f97aee5234dd47358",
+      "size_bytes": 29846
+    },
+    {
+      "path": "nodes/ltxv_nodes.py",
+      "sha256": "5d72a9718728865c36f487ee6ae09aa07468664f1e63aa27b172df39b8d3db31",
+      "size_bytes": 105971
+    },
+    {
+      "path": "nodes/mask_nodes.py",
+      "sha256": "aae14dc68daff37ba8bab51355567377c80d4bf4d9d3765f2983b2213047e89d",
+      "size_bytes": 68902
+    },
+    {
+      "path": "nodes/model_optimization_nodes.py",
+      "sha256": "ef4b02953ec4139c4dfdf08a45cffc63a3cc0614139d60a37e500e05a52bffd4",
+      "size_bytes": 90933
+    },
+    {
+      "path": "nodes/nodes.py",
+      "sha256": "e11280b8012e3141e3e31e7ac26e0076aed829c456ff24783f6dafbf23b47f22",
+      "size_bytes": 136155
+    },
+    {
+      "path": "nodes/preview_override_node.py",
+      "sha256": "6f4a9430830539d49cc2eedf4d0fe2301f6210cfa26729b8594176935fba207b",
+      "size_bytes": 34142
+    },
+    {
+      "path": "nodes/sharpen_nodes.py",
+      "sha256": "40f07e9bd71dcea8ef8bdb21a04d9585bfb2412974025a6ee216e3dc58b47758",
+      "size_bytes": 11205
+    },
+    {
+      "path": "pyproject.toml",
+      "sha256": "cb9e550b425634afca49db9e16d7ca8f73a68ed3b44b715cc9ee6b945219ea19",
+      "size_bytes": 504
+    },
+    {
+      "path": "requirements.txt",
+      "sha256": "e8cc1fb089c6e74bb5f326e949fd89ea7653de0d193d7a385c38af44e66656bd",
+      "size_bytes": 67
+    },
+    {
+      "path": "utility/fluid.py",
+      "sha256": "a78f8575f4f201e0c15d0470f9e1248ff6e2c6e511ea1ddd8090bef7d4c423a4",
+      "size_bytes": 2917
+    },
+    {
+      "path": "utility/magictex.py",
+      "sha256": "14c8a344fa1c49701d258991456770fbbbb4ed732e4edbd77862a273a3c808a8",
+      "size_bytes": 3117
+    },
+    {
+      "path": "utility/numerical.py",
+      "sha256": "ce28bbef99a0f15cd4f47c5bf649814ae3f9243517235cd5e4aedd25d09b5802",
+      "size_bytes": 906
+    },
+    {
+      "path": "utility/utility.py",
+      "sha256": "8c391d63a3d7e9ef094126896d5b7c19a52bdc3a69320bad1987967af3bdfd5b",
+      "size_bytes": 3689
+    },
+    {
+      "path": "web/js/appearance.js",
+      "sha256": "8abb861e850a207dffc6dd4d8772aaa608a374948e54f4228c7e5443a3a8bc03",
+      "size_bytes": 865
+    },
+    {
+      "path": "web/js/canvas_background.js",
+      "sha256": "9d628b50d27a537c206e36703ca19cd1a3313fcd95740e5032db03d31f4e82c6",
+      "size_bytes": 13849
+    },
+    {
+      "path": "web/js/contextmenu.js",
+      "sha256": "82de0155a78a990016b10d3467a8c5e12504a70d9fe777ad5c17ffb91e0f45a7",
+      "size_bytes": 5862
+    },
+    {
+      "path": "web/js/editors/editor_base.js",
+      "sha256": "87cb8750743b5ecfbc1c6cfbbb45fdf4f32619a251e2fa2263645aa4926a4f61",
+      "size_bytes": 28652
+    },
+    {
+      "path": "web/js/editors/interpolation.js",
+      "sha256": "551e216edfa0c1eaee4a0cbc2b24efae23531ad9190a23f72be17ed8073f97fd",
+      "size_bytes": 9322
+    },
+    {
+      "path": "web/js/editors/point_editor_canvas.js",
+      "sha256": "68c027c3482a8dd121bcfc440b13fe465c65dbdeb16d4034d9d3f0a248370cf2",
+      "size_bytes": 14936
+    },
+    {
+      "path": "web/js/editors/spline_editor_canvas.js",
+      "sha256": "ee614ac30007a0634f86912123e94d3a1e6d32fd5c100dfba00ea44dcb2a4afc",
+      "size_bytes": 31782
+    },
+    {
+      "path": "web/js/fast_preview.js",
+      "sha256": "2a75f847301f595c3eeffd1a96d7cfc4d3fb1ec719ff40807c7a67eb9dc631a4",
+      "size_bytes": 1403
+    },
+    {
+      "path": "web/js/fast_preview_batch.js",
+      "sha256": "bd89c3d1ef030ef0d9ff0258b2d1c3e188a9cc1413f47252b19755aee5bb342b",
+      "size_bytes": 23778
+    },
+    {
+      "path": "web/js/fillconnect.js",
+      "sha256": "4a1f5b65c97eca23e1ab48ed38eda79659d7a2a005e4bf4946c4be082d70fe93",
+      "size_bytes": 5836
+    },
+    {
+      "path": "web/js/fix_node.js",
+      "sha256": "8e2d9a1eaa468bed8c929a33e5fab1e5ce0e13245203d20a922248f733b27f4c",
+      "size_bytes": 3490
+    },
+    {
+      "path": "web/js/hdr_preview.js",
+      "sha256": "adcfd1710d891c501bffe348ae9f63da998ae92c9de336abaabee99567dd27b0",
+      "size_bytes": 24238
+    },
+    {
+      "path": "web/js/help_popup.js",
+      "sha256": "932bafc0ab6fdb798c690e32d5d16786943213c7e331958883782115dfae1f2a",
+      "size_bytes": 14366
+    },
+    {
+      "path": "web/js/image_transform.js",
+      "sha256": "a4e6e44fff75b01d325fccabc15e87af2d1a6dad140a0767f04651dcc574a1aa",
+      "size_bytes": 95128
+    },
+    {
+      "path": "web/js/jsnodes.js",
+      "sha256": "b35affefe93a4ea48c1091a94c2f5ed4fb902fe73dae0502725fc9085b5258f1",
+      "size_bytes": 17127
+    },
+    {
+      "path": "web/js/node_insert.js",
+      "sha256": "a95aa3f1a32afd8c7b496b096b5bedefb42180fc1ad5dd4de88168dddfa0c03a",
+      "size_bytes": 14309
+    },
+    {
+      "path": "web/js/nodeswap.js",
+      "sha256": "3668f4193895f43e26f89af5b60dfceb7ca6060b6c0a04351348c2c79d3be331",
+      "size_bytes": 12504
+    },
+    {
+      "path": "web/js/performance.js",
+      "sha256": "8dc63fdf9fac2fbe72cdff83f5a87a405eed30d95a681154dd4d1c45b38b6561",
+      "size_bytes": 8820
+    },
+    {
+      "path": "web/js/play_sound.js",
+      "sha256": "8ad5ae7d996db3bd4e3a5dbee5d3cce30757a513af0a15d852a0b5a98db4922c",
+      "size_bytes": 3934
+    },
+    {
+      "path": "web/js/preview_override/preview_override.css",
+      "sha256": "234aaee16da41664b7a15d4d4341feddab98893632eae8a1ea08ca13c1409e6f",
+      "size_bytes": 3905
+    },
+    {
+      "path": "web/js/preview_override/preview_override.js",
+      "sha256": "27035480a5f13a8731612e7570cc090aa02cecb2c24a1fd1b5c59291e17ea6b3",
+      "size_bytes": 42986
+    },
+    {
+      "path": "web/js/screencap_stream.js",
+      "sha256": "ed294da9531d1d4dbe5194bad71fa16eaf47156780120c35028239b5c581c412",
+      "size_bytes": 16700
+    },
+    {
+      "path": "web/js/setgetnodes.js",
+      "sha256": "260ebcf29457e9e1622202483a66959cbfeb0578bdfacbc3716868132c8e699a",
+      "size_bytes": 55749
+    },
+    {
+      "path": "web/js/shake_to_disconnect.js",
+      "sha256": "aa4b8c00cfa9cca8418f2ea85459097bbc0ec02202d2b97e6953430928f88359",
+      "size_bytes": 7056
+    },
+    {
+      "path": "web/js/utility.js",
+      "sha256": "fd484cac560c777403e8367449eee0d2e564e68818ef3b5678f99ebb159290ca",
+      "size_bytes": 10435
+    }
+  ],
+  "schema_version": "0.1.0",
+  "sha256_manifest": "9636e62af5dc4067ddedb4df468841eaa96d63ea7758c31423c3b67f4a93ce20"
+}

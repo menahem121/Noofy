@@ -1,0 +1,11 @@
+[project]
+name = "comfyui-optional-media-input"
+version = "0.2.1"
+description = "Optional image, audio, and video input nodes for ComfyUI workflows"
+requires-python = ">=3.10"
+dependencies = ["imageio[ffmpeg]", "pillow"]
+license = { text = "MIT" }
+
+[tool.comfy]
+PublisherId = "comfyui-optional-media-input"
+DisplayName = "ComfyUI Optional Media Input"

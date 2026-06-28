@@ -1,0 +1,127 @@
+{
+  "custom_nodes": [],
+  "dependencies": {
+    "install_policy": "isolated-community-index-build-v2",
+    "lock_file": "community-runtime.lock"
+  },
+  "engine": {
+    "comfyui_version": "v0.25.0",
+    "core_source_hash": "sha256:ed3735102510df396ba3c7974a465f0ddb37faca32df678630ac470bf26ae37f",
+    "type": "comfyui"
+  },
+  "hardware_observations": {
+    "backend": "cuda",
+    "gpu_name": "cuda:0 NVIDIA L40S : cudaMallocAsync",
+    "observed_peak_ram_mb": 9343,
+    "observed_peak_vram_mb": 37531,
+    "tested_batch_size": 1
+  },
+  "models": [
+    {
+      "comfyui_folder": "loras",
+      "filename": "wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors",
+      "id": "loras/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors",
+      "sha256": "sha256:d176c808d6fc461999b68e321efcb7501b20b8c3797523ed0df14f7d1deff11e",
+      "size_bytes": 1226977424,
+      "source_urls": []
+    },
+    {
+      "comfyui_folder": "loras",
+      "filename": "wan2.2_t2v_lightx2v_4steps_lora_v1.1_low_noise.safetensors",
+      "id": "loras/wan2.2_t2v_lightx2v_4steps_lora_v1.1_low_noise.safetensors",
+      "sha256": "sha256:ec95216e614b3c132c11bfb387b11feedf62163150ccc9068bca8a189771e75a",
+      "size_bytes": 1226977424,
+      "source_urls": []
+    },
+    {
+      "comfyui_folder": "text_encoders",
+      "filename": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+      "id": "text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+      "sha256": "sha256:c3355d30191f1f066b26d93fba017ae9809dce6c627dda5f6a66eaa651204f68",
+      "size_bytes": 6735906897,
+      "source_urls": []
+    },
+    {
+      "comfyui_folder": "vae",
+      "filename": "wan_2.1_vae.safetensors",
+      "id": "vae/wan_2.1_vae.safetensors",
+      "sha256": "sha256:2fc39d31359a4b0a64f55876d8ff7fa8d780956ae2cb13463b0223e15148976b",
+      "size_bytes": 253815318,
+      "source_urls": []
+    },
+    {
+      "comfyui_folder": "diffusion_models",
+      "filename": "wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors",
+      "id": "diffusion_models/wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors",
+      "sha256": "sha256:6122e79d55e0f235698d11d657f3b196c5273c830da00b2b013c5a048d5e6a42",
+      "size_bytes": 14294742832,
+      "source_urls": []
+    },
+    {
+      "comfyui_folder": "diffusion_models",
+      "filename": "wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors",
+      "id": "diffusion_models/wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors",
+      "sha256": "sha256:5471a457b6ac404202a5fbe6c11595a3d5641fc766b00f38763f72303fffc21e",
+      "size_bytes": 14294742832,
+      "source_urls": []
+    }
+  ],
+  "runtime": {
+    "architecture": "x64",
+    "attention_backend": "auto",
+    "capsule_fingerprint": "sha256:736671d1da86e56b5163350b450f54c3cb7f47dae969274385b61a2599b7bb81",
+    "dependency_env_fingerprint": "sha256:7d96a87e31f9e296b1008edc2a9dff76c0b0abb00078936f60557e27c5f0f2c2",
+    "dependency_lock_hash": "sha256:d4619fe9e961cfc7e044fba7f8acce276bb0c4a43848a89dad1430a52dcd8986",
+    "fingerprint_schema_version": "0.2.0",
+    "gpu_backend": "cuda",
+    "noofy_environment": {},
+    "os": "linux",
+    "precision_policy": "auto",
+    "preview_method": "auto",
+    "preview_size": 512,
+    "python_build_id": "cpython-3.13-noofy-v1",
+    "python_version": "3.13",
+    "runner_fingerprint": "sha256:94b142a23697844e86f077ef9844ec1b21e63ced610ca455e9b0ff6aa576c217",
+    "runner_workspace_hash": "sha256:94b142a23697844e86f077ef9844ec1b21e63ced610ca455e9b0ff6aa576c217",
+    "runtime_profile_catalog_version": "0.1.0",
+    "runtime_profile_id": "noofy-comfyui-v1-default",
+    "runtime_profile_manifest_hash": "sha256:fcb7d601f610529d2d0e85a94f307f746b9b1c48d5b44cbc7203adbeaabd1897",
+    "runtime_profile_variant_id": "linux-x64-cuda130",
+    "vram_mode": "auto"
+  },
+  "schema_version": "0.1.0",
+  "source_policy": {
+    "allowed_model_origins": [
+      "hashed-download",
+      "huggingface.co",
+      "user-local"
+    ],
+    "allowed_registry_origins": [],
+    "allowed_source_origins": [
+      "explicit-metadata",
+      "registry-locked"
+    ],
+    "automatic_preparation_allowed": true,
+    "community_preparation_opt_in_required": true,
+    "community_preparation_opted_in": true,
+    "model_source_trust": "hashed",
+    "package_source_type": "noofy_archive_import",
+    "policy_status": "active",
+    "policy_version": "phase6-local-0.1",
+    "source_policy": "explicit_opt_in_and_isolated_capsule_required",
+    "trust_level": "quarantined_community",
+    "trust_verification_status": "not_required"
+  },
+  "trust": {
+    "level": "quarantined_community",
+    "publisher": "unknown",
+    "signatures": []
+  },
+  "workflow": {
+    "package_id": "img2vid_wan2_2_14b",
+    "publisher_id": "unknown",
+    "source": "noofy_archive_import",
+    "trust_level": "quarantined_community",
+    "version": "0.1.0"
+  }
+}

@@ -155,6 +155,32 @@ def test_loader_reports_imported_package_source(tmp_path: Path) -> None:
     assert sources == {"wf_a": "bundled", "wf_imported": "imported"}
 
 
+def test_loader_reads_adjacent_graph_and_ignores_legacy_string_source_policy(tmp_path: Path) -> None:
+    bundled = tmp_path / "bundled"
+    package_dir = bundled / "exported_shape"
+    package_dir.mkdir(parents=True)
+    (package_dir / "package.json").write_text(
+        json.dumps(
+            {
+                "metadata": {
+                    "id": "exported_shape",
+                    "name": "Exported Shape",
+                    "version": "1.0.0",
+                },
+                "engine": "comfyui",
+                "source_policy": "local",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (package_dir / "comfyui_graph.json").write_text(json.dumps(_MINIMAL_GRAPH), encoding="utf-8")
+
+    package = WorkflowPackageLoader(bundled).get_package("exported_shape")
+
+    assert package.comfyui_graph == _MINIMAL_GRAPH
+    assert package.source_policy is None
+
+
 def test_loader_returns_empty_when_dirs_missing(tmp_path: Path) -> None:
     loader = WorkflowPackageLoader(tmp_path / "missing", user_packages_dir=tmp_path / "also_missing")
 

@@ -1,0 +1,45 @@
+{
+  "nodes": {
+    "1": {
+      "max_length": 1,
+      "prompt": 0,
+      "sampling_mode": 2,
+      "sampling_mode.min_p": 6,
+      "sampling_mode.presence_penalty": 9,
+      "sampling_mode.repetition_penalty": 7,
+      "sampling_mode.seed": 8,
+      "sampling_mode.temperature": 3,
+      "sampling_mode.top_k": 4,
+      "sampling_mode.top_p": 5,
+      "thinking": 10,
+      "use_default_template": 11
+    },
+    "12": {
+      "audio": 1,
+      "audioUI": 3,
+      "enabled": 0,
+      "mode": 2,
+      "upload": 4
+    },
+    "13": {
+      "enabled": 0,
+      "image": 1,
+      "mode": 2,
+      "upload": 3
+    },
+    "3": {
+      "clip_name": 0,
+      "device": 2,
+      "type": 1
+    },
+    "4": {
+      "previewMode": 2,
+      "preview_markdown": 0,
+      "preview_text": 1
+    },
+    "9": {
+      "text": 0
+    }
+  },
+  "schema_version": "0.1.0"
+}

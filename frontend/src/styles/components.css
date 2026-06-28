@@ -775,17 +775,34 @@
   line-height: 1.45;
 }
 
-.workflow-variant-select {
+.workflow-variant-field {
   display: grid;
   gap: 7px;
   margin: 0 0 14px;
 }
 
-.workflow-variant-select > span {
+.workflow-variant-field > span {
   color: var(--text-muted);
   font-size: 11px;
   font-weight: 800;
   letter-spacing: 0;
+}
+
+.workflow-variant-static {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  overflow: hidden;
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .workflow-variant-select__control {
@@ -832,10 +849,56 @@
 }
 
 .workflow-card__footer {
-  justify-content: space-between;
+  justify-content: center;
   gap: 12px;
   padding-top: 12px;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.workflow-card__footer--with-status {
+  justify-content: space-between;
+}
+
+.workflow-card__run-button {
+  width: 100%;
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 28px;
+  color: var(--text-primary);
+  background: var(--purple-soft);
+  border: 1px solid rgba(168, 85, 247, 0.24);
+  border-radius: 10px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    transform 160ms ease;
+}
+
+.workflow-card__run-button:hover:not(:disabled) {
+  background: rgba(168, 85, 247, 0.2);
+  border-color: rgba(168, 85, 247, 0.38);
+}
+
+.workflow-card__run-button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.workflow-card__run-button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(168, 85, 247, 0.18);
+}
+
+.workflow-card__run-button:disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+  background: rgba(255, 255, 255, 0.045);
+  border-color: rgba(255, 255, 255, 0.08);
 }
 
 .workflow-status {

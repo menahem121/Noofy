@@ -1,0 +1,19 @@
+{
+  "nodes": {
+    "13": {
+      "image": 0,
+      "upload": 1
+    },
+    "22": {
+      "clip_name": 3,
+      "prompt": 0,
+      "steps": 1,
+      "unet_name": 2,
+      "vae_name": 4
+    },
+    "9": {
+      "filename_prefix": 0
+    }
+  },
+  "schema_version": "0.1.0"
+}

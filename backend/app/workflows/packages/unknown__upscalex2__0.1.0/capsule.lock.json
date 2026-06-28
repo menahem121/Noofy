@@ -1,0 +1,99 @@
+{
+  "custom_nodes": [
+    {
+      "node_types": [
+        "ColorMatchV2"
+      ],
+      "package_id": "github-kijai-ComfyUI-KJNodes",
+      "source": "https://codeload.github.com/kijai/ComfyUI-KJNodes/zip/7f43f2ce910a27971bdbbf3fb5a52081457f32e2",
+      "source_archive_subdir": "ComfyUI-KJNodes-7f43f2ce910a27971bdbbf3fb5a52081457f32e2",
+      "source_content_hash": "sha256:de8e760a2364cc49ac6ed7d0aeed17bdd37b2a8a0f5e58993d87a6bd0042032c",
+      "source_ref": "7f43f2ce910a27971bdbbf3fb5a52081457f32e2",
+      "trust_level": "quarantined_community"
+    }
+  ],
+  "dependencies": {
+    "install_policy": "isolated-community-index-build-v2",
+    "lock_file": "community-runtime.lock"
+  },
+  "engine": {
+    "comfyui_version": "v0.25.0",
+    "core_source_hash": "sha256:ed3735102510df396ba3c7974a465f0ddb37faca32df678630ac470bf26ae37f",
+    "type": "comfyui"
+  },
+  "hardware_observations": {
+    "backend": "cuda",
+    "gpu_name": "cuda:0 NVIDIA A10G : cudaMallocAsync",
+    "observed_peak_ram_mb": 7319,
+    "observed_peak_vram_mb": 581,
+    "tested_batch_size": 1
+  },
+  "models": [
+    {
+      "comfyui_folder": "upscale_models",
+      "filename": "2xNomosUni_span_multijpg_ldl.safetensors",
+      "id": "upscale_models/2xNomosUni_span_multijpg_ldl.safetensors",
+      "sha256": "sha256:a3d35e01b8b71b4b3041ad1686f8ebd7bc4e1f3a10378319c2ac61c78b67012a",
+      "size_bytes": 8903384,
+      "source_urls": []
+    }
+  ],
+  "runtime": {
+    "architecture": "x64",
+    "attention_backend": "auto",
+    "capsule_fingerprint": "sha256:76e30b08b2f8e87ad173ec2fc04ab6ffc29352ff8171d02dbf4547356e6a1689",
+    "dependency_env_fingerprint": "sha256:7d96a87e31f9e296b1008edc2a9dff76c0b0abb00078936f60557e27c5f0f2c2",
+    "dependency_lock_hash": "sha256:d4619fe9e961cfc7e044fba7f8acce276bb0c4a43848a89dad1430a52dcd8986",
+    "fingerprint_schema_version": "0.2.0",
+    "gpu_backend": "cuda",
+    "noofy_environment": {},
+    "os": "linux",
+    "precision_policy": "auto",
+    "preview_method": "auto",
+    "preview_size": 512,
+    "python_build_id": "cpython-3.13-noofy-v1",
+    "python_version": "3.13",
+    "runner_fingerprint": "sha256:feb65869e6b1b6d6401d4a1becd85f3be88c587b1b3451a7295ec5b9a4d2ced9",
+    "runner_workspace_hash": "sha256:feb65869e6b1b6d6401d4a1becd85f3be88c587b1b3451a7295ec5b9a4d2ced9",
+    "runtime_profile_catalog_version": "0.1.0",
+    "runtime_profile_id": "noofy-comfyui-v1-default",
+    "runtime_profile_manifest_hash": "sha256:fcb7d601f610529d2d0e85a94f307f746b9b1c48d5b44cbc7203adbeaabd1897",
+    "runtime_profile_variant_id": "linux-x64-cuda130",
+    "vram_mode": "auto"
+  },
+  "schema_version": "0.1.0",
+  "source_policy": {
+    "allowed_model_origins": [
+      "hashed-download",
+      "huggingface.co",
+      "user-local"
+    ],
+    "allowed_registry_origins": [],
+    "allowed_source_origins": [
+      "explicit-metadata",
+      "registry-locked"
+    ],
+    "automatic_preparation_allowed": true,
+    "community_preparation_opt_in_required": true,
+    "community_preparation_opted_in": true,
+    "model_source_trust": "hashed",
+    "package_source_type": "noofy_archive_import",
+    "policy_status": "active",
+    "policy_version": "phase6-local-0.1",
+    "source_policy": "explicit_opt_in_and_isolated_capsule_required",
+    "trust_level": "quarantined_community",
+    "trust_verification_status": "not_required"
+  },
+  "trust": {
+    "level": "quarantined_community",
+    "publisher": "unknown",
+    "signatures": []
+  },
+  "workflow": {
+    "package_id": "upscalex2",
+    "publisher_id": "unknown",
+    "source": "noofy_archive_import",
+    "trust_level": "quarantined_community",
+    "version": "0.1.0"
+  }
+}

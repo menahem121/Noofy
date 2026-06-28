@@ -1,0 +1,216 @@
+{
+  "inputs": [
+    {
+      "binding": {
+        "input_name": "text",
+        "node_id": "157"
+      },
+      "control": "textarea",
+      "default": "remove the green part",
+      "default_pinned": true,
+      "id": "ctrl-node-157-text",
+      "label": "Prompt",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "image",
+        "node_id": "159"
+      },
+      "control": "load_image",
+      "default": {
+        "asset_id": "input-defaults/56944ba1024d97e5-anima_00056.png",
+        "content_type": "image/png",
+        "filename": "Anima_00056_.png",
+        "kind": "image",
+        "sha256": "sha256:56944ba1024d97e5962a31c9ec37975c5634dc125e070809b000ae1b250b361d",
+        "size_bytes": 1425491,
+        "source": "package_asset"
+      },
+      "default_pinned": true,
+      "id": "ctrl-node-159-image",
+      "label": "Input image",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "top",
+        "node_id": "164"
+      },
+      "control": "int_field",
+      "default": 0,
+      "default_pinned": true,
+      "id": "ctrl-node-164-top",
+      "label": "Top",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "bottom",
+        "node_id": "164"
+      },
+      "control": "int_field",
+      "default": 0,
+      "default_pinned": true,
+      "id": "ctrl-node-164-bottom",
+      "label": "Bottom",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "left",
+        "node_id": "164"
+      },
+      "control": "int_field",
+      "default": 128,
+      "default_pinned": true,
+      "id": "ctrl-node-164-left",
+      "label": "Left",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "right",
+        "node_id": "164"
+      },
+      "control": "int_field",
+      "default": 128,
+      "default_pinned": true,
+      "id": "ctrl-node-164-right",
+      "label": "Right",
+      "validation": {}
+    }
+  ],
+  "outputs": [
+    {
+      "id": "image",
+      "kind": "image",
+      "label": "Result",
+      "node_id": "142",
+      "type": "image"
+    }
+  ],
+  "sections": [
+    {
+      "controls": [
+        {
+          "description": "Describe what you want to create.",
+          "id": "ctrl-node-157-text",
+          "input_id": "ctrl-node-157-text",
+          "label": "Prompt",
+          "layout": {
+            "h": 13,
+            "min_h": 4,
+            "min_w": 5,
+            "w": 12,
+            "x": 0,
+            "y": 0
+          },
+          "required": false,
+          "type": "textarea"
+        },
+        {
+          "description": "Choose an image from your computer.",
+          "id": "ctrl-node-159-image",
+          "input_id": "ctrl-node-159-image",
+          "label": "Input image",
+          "layout": {
+            "h": 10,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 12,
+            "x": 0,
+            "y": 13
+          },
+          "required": false,
+          "type": "load_image"
+        },
+        {
+          "description": "",
+          "id": "ctrl-node-164-top",
+          "input_id": "ctrl-node-164-top",
+          "label": "Top",
+          "layout": {
+            "h": 4,
+            "min_h": 3,
+            "min_w": 4,
+            "w": 8,
+            "x": 16,
+            "y": 23
+          },
+          "required": false,
+          "type": "int_field"
+        },
+        {
+          "description": "",
+          "id": "ctrl-node-164-bottom",
+          "input_id": "ctrl-node-164-bottom",
+          "label": "Bottom",
+          "layout": {
+            "h": 4,
+            "min_h": 3,
+            "min_w": 4,
+            "w": 8,
+            "x": 0,
+            "y": 23
+          },
+          "required": false,
+          "type": "int_field"
+        },
+        {
+          "description": "",
+          "id": "ctrl-node-164-left",
+          "input_id": "ctrl-node-164-left",
+          "label": "Left",
+          "layout": {
+            "h": 4,
+            "min_h": 3,
+            "min_w": 4,
+            "w": 8,
+            "x": 8,
+            "y": 23
+          },
+          "required": false,
+          "type": "int_field"
+        },
+        {
+          "description": "",
+          "id": "ctrl-node-164-right",
+          "input_id": "ctrl-node-164-right",
+          "label": "Right",
+          "layout": {
+            "h": 4,
+            "min_h": 3,
+            "min_w": 4,
+            "w": 8,
+            "x": 24,
+            "y": 23
+          },
+          "required": false,
+          "type": "int_field"
+        },
+        {
+          "description": "Generated image will appear here.",
+          "id": "ctrl-node-142-output_image",
+          "label": "Result",
+          "layout": {
+            "h": 21,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 20,
+            "x": 12,
+            "y": 2
+          },
+          "output_id": "image",
+          "required": false,
+          "type": "display_image"
+        }
+      ],
+      "groups": [],
+      "id": "main",
+      "title": "Main"
+    }
+  ],
+  "status": "configured",
+  "version": "0.1.0"
+}

@@ -1,0 +1,108 @@
+{
+  "inputs": [
+    {
+      "binding": {
+        "input_name": "image",
+        "node_id": "99"
+      },
+      "control": "load_image",
+      "default": {
+        "asset_id": "input-defaults/b665eb01c48d5927-greendog2048x2048.png",
+        "content_type": "image/png",
+        "filename": "GreenDog2048x2048.png",
+        "kind": "image",
+        "sha256": "sha256:b665eb01c48d59278e7ecd2e7ab6f552ec58dcf8ff93b93b371b215e26c6673a",
+        "size_bytes": 5779967,
+        "source": "package_asset"
+      },
+      "default_pinned": true,
+      "id": "ctrl-node-99-image",
+      "label": "Input image",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "steps",
+        "node_id": "88:6"
+      },
+      "control": "slider",
+      "default": 26,
+      "default_pinned": true,
+      "id": "ctrl-node-88:6-steps",
+      "label": "Refinement Level",
+      "validation": {
+        "max": 100,
+        "min": 1,
+        "step": 1
+      }
+    }
+  ],
+  "outputs": [
+    {
+      "id": "3d",
+      "kind": "3d",
+      "label": "3D model",
+      "node_id": "51",
+      "type": "3d"
+    }
+  ],
+  "sections": [
+    {
+      "controls": [
+        {
+          "description": "Choose an image from your computer.",
+          "id": "ctrl-node-99-image",
+          "input_id": "ctrl-node-99-image",
+          "label": "Input image",
+          "layout": {
+            "h": 20,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 10,
+            "x": 0,
+            "y": 2
+          },
+          "required": false,
+          "type": "load_image"
+        },
+        {
+          "description": "",
+          "id": "ctrl-node-51-output_3d",
+          "label": "3D model",
+          "layout": {
+            "h": 24,
+            "min_h": 8,
+            "min_w": 8,
+            "w": 22,
+            "x": 10,
+            "y": 2
+          },
+          "output_id": "3d",
+          "required": false,
+          "type": "display_3d"
+        },
+        {
+          "description": "More passes can add detail but take longer.",
+          "id": "ctrl-node-88:6-steps",
+          "input_id": "ctrl-node-88:6-steps",
+          "label": "Refinement Level",
+          "layout": {
+            "h": 4,
+            "min_h": 4,
+            "min_w": 6,
+            "w": 10,
+            "x": 0,
+            "y": 22
+          },
+          "required": false,
+          "type": "slider"
+        }
+      ],
+      "groups": [],
+      "id": "main",
+      "title": "Main"
+    }
+  ],
+  "status": "configured",
+  "version": "0.1.0"
+}

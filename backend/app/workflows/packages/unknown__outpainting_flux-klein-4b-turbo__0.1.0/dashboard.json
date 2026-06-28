@@ -1,0 +1,204 @@
+{
+  "inputs": [
+    {
+      "binding": {
+        "input_name": "text",
+        "node_id": "157"
+      },
+      "control": "textarea",
+      "default": "remove the green part",
+      "default_pinned": true,
+      "id": "ctrl-node-157-text",
+      "label": "Prompt",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "image",
+        "node_id": "159"
+      },
+      "control": "load_image",
+      "default": {
+        "asset_id": "input-defaults/749d035c96c8b874-mbape.webp",
+        "content_type": "image/webp",
+        "filename": "mbape.webp",
+        "kind": "image",
+        "sha256": "sha256:749d035c96c8b8741984d0491d5d8096f81a578e41eaabf2dd928471570d2ce3",
+        "size_bytes": 210904,
+        "source": "package_asset"
+      },
+      "default_pinned": true,
+      "id": "ctrl-node-159-image",
+      "label": "Input image",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "bottom",
+        "node_id": "164"
+      },
+      "control": "int_field",
+      "default": 400,
+      "default_pinned": true,
+      "id": "ctrl-node-164-bottom",
+      "label": "Bottom",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "left",
+        "node_id": "164"
+      },
+      "control": "int_field",
+      "default": 0,
+      "default_pinned": true,
+      "id": "ctrl-node-164-left",
+      "label": "Left",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "right",
+        "node_id": "164"
+      },
+      "control": "int_field",
+      "default": 0,
+      "default_pinned": true,
+      "id": "ctrl-node-164-right",
+      "label": "Right",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "top",
+        "node_id": "164"
+      },
+      "control": "int_field",
+      "default": 0,
+      "default_pinned": true,
+      "id": "ctrl-node-164-top",
+      "label": "Top",
+      "validation": {}
+    }
+  ],
+  "outputs": [
+    {
+      "id": "image",
+      "kind": "image",
+      "label": "Result",
+      "node_id": "142",
+      "type": "image"
+    }
+  ],
+  "sections": [
+    {
+      "controls": [
+        {
+          "description": "Describe what you want to create.",
+          "id": "ctrl-node-157-text",
+          "input_id": "ctrl-node-157-text",
+          "label": "Prompt",
+          "layout": {
+            "h": 6,
+            "min_h": 4,
+            "min_w": 5,
+            "w": 10,
+            "x": 0,
+            "y": 0
+          },
+          "required": false,
+          "type": "textarea"
+        },
+        {
+          "description": "Choose an image from your computer.",
+          "id": "ctrl-node-159-image",
+          "input_id": "ctrl-node-159-image",
+          "label": "Input image",
+          "layout": {
+            "h": 6,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 10,
+            "x": 0,
+            "y": 6
+          },
+          "required": false,
+          "type": "load_image"
+        },
+        {
+          "description": "Generated image will appear here.",
+          "id": "ctrl-node-142-output_image",
+          "label": "Result",
+          "layout": {
+            "h": 25,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 22,
+            "x": 10,
+            "y": 2
+          },
+          "output_id": "image",
+          "required": false,
+          "type": "display_image"
+        },
+        {
+          "description": "",
+          "id": "ctrl-node-164-bottom",
+          "input_id": "ctrl-node-164-bottom",
+          "label": "Bottom",
+          "required": false,
+          "type": "int_field"
+        },
+        {
+          "description": "",
+          "id": "ctrl-node-164-left",
+          "input_id": "ctrl-node-164-left",
+          "label": "Left",
+          "required": false,
+          "type": "int_field"
+        },
+        {
+          "description": "",
+          "id": "ctrl-node-164-right",
+          "input_id": "ctrl-node-164-right",
+          "label": "Right",
+          "required": false,
+          "type": "int_field"
+        },
+        {
+          "description": "",
+          "id": "ctrl-node-164-top",
+          "input_id": "ctrl-node-164-top",
+          "label": "Top",
+          "required": false,
+          "type": "int_field"
+        }
+      ],
+      "groups": [
+        {
+          "control_ids": [
+            "ctrl-node-164-top",
+            "ctrl-node-164-bottom",
+            "ctrl-node-164-left",
+            "ctrl-node-164-right"
+          ],
+          "description": "Pixels to expand on each side of the image",
+          "id": "group-1",
+          "layout": {
+            "h": 15,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 10,
+            "x": 0,
+            "y": 12
+          },
+          "title": "Expand Directions"
+        }
+      ],
+      "id": "main",
+      "title": "Main"
+    }
+  ],
+  "status": "configured",
+  "version": "0.1.0"
+}

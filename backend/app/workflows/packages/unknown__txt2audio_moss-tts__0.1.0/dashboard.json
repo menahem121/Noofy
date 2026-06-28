@@ -1,0 +1,146 @@
+{
+  "inputs": [
+    {
+      "binding": {
+        "input_name": "text",
+        "node_id": "2"
+      },
+      "control": "textarea",
+      "default": "I hope you like Noofy.\n\nThis is a simple text-to-speech workflow demo.\nType your text, choose a voice, press Run, and let Noofy create the audio for you.\n\nNo nodes. No complicated setup. Just your words, spoken out loud.",
+      "default_pinned": true,
+      "id": "ctrl-node-2-text",
+      "label": "Script",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "language",
+        "node_id": "2"
+      },
+      "control": "select",
+      "default": "auto",
+      "default_pinned": true,
+      "id": "ctrl-node-2-language",
+      "label": "Language",
+      "validation": {
+        "options": [
+          "auto",
+          "zh",
+          "en",
+          "ja",
+          "ko"
+        ]
+      }
+    },
+    {
+      "binding": {
+        "input_name": "temperature",
+        "node_id": "2"
+      },
+      "control": "int_field",
+      "default": 1.7,
+      "default_pinned": true,
+      "id": "ctrl-node-2-temperature",
+      "label": "Temperature",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "seed",
+        "node_id": "2"
+      },
+      "control": "seed_widget",
+      "default": 177425456843233,
+      "default_pinned": true,
+      "id": "ctrl-node-2-seed",
+      "label": "Variation ID",
+      "validation": {
+        "seed_mode": "randomize"
+      }
+    }
+  ],
+  "outputs": [
+    {
+      "id": "audio",
+      "kind": "audio",
+      "label": "Result",
+      "node_id": "3",
+      "type": "audio"
+    }
+  ],
+  "sections": [
+    {
+      "controls": [
+        {
+          "description": "Describe what you want the AI to say",
+          "id": "ctrl-node-2-text",
+          "input_id": "ctrl-node-2-text",
+          "label": "Script",
+          "layout": {
+            "h": 27,
+            "min_h": 4,
+            "min_w": 5,
+            "w": 18,
+            "x": 0,
+            "y": 0
+          },
+          "required": false,
+          "type": "textarea"
+        },
+        {
+          "description": "",
+          "id": "ctrl-node-2-language",
+          "input_id": "ctrl-node-2-language",
+          "label": "Language",
+          "layout": {
+            "h": 4,
+            "min_h": 3,
+            "min_w": 5,
+            "w": 6,
+            "x": 26,
+            "y": 23
+          },
+          "required": false,
+          "type": "select"
+        },
+        {
+          "description": "Controls the randomness and variability of the generated speech",
+          "id": "ctrl-node-2-temperature",
+          "input_id": "ctrl-node-2-temperature",
+          "label": "Temperature",
+          "layout": {
+            "h": 4,
+            "min_h": 3,
+            "min_w": 4,
+            "w": 8,
+            "x": 18,
+            "y": 23
+          },
+          "required": false,
+          "type": "int_field"
+        },
+        {
+          "description": "Generated audio will appear here.",
+          "id": "ctrl-node-3-output_audio",
+          "label": "Result",
+          "layout": {
+            "h": 20,
+            "min_h": 5,
+            "min_w": 8,
+            "w": 14,
+            "x": 18,
+            "y": 3
+          },
+          "output_id": "audio",
+          "required": false,
+          "type": "display_audio"
+        }
+      ],
+      "groups": [],
+      "id": "main",
+      "title": "Main"
+    }
+  ],
+  "status": "configured",
+  "version": "0.1.0"
+}

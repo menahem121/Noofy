@@ -1,0 +1,87 @@
+{
+  "excluded_count": 0,
+  "files": [
+    {
+      "path": ".gitignore",
+      "sha256": "0b29eb08bf4803ae3094dc810f860cd54655670ac3e6740b08e57fd930fe563f",
+      "size_bytes": 121
+    },
+    {
+      "path": "README.md",
+      "sha256": "97562f6e91660178195385f010a397480cfcb912aa793b318d665916da05cc97",
+      "size_bytes": 13425
+    },
+    {
+      "path": "__init__.py",
+      "sha256": "2f4634fdc1bc0736183cbe4d595eb8c83eb0e9f9547781ca01159e029e15df2c",
+      "size_bytes": 761
+    },
+    {
+      "path": "nodes/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size_bytes": 0
+    },
+    {
+      "path": "nodes/dialogue.py",
+      "sha256": "e9abf2023e51995cb9aa1870dedef8c16ef7d82f63c37af586585409fe14122a",
+      "size_bytes": 10550
+    },
+    {
+      "path": "nodes/generate.py",
+      "sha256": "78a743c8249fe106bfa7e4c8137006f3adced7772db4ceb94a7d7c5ddab50883",
+      "size_bytes": 3904
+    },
+    {
+      "path": "nodes/model_loader.py",
+      "sha256": "c4812ea9b89c73f4a65d62b983aad3b853b86efd2d260301bf1493f41bd2ce73",
+      "size_bytes": 3996
+    },
+    {
+      "path": "nodes/sound_effect.py",
+      "sha256": "466d587445f8283649a825bafc631d46348d1708ff31654fea4faf9ef022d7ef",
+      "size_bytes": 3243
+    },
+    {
+      "path": "nodes/voice_design.py",
+      "sha256": "f2d4755024f50b9b57e4e1b3d4ae102eb6d345ad335aabe4e611ca8f440e417e",
+      "size_bytes": 3298
+    },
+    {
+      "path": "reference/comfy-node-guide.md",
+      "sha256": "792f61030828a9593f2091047ac1ecb7c6c9a3f9ac9c835b5beba61a459a6d5f",
+      "size_bytes": 15061
+    },
+    {
+      "path": "reference/plan.md",
+      "sha256": "c5f0bd8e684c842e3894170941695ba1b437914fe76f2b48a7c96b332924be88",
+      "size_bytes": 18578
+    },
+    {
+      "path": "requirements.txt",
+      "sha256": "412167725c77d0995744123586a05f3ccfe8afff449ea493f79663eb17943edd",
+      "size_bytes": 63
+    },
+    {
+      "path": "utils/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size_bytes": 0
+    },
+    {
+      "path": "utils/audio_utils.py",
+      "sha256": "cf6d9cebbd5f5f9f479a5642ff9efb2ec74c716f11772e1e714459561ba8bb58",
+      "size_bytes": 1128
+    },
+    {
+      "path": "utils/backend.py",
+      "sha256": "0118b194195c048175e76cd70821a0acd114259958053e59d4f44bed1fe8033f",
+      "size_bytes": 3646
+    },
+    {
+      "path": "utils/constants.py",
+      "sha256": "74a711f6de52c1cc71310f1ddbf772d7afc52ac7182b11ffb5825a52e5375322",
+      "size_bytes": 1251
+    }
+  ],
+  "schema_version": "0.1.0",
+  "sha256_manifest": "fdc48c27506823c3a967e39a011924a15b550b37e7b1bdf2fc55ce9bac8b90c5"
+}

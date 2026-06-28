@@ -314,6 +314,18 @@ def _workflow_library_service_for_package(tmp_path: Path, package_payload: dict[
     )
 
 
+def test_legacy_text_to_image_workflow_is_hidden_from_user_facing_list(tmp_path: Path) -> None:
+    package_payload = {
+        "metadata": {"id": "text_to_image_v0", "name": "Text to Image", "version": "0.1.0"},
+        "engine": "comfyui",
+        "comfyui_graph": {"1": {"class_type": "SaveImage", "inputs": {}}},
+    }
+    service = _workflow_library_service_for_package(tmp_path, package_payload)
+
+    assert service.list_workflows() == []
+    assert service.workflow_package_payload("text_to_image_v0")["metadata"]["id"] == "text_to_image_v0"
+
+
 def test_workflow_package_payload_filters_known_architecture_mismatches_without_mutating_schema(
     tmp_path: Path,
 ) -> None:

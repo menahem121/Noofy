@@ -26,7 +26,8 @@ import { selectFolder } from "../../lib/folderDialogs";
 import { workflowDisplayName } from "../../lib/workflowNames";
 
 const TOTAL_STEPS = 4;
-const TEXT_TO_IMAGE_WORKFLOW_ID = "text_to_image_v0";
+const TEXT_TO_IMAGE_WORKFLOW_ID = "unknown__txt2img_flux-klein-4b-turbo__0.1.0";
+const LEGACY_TEST_WORKFLOW_ID = "text_to_image_v0";
 
 const API_PROVIDERS: Array<{ id: ApiKeyProviderId; label: string; fieldId: string }> = [
   { id: "civitai", label: "CivitAI", fieldId: "onboarding-civitai-api-key" },
@@ -627,10 +628,10 @@ function StartCreatingStep({
             <p>Generate new images from a simple text prompt.</p>
             {workflows.length > 1 ? (
               <label className="workflow-variant-select">
-                <span>Model</span>
+                <span>Workflow</span>
                 <div className="workflow-variant-select__control">
                   <select
-                    aria-label="Text to Image model workflow"
+                    aria-label="Text to Image workflow choice"
                     value={selected.id}
                     onChange={(event) => onSelectedWorkflowChange(event.target.value)}
                   >
@@ -716,6 +717,7 @@ function isStarterWorkflowOpenable(workflow: WorkflowSummary) {
 }
 
 function isNativeBundledWorkflow(workflow: WorkflowSummary) {
+  if (workflow.id === LEGACY_TEST_WORKFLOW_ID) return false;
   if (workflow.source_label === "Imported" || workflow.trust_level === "quarantined_community" || workflow.can_remove) {
     return false;
   }

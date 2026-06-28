@@ -1,0 +1,76 @@
+{
+  "inputs": [
+    {
+      "binding": {
+        "input_name": "image",
+        "node_id": "192"
+      },
+      "control": "load_image",
+      "default": {
+        "asset_id": "input-defaults/3fb9e1097e12172a-anima_00047.png",
+        "content_type": "image/png",
+        "filename": "Anima_00047_.png",
+        "kind": "image",
+        "sha256": "sha256:3fb9e1097e12172af7085418488ac5c4a9e7213a67bfa60b0f72abefbd0b3593",
+        "size_bytes": 1581827,
+        "source": "package_asset"
+      },
+      "default_pinned": true,
+      "id": "ctrl-node-192-image",
+      "label": "Input image",
+      "validation": {}
+    }
+  ],
+  "outputs": [
+    {
+      "id": "image",
+      "kind": "image",
+      "label": "Result",
+      "node_id": "24",
+      "type": "image"
+    }
+  ],
+  "sections": [
+    {
+      "controls": [
+        {
+          "description": "Choose an image from your computer.",
+          "id": "ctrl-node-192-image",
+          "input_id": "ctrl-node-192-image",
+          "label": "Input image",
+          "layout": {
+            "h": 10,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 10,
+            "x": 1,
+            "y": 7
+          },
+          "required": false,
+          "type": "load_image"
+        },
+        {
+          "description": "Generated image will appear here.",
+          "id": "ctrl-node-24-output_image",
+          "label": "Result",
+          "layout": {
+            "h": 19,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 18,
+            "x": 13,
+            "y": 2
+          },
+          "output_id": "image",
+          "required": false,
+          "type": "display_image"
+        }
+      ],
+      "groups": [],
+      "id": "main",
+      "title": "Main"
+    }
+  ],
+  "status": "configured",
+  "version": "0.1.0"
+}

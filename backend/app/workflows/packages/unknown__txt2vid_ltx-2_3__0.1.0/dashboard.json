@@ -1,0 +1,208 @@
+{
+  "inputs": [
+    {
+      "binding": {
+        "input_name": "value",
+        "node_id": "267:266"
+      },
+      "control": "textarea",
+      "default": "Dynamic cinematic close-up of high-tech modular machinery self-assembling in midair, precision robotic parts, magnetic connectors, and glowing circuits clicking together, subtle smoke and light flares, extremely detailed titanium textures. The final product displays a clean, clear surface with large glowing engraved text \u201cLTX-2.3\u201d centered and unobstructed, dramatic lighting, photorealism, 8K, sharp focus.\n",
+      "default_pinned": true,
+      "id": "ctrl-node-267:266-value",
+      "label": "Positive prompt",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "value",
+        "node_id": "267:225"
+      },
+      "control": "slider",
+      "default": 5,
+      "default_pinned": true,
+      "id": "ctrl-node-267:225-value",
+      "label": "Video duration (in seconds)",
+      "validation": {
+        "max": 9,
+        "min": 3,
+        "step": 1
+      }
+    },
+    {
+      "binding": {
+        "input_name": "text",
+        "node_id": "267:247"
+      },
+      "control": "textarea",
+      "default": "pc game, console game, video game, cartoon, childish, ugly",
+      "default_pinned": true,
+      "id": "ctrl-node-267:247-text",
+      "label": "Negative prompt",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "value",
+        "node_id": "267:257"
+      },
+      "control": "slider",
+      "default": 1280,
+      "default_pinned": true,
+      "id": "ctrl-node-267:257-value",
+      "label": "Width",
+      "validation": {
+        "max": 1280,
+        "min": 256,
+        "step": 1
+      }
+    },
+    {
+      "binding": {
+        "input_name": "value",
+        "node_id": "267:258"
+      },
+      "control": "slider",
+      "default": 720,
+      "default_pinned": true,
+      "id": "ctrl-node-267:258-value",
+      "label": "Height",
+      "validation": {
+        "max": 1280,
+        "min": 256,
+        "step": 1
+      }
+    },
+    {
+      "binding": {
+        "input_name": "noise_seed",
+        "node_id": "267:237"
+      },
+      "control": "seed_widget",
+      "default": 1033543753075496,
+      "default_pinned": true,
+      "id": "ctrl-node-267:237-noise_seed",
+      "label": "Noise seed",
+      "validation": {
+        "seed_mode": "randomize"
+      }
+    }
+  ],
+  "outputs": [
+    {
+      "id": "video",
+      "kind": "video",
+      "label": "Output video",
+      "node_id": "75",
+      "type": "video"
+    }
+  ],
+  "sections": [
+    {
+      "controls": [
+        {
+          "description": "Describe what you want to create.",
+          "id": "ctrl-node-267:266-value",
+          "input_id": "ctrl-node-267:266-value",
+          "label": "Positive prompt",
+          "required": false,
+          "type": "textarea"
+        },
+        {
+          "description": "",
+          "id": "ctrl-node-267:225-value",
+          "input_id": "ctrl-node-267:225-value",
+          "label": "Video duration (in seconds)",
+          "layout": {
+            "h": 4,
+            "min_h": 4,
+            "min_w": 6,
+            "w": 12,
+            "x": 0,
+            "y": 23
+          },
+          "required": false,
+          "type": "slider"
+        },
+        {
+          "description": "Describe what you don't want to create.",
+          "id": "ctrl-node-267:247-text",
+          "input_id": "ctrl-node-267:247-text",
+          "label": "Negative prompt",
+          "required": false,
+          "type": "textarea"
+        },
+        {
+          "description": "",
+          "id": "ctrl-node-267:257-value",
+          "input_id": "ctrl-node-267:257-value",
+          "label": "Width",
+          "layout": {
+            "h": 4,
+            "min_h": 4,
+            "min_w": 6,
+            "w": 12,
+            "x": 0,
+            "y": 15
+          },
+          "required": false,
+          "type": "slider"
+        },
+        {
+          "description": "",
+          "id": "ctrl-node-267:258-value",
+          "input_id": "ctrl-node-267:258-value",
+          "label": "Height",
+          "layout": {
+            "h": 4,
+            "min_h": 4,
+            "min_w": 6,
+            "w": 12,
+            "x": 0,
+            "y": 19
+          },
+          "required": false,
+          "type": "slider"
+        },
+        {
+          "description": "",
+          "id": "ctrl-node-75-output_video",
+          "label": "Output video",
+          "layout": {
+            "h": 25,
+            "min_h": 7,
+            "min_w": 8,
+            "w": 20,
+            "x": 12,
+            "y": 2
+          },
+          "output_id": "video",
+          "required": false,
+          "type": "display_video"
+        }
+      ],
+      "groups": [
+        {
+          "control_ids": [
+            "ctrl-node-267:266-value",
+            "ctrl-node-267:247-text"
+          ],
+          "description": "",
+          "id": "group-1",
+          "layout": {
+            "h": 15,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 12,
+            "x": 0,
+            "y": 0
+          },
+          "title": "Prompt"
+        }
+      ],
+      "id": "main",
+      "title": "Main"
+    }
+  ],
+  "status": "configured",
+  "version": "0.1.0"
+}

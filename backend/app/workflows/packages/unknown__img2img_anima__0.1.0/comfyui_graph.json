@@ -1,0 +1,160 @@
+{
+  "46": {
+    "_meta": {
+      "title": "Save Image"
+    },
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "Anima",
+      "images": [
+        "60:8",
+        0
+      ]
+    }
+  },
+  "60:11": {
+    "_meta": {
+      "title": "CLIP Text Encode (Positive Prompt)"
+    },
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "60:45",
+        0
+      ],
+      "text": "tranform to an anime style image"
+    }
+  },
+  "60:12": {
+    "_meta": {
+      "title": "CLIP Text Encode (Negative Prompt)"
+    },
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "60:45",
+        0
+      ],
+      "text": "worst quality, low quality, score_1, score_2, score_3, blurry, jpeg artifacts, sepia"
+    }
+  },
+  "60:15": {
+    "_meta": {
+      "title": "Load VAE"
+    },
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "qwen_image_vae.safetensors"
+    }
+  },
+  "60:19": {
+    "_meta": {
+      "title": "KSampler"
+    },
+    "class_type": "KSampler",
+    "inputs": {
+      "cfg": 4.0,
+      "denoise": 0.55,
+      "latent_image": [
+        "60:74",
+        0
+      ],
+      "model": [
+        "60:44",
+        0
+      ],
+      "negative": [
+        "60:12",
+        0
+      ],
+      "positive": [
+        "60:11",
+        0
+      ],
+      "sampler_name": "er_sde",
+      "scheduler": "simple",
+      "seed": 875817230929465,
+      "steps": 30
+    }
+  },
+  "60:44": {
+    "_meta": {
+      "title": "Load Diffusion Model"
+    },
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "anima-base-v1.0.safetensors",
+      "weight_dtype": "default"
+    }
+  },
+  "60:45": {
+    "_meta": {
+      "title": "Load CLIP"
+    },
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen_3_06b_base.safetensors",
+      "device": "default",
+      "type": "stable_diffusion"
+    }
+  },
+  "60:73": {
+    "_meta": {
+      "title": "Load Image"
+    },
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "__noofy_runtime_image_input_required__"
+    },
+    "is_changed": [
+      "1821ec4e615012f932e9b1833966ed83d4df04c7d689c27e4185a027c5d87a59"
+    ]
+  },
+  "60:74": {
+    "_meta": {
+      "title": "VAE Encode"
+    },
+    "class_type": "VAEEncode",
+    "inputs": {
+      "pixels": [
+        "60:75",
+        0
+      ],
+      "vae": [
+        "60:15",
+        0
+      ]
+    }
+  },
+  "60:75": {
+    "_meta": {
+      "title": "Scale Image to Total Pixels"
+    },
+    "class_type": "ImageScaleToTotalPixels",
+    "inputs": {
+      "image": [
+        "60:73",
+        0
+      ],
+      "megapixels": 1.0,
+      "resolution_steps": 1,
+      "upscale_method": "nearest-exact"
+    }
+  },
+  "60:8": {
+    "_meta": {
+      "title": "VAE Decode"
+    },
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "60:19",
+        0
+      ],
+      "vae": [
+        "60:15",
+        0
+      ]
+    }
+  }
+}

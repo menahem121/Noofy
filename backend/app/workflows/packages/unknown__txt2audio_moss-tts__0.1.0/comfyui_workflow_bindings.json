@@ -1,0 +1,28 @@
+{
+  "nodes": {
+    "1": {
+      "codec_local_path": 2,
+      "local_model_path": 1,
+      "model_variant": 0
+    },
+    "2": {
+      "control_after_generate": 3,
+      "duration_tokens": 10,
+      "enable_duration_control": 9,
+      "head_handle": 11,
+      "language": 0,
+      "max_new_tokens": 8,
+      "repetition_penalty": 7,
+      "seed": 2,
+      "tail_handle": 12,
+      "temperature": 4,
+      "text": 1,
+      "top_k": 6,
+      "top_p": 5
+    },
+    "3": {
+      "audioUI": 0
+    }
+  },
+  "schema_version": "0.1.0"
+}

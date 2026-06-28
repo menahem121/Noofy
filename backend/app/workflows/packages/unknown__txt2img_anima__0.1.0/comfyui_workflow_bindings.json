@@ -1,0 +1,19 @@
+{
+  "nodes": {
+    "46": {
+      "filename_prefix": 0
+    },
+    "60": {
+      "cfg": 4,
+      "clip_name": 7,
+      "height": 2,
+      "seed": 5,
+      "steps": 3,
+      "text": 0,
+      "unet_name": 6,
+      "vae_name": 8,
+      "width": 1
+    }
+  },
+  "schema_version": "0.1.0"
+}

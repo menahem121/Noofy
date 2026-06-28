@@ -1,0 +1,230 @@
+{
+  "inputs": [
+    {
+      "binding": {
+        "input_name": "image",
+        "node_id": "75:97"
+      },
+      "control": "load_image",
+      "default": {
+        "asset_id": "input-defaults/5a8e09c821392d97-before-u.png",
+        "content_type": "image/png",
+        "filename": "before-U.png",
+        "kind": "image",
+        "sha256": "sha256:5a8e09c821392d97f33bda983f8951dac676074e2455bf3845d6a8112758a89a",
+        "size_bytes": 2004826,
+        "source": "package_asset"
+      },
+      "default_pinned": true,
+      "id": "ctrl-node-75:97-image",
+      "label": "Input image",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "text",
+        "node_id": "75:74"
+      },
+      "control": "textarea",
+      "default": "masterpiece, 8k, painting",
+      "default_pinned": true,
+      "id": "ctrl-node-75:74-text",
+      "label": "Positive prompt",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "scale_by",
+        "node_id": "75:94"
+      },
+      "control": "slider",
+      "default": 1.5,
+      "default_pinned": true,
+      "id": "ctrl-node-75:94-scale_by",
+      "label": "Scale by",
+      "validation": {
+        "max": 2.5,
+        "min": 1,
+        "step": 0.1
+      }
+    },
+    {
+      "binding": {
+        "input_name": "steps",
+        "node_id": "75:100"
+      },
+      "control": "slider",
+      "default": 4,
+      "default_pinned": true,
+      "id": "ctrl-node-75:100-steps",
+      "label": "Refinement Level",
+      "validation": {
+        "max": 12,
+        "min": 4,
+        "step": 1
+      }
+    },
+    {
+      "binding": {
+        "input_name": "denoise",
+        "node_id": "75:100"
+      },
+      "control": "slider",
+      "default": 0.5,
+      "default_pinned": true,
+      "id": "ctrl-node-75:100-denoise",
+      "label": "Transformation level",
+      "validation": {
+        "max": 1,
+        "min": 0.1,
+        "step": 0.1
+      }
+    },
+    {
+      "binding": {
+        "input_name": "text",
+        "node_id": "75:67"
+      },
+      "control": "textarea",
+      "default": "",
+      "default_pinned": true,
+      "id": "ctrl-node-75:67-text",
+      "label": "Negative prompt",
+      "validation": {}
+    }
+  ],
+  "outputs": [
+    {
+      "id": "image",
+      "kind": "image",
+      "label": "Result",
+      "node_id": "9",
+      "type": "image"
+    }
+  ],
+  "sections": [
+    {
+      "controls": [
+        {
+          "description": "Choose an image from your computer.",
+          "id": "ctrl-node-75:97-image",
+          "input_id": "ctrl-node-75:97-image",
+          "label": "Input image",
+          "layout": {
+            "h": 9,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 12,
+            "x": 0,
+            "y": 0
+          },
+          "required": false,
+          "type": "load_image"
+        },
+        {
+          "description": "Describe what you want to create.",
+          "id": "ctrl-node-75:74-text",
+          "input_id": "ctrl-node-75:74-text",
+          "label": "Positive prompt",
+          "required": false,
+          "type": "textarea"
+        },
+        {
+          "description": "The image will be upscaled X times",
+          "id": "ctrl-node-75:94-scale_by",
+          "input_id": "ctrl-node-75:94-scale_by",
+          "label": "Scale by",
+          "layout": {
+            "h": 4,
+            "min_h": 4,
+            "min_w": 6,
+            "w": 12,
+            "x": 0,
+            "y": 19
+          },
+          "required": false,
+          "type": "slider"
+        },
+        {
+          "description": "More passes can add detail but take longer.",
+          "id": "ctrl-node-75:100-steps",
+          "input_id": "ctrl-node-75:100-steps",
+          "label": "Refinement Level",
+          "layout": {
+            "h": 4,
+            "min_h": 4,
+            "min_w": 6,
+            "w": 12,
+            "x": 0,
+            "y": 23
+          },
+          "required": false,
+          "type": "slider"
+        },
+        {
+          "description": "Lower keeps your input. Higher allows bigger changes.",
+          "id": "ctrl-node-75:100-denoise",
+          "input_id": "ctrl-node-75:100-denoise",
+          "label": "Transformation level",
+          "layout": {
+            "h": 4,
+            "min_h": 4,
+            "min_w": 6,
+            "w": 20,
+            "x": 12,
+            "y": 23
+          },
+          "required": false,
+          "type": "slider"
+        },
+        {
+          "description": "Generated image will appear here.",
+          "id": "ctrl-node-9-output_image",
+          "label": "Result",
+          "layout": {
+            "h": 21,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 20,
+            "x": 12,
+            "y": 2
+          },
+          "output_id": "image",
+          "required": false,
+          "type": "display_image"
+        },
+        {
+          "description": "Describe what you don't want to create.",
+          "id": "ctrl-node-75:67-text",
+          "input_id": "ctrl-node-75:67-text",
+          "label": "Negative prompt",
+          "required": false,
+          "type": "textarea"
+        }
+      ],
+      "groups": [
+        {
+          "control_ids": [
+            "ctrl-node-75:74-text",
+            "ctrl-node-75:67-text"
+          ],
+          "description": "",
+          "id": "group-1",
+          "layout": {
+            "h": 10,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 12,
+            "x": 0,
+            "y": 9
+          },
+          "title": "Prompt"
+        }
+      ],
+      "id": "main",
+      "title": "Main"
+    }
+  ],
+  "status": "configured",
+  "version": "0.1.0"
+}

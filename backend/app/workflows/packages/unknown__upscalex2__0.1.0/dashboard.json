@@ -1,0 +1,76 @@
+{
+  "inputs": [
+    {
+      "binding": {
+        "input_name": "image",
+        "node_id": "192"
+      },
+      "control": "load_image",
+      "default": {
+        "asset_id": "input-defaults/5003bdc4435b6810-comfyui_00055.png",
+        "content_type": "image/png",
+        "filename": "ComfyUI_00055_.png",
+        "kind": "image",
+        "sha256": "sha256:5003bdc4435b6810a9db46bfa7e495220131a4d8c160cc3dd59cc73632b70548",
+        "size_bytes": 3333632,
+        "source": "package_asset"
+      },
+      "default_pinned": true,
+      "id": "ctrl-node-192-image",
+      "label": "Input image",
+      "validation": {}
+    }
+  ],
+  "outputs": [
+    {
+      "id": "image",
+      "kind": "image",
+      "label": "Result",
+      "node_id": "24",
+      "type": "image"
+    }
+  ],
+  "sections": [
+    {
+      "controls": [
+        {
+          "description": "Choose an image from your computer.",
+          "id": "ctrl-node-192-image",
+          "input_id": "ctrl-node-192-image",
+          "label": "Input image",
+          "layout": {
+            "h": 11,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 11,
+            "x": 1,
+            "y": 7
+          },
+          "required": false,
+          "type": "load_image"
+        },
+        {
+          "description": "Generated image will appear here.",
+          "id": "ctrl-node-24-output_image",
+          "label": "Result",
+          "layout": {
+            "h": 20,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 17,
+            "x": 13,
+            "y": 2
+          },
+          "output_id": "image",
+          "required": false,
+          "type": "display_image"
+        }
+      ],
+      "groups": [],
+      "id": "main",
+      "title": "Main"
+    }
+  ],
+  "status": "configured",
+  "version": "0.1.0"
+}

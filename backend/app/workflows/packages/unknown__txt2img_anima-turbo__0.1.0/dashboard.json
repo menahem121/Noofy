@@ -1,0 +1,225 @@
+{
+  "inputs": [
+    {
+      "binding": {
+        "input_name": "text",
+        "node_id": "60:12"
+      },
+      "control": "textarea",
+      "default": "worst quality, low quality, score_1, score_2, score_3, blurry, jpeg artifacts, sepia",
+      "default_pinned": true,
+      "id": "ctrl-node-60:12-text",
+      "label": "Negative prompt",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "text",
+        "node_id": "60:11"
+      },
+      "control": "textarea",
+      "default": " [masterpiece, best quality, ultra refined anime aesthetics, breathtaking dreamlike anime illustration, highly detailed anime lineart,\n\nbeautiful anime girl aiming a fantasy sniper rifle, intimate close-up composition, upper body dominating the entire frame, face occupying most of the image, soft silver-blonde hair flowing gently through a quiet night breeze, a few loose strands crossing her cheek naturally,\n\none eye softly closed, the other carefully looking through the scope, subtle concentration, relaxed breathing, calm and emotionally immersive expression, not aggressive, not combat-focused, simply absorbed in the moment,\n\nextremely beautiful anime facial structure, large luminous blue-violet eyes, delicate eyelashes, translucent skin shading, soft blush, subtle glossy lips, highly aesthetic facial harmony, natural beauty, emotionally believable presence,\n\nholding an elegant dreamlike sniper rifle crafted from crystal glass, moonlight reflections, pearl-like materials and delicate silver details, refined fantasy craftsmanship, beautiful curves and translucent surfaces, magical but believable design,\n\nfinger resting lightly on the trigger, quiet anticipation, gentle tension in the shoulders and hands, realistic posture without exaggeration,\n\nsurrounded by a dreamlike night sky filled with soft clouds, distant stars and subtle floating reflections, only a few large translucent bubbles drifting quietly near the rifle barrel, delicate rainbow reflections visible on their surfaces, restrained fantasy elements,\n\nsoft moonlight illuminating her face, cinematic depth of field, highly detailed but clean rendering, intimate emotional framing, beautiful facial focus, elegant composition, dreamlike atmosphere,\n\nbeautiful anime masterpiece, unforgettable visual beauty, dreamlike serenity, gentle emotional atmosphere]",
+      "default_pinned": true,
+      "id": "ctrl-node-60:11-text",
+      "label": "Prompt",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "width",
+        "node_id": "60:79"
+      },
+      "control": "slider",
+      "default": 1024,
+      "default_pinned": true,
+      "id": "ctrl-node-60:79-width",
+      "label": "Width",
+      "validation": {
+        "max": 2048,
+        "min": 64,
+        "step": 64
+      }
+    },
+    {
+      "binding": {
+        "input_name": "height",
+        "node_id": "60:79"
+      },
+      "control": "slider",
+      "default": 1024,
+      "default_pinned": true,
+      "id": "ctrl-node-60:79-height",
+      "label": "Height",
+      "validation": {
+        "max": 2048,
+        "min": 64,
+        "step": 64
+      }
+    },
+    {
+      "binding": {
+        "input_name": "steps",
+        "node_id": "60:19"
+      },
+      "control": "slider",
+      "default": 8,
+      "default_pinned": true,
+      "id": "ctrl-node-60:19-steps",
+      "label": "Refinement Level",
+      "validation": {
+        "max": 100,
+        "min": 1,
+        "step": 1
+      }
+    },
+    {
+      "binding": {
+        "input_name": "seed",
+        "node_id": "60:19"
+      },
+      "control": "seed_widget",
+      "default": 1012489550072678,
+      "default_pinned": true,
+      "id": "ctrl-node-60:19-seed",
+      "label": "Variation ID",
+      "validation": {
+        "seed_mode": "randomize"
+      }
+    }
+  ],
+  "outputs": [
+    {
+      "id": "image",
+      "kind": "image",
+      "label": "Result",
+      "node_id": "46",
+      "type": "image"
+    }
+  ],
+  "sections": [
+    {
+      "controls": [
+        {
+          "description": "Describe what you don't want to create.",
+          "id": "ctrl-node-60:12-text",
+          "input_id": "ctrl-node-60:12-text",
+          "label": "Negative prompt",
+          "required": false,
+          "type": "textarea"
+        },
+        {
+          "description": "Describe what you want to create.",
+          "id": "ctrl-node-60:11-text",
+          "input_id": "ctrl-node-60:11-text",
+          "label": "Prompt",
+          "required": false,
+          "type": "textarea"
+        },
+        {
+          "description": "Output width in pixels.",
+          "id": "ctrl-node-60:79-width",
+          "input_id": "ctrl-node-60:79-width",
+          "label": "Width",
+          "required": false,
+          "type": "slider"
+        },
+        {
+          "description": "Output height in pixels.",
+          "id": "ctrl-node-60:79-height",
+          "input_id": "ctrl-node-60:79-height",
+          "label": "Height",
+          "required": false,
+          "type": "slider"
+        },
+        {
+          "description": "More passes can add detail but take longer.",
+          "id": "ctrl-node-60:19-steps",
+          "input_id": "ctrl-node-60:19-steps",
+          "label": "Refinement Level",
+          "layout": {
+            "h": 4,
+            "min_h": 4,
+            "min_w": 6,
+            "w": 13,
+            "x": 19,
+            "y": 23
+          },
+          "required": false,
+          "type": "slider"
+        },
+        {
+          "description": "Lock or change to get a different variation.",
+          "id": "ctrl-node-60:19-seed",
+          "input_id": "ctrl-node-60:19-seed",
+          "label": "Variation ID",
+          "layout": {
+            "h": 4,
+            "min_h": 3,
+            "min_w": 4,
+            "w": 7,
+            "x": 12,
+            "y": 23
+          },
+          "required": false,
+          "type": "seed_widget"
+        },
+        {
+          "description": "Generated image will appear here.",
+          "id": "ctrl-node-46-output_image",
+          "label": "Result",
+          "layout": {
+            "h": 23,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 20,
+            "x": 12,
+            "y": 0
+          },
+          "output_id": "image",
+          "required": false,
+          "type": "display_image"
+        }
+      ],
+      "groups": [
+        {
+          "control_ids": [
+            "ctrl-node-60:11-text",
+            "ctrl-node-60:12-text"
+          ],
+          "description": "",
+          "id": "group-1",
+          "layout": {
+            "h": 17,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 12,
+            "x": 0,
+            "y": 0
+          },
+          "title": "Prompt"
+        },
+        {
+          "control_ids": [
+            "ctrl-node-60:79-width",
+            "ctrl-node-60:79-height"
+          ],
+          "description": "",
+          "id": "group-2",
+          "layout": {
+            "h": 10,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 12,
+            "x": 0,
+            "y": 17
+          },
+          "title": "Height + Width"
+        }
+      ],
+      "id": "main",
+      "title": "Main"
+    }
+  ],
+  "status": "configured",
+  "version": "0.1.0"
+}

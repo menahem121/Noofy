@@ -1,0 +1,86 @@
+{
+  "nodes": {
+    "100": {
+      "guidance": 0
+    },
+    "102": {
+      "vae_name": 0
+    },
+    "107": {
+      "text": 0
+    },
+    "115": {
+      "megapixels": 1,
+      "resolution_steps": 2,
+      "upscale_method": 0
+    },
+    "126": {
+      "unet_name": 0,
+      "weight_dtype": 1
+    },
+    "146": {
+      "clip_name": 0,
+      "device": 2,
+      "type": 1
+    },
+    "148": {
+      "$$node-text-preview": 0
+    },
+    "149": {
+      "crop": 3,
+      "height": 2,
+      "upscale_method": 0,
+      "width": 1
+    },
+    "151": {
+      "image": 0,
+      "upload": 1
+    },
+    "153": {
+      "resize_type": 0,
+      "resize_type.crop": 3,
+      "resize_type.height": 2,
+      "resize_type.width": 1,
+      "scale_method": 4
+    },
+    "161": {
+      "cfg": 3,
+      "control_after_generate": 1,
+      "denoise": 6,
+      "sampler_name": 4,
+      "scheduler": 5,
+      "seed": 0,
+      "steps": 2
+    },
+    "168": {
+      "context_from_mask_extend_factor": 18,
+      "device_mode": 23,
+      "downscale_algorithm": 0,
+      "extend_down_factor": 15,
+      "extend_for_outpainting": 13,
+      "extend_left_factor": 16,
+      "extend_right_factor": 17,
+      "extend_up_factor": 14,
+      "mask_blend_pixels": 11,
+      "mask_expand_pixels": 9,
+      "mask_fill_holes": 8,
+      "mask_hipass_filter": 12,
+      "mask_invert": 10,
+      "output_padding": 22,
+      "output_resize_to_target_size": 19,
+      "output_target_height": 21,
+      "output_target_width": 20,
+      "preresize": 2,
+      "preresize_max_height": 7,
+      "preresize_max_width": 6,
+      "preresize_min_height": 5,
+      "preresize_min_width": 4,
+      "preresize_mode": 3,
+      "upscale_algorithm": 1
+    },
+    "9": {
+      "filename_prefix": 0
+    }
+  },
+  "schema_version": "0.1.0"
+}

@@ -1,0 +1,20 @@
+{
+  "nodes": {
+    "75": {
+      "clip_name": 1,
+      "control_after_generate": 5,
+      "noise_seed": 4,
+      "text": 3,
+      "unet_name": 0,
+      "vae_name": 2
+    },
+    "76": {
+      "image": 0,
+      "upload": 1
+    },
+    "9": {
+      "filename_prefix": 0
+    }
+  },
+  "schema_version": "0.1.0"
+}

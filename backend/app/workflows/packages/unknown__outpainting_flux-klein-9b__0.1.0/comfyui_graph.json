@@ -1,0 +1,355 @@
+{
+  "133": {
+    "_meta": {
+      "title": "SamplerCustomAdvanced"
+    },
+    "class_type": "SamplerCustomAdvanced",
+    "inputs": {
+      "guider": [
+        "136",
+        0
+      ],
+      "latent_image": [
+        "139",
+        0
+      ],
+      "noise": [
+        "135",
+        0
+      ],
+      "sampler": [
+        "137",
+        0
+      ],
+      "sigmas": [
+        "138",
+        0
+      ]
+    }
+  },
+  "134": {
+    "_meta": {
+      "title": "Load CLIP"
+    },
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen_3_8b_fp8mixed.safetensors",
+      "device": "default",
+      "type": "flux2"
+    }
+  },
+  "135": {
+    "_meta": {
+      "title": "RandomNoise"
+    },
+    "class_type": "RandomNoise",
+    "inputs": {
+      "noise_seed": 1040197620689248
+    }
+  },
+  "136": {
+    "_meta": {
+      "title": "CFGGuider"
+    },
+    "class_type": "CFGGuider",
+    "inputs": {
+      "cfg": 1.0,
+      "model": [
+        "158",
+        0
+      ],
+      "negative": [
+        "149",
+        0
+      ],
+      "positive": [
+        "148",
+        0
+      ]
+    }
+  },
+  "137": {
+    "_meta": {
+      "title": "KSamplerSelect"
+    },
+    "class_type": "KSamplerSelect",
+    "inputs": {
+      "sampler_name": "euler"
+    }
+  },
+  "138": {
+    "_meta": {
+      "title": "Flux2Scheduler"
+    },
+    "class_type": "Flux2Scheduler",
+    "inputs": {
+      "height": [
+        "143",
+        1
+      ],
+      "steps": 4,
+      "width": [
+        "143",
+        0
+      ]
+    }
+  },
+  "139": {
+    "_meta": {
+      "title": "Empty Flux 2 Latent"
+    },
+    "class_type": "EmptyFlux2LatentImage",
+    "inputs": {
+      "batch_size": 1,
+      "height": [
+        "143",
+        1
+      ],
+      "width": [
+        "143",
+        0
+      ]
+    }
+  },
+  "140": {
+    "_meta": {
+      "title": "VAE Decode"
+    },
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "133",
+        0
+      ],
+      "vae": [
+        "161",
+        0
+      ]
+    }
+  },
+  "142": {
+    "_meta": {
+      "title": "Save Image"
+    },
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "Flux2-Klein",
+      "images": [
+        "167",
+        0
+      ]
+    }
+  },
+  "143": {
+    "_meta": {
+      "title": "Get Image Size"
+    },
+    "class_type": "GetImageSize",
+    "inputs": {
+      "image": [
+        "165",
+        0
+      ]
+    }
+  },
+  "144": {
+    "_meta": {
+      "title": "ConditioningZeroOut"
+    },
+    "class_type": "ConditioningZeroOut",
+    "inputs": {
+      "conditioning": [
+        "157",
+        0
+      ]
+    }
+  },
+  "145": {
+    "_meta": {
+      "title": "VAE Encode"
+    },
+    "class_type": "VAEEncode",
+    "inputs": {
+      "pixels": [
+        "165",
+        0
+      ],
+      "vae": [
+        "161",
+        0
+      ]
+    }
+  },
+  "147": {
+    "_meta": {
+      "title": "ImageScaleToTotalPixels"
+    },
+    "class_type": "ImageScaleToTotalPixels",
+    "inputs": {
+      "image": [
+        "159",
+        0
+      ],
+      "megapixels": 1.5,
+      "resolution_steps": 1,
+      "upscale_method": "nearest-exact"
+    }
+  },
+  "148": {
+    "_meta": {
+      "title": "ReferenceLatent"
+    },
+    "class_type": "ReferenceLatent",
+    "inputs": {
+      "conditioning": [
+        "157",
+        0
+      ],
+      "latent": [
+        "145",
+        0
+      ]
+    }
+  },
+  "149": {
+    "_meta": {
+      "title": "ReferenceLatent"
+    },
+    "class_type": "ReferenceLatent",
+    "inputs": {
+      "conditioning": [
+        "144",
+        0
+      ],
+      "latent": [
+        "145",
+        0
+      ]
+    }
+  },
+  "157": {
+    "_meta": {
+      "title": "CLIP Text Encode (Positive Prompt)"
+    },
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "134",
+        0
+      ],
+      "text": "remove the green part"
+    }
+  },
+  "158": {
+    "_meta": {
+      "title": "Load Diffusion Model"
+    },
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "flux-2-klein-9b-fp8.safetensors",
+      "weight_dtype": "default"
+    }
+  },
+  "159": {
+    "_meta": {
+      "title": "Load Image"
+    },
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "__noofy_runtime_image_input_required__"
+    },
+    "is_changed": [
+      "5e28955043c3917bcb749e55ed5b3e808b2d257428ea3755f58011c4d8d6bb98"
+    ]
+  },
+  "161": {
+    "_meta": {
+      "title": "Load VAE"
+    },
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "flux2-vae.safetensors"
+    }
+  },
+  "164": {
+    "_meta": {
+      "title": "Pad Image for Outpainting"
+    },
+    "class_type": "ImagePadForOutpaint",
+    "inputs": {
+      "bottom": 400,
+      "feathering": 40,
+      "image": [
+        "147",
+        0
+      ],
+      "left": 0,
+      "right": 0,
+      "top": 400
+    }
+  },
+  "165": {
+    "_meta": {
+      "title": "ImageScaleToTotalPixels"
+    },
+    "class_type": "ImageScaleToTotalPixels",
+    "inputs": {
+      "image": [
+        "166",
+        0
+      ],
+      "megapixels": 1.0,
+      "resolution_steps": 1,
+      "upscale_method": "nearest-exact"
+    }
+  },
+  "166": {
+    "_meta": {
+      "title": "Draw Mask On Image"
+    },
+    "class_type": "DrawMaskOnImage",
+    "inputs": {
+      "color": "0, 255, 0",
+      "device": "cpu",
+      "image": [
+        "164",
+        0
+      ],
+      "mask": [
+        "164",
+        1
+      ]
+    }
+  },
+  "167": {
+    "_meta": {
+      "title": "Color Match"
+    },
+    "class_type": "ColorMatch",
+    "inputs": {
+      "image_ref": [
+        "159",
+        0
+      ],
+      "image_target": [
+        "140",
+        0
+      ],
+      "method": "mkl",
+      "multithread": true,
+      "strength": 1.0
+    }
+  },
+  "308": {
+    "_meta": {
+      "title": "Preview Image"
+    },
+    "class_type": "PreviewImage",
+    "inputs": {
+      "images": [
+        "166",
+        0
+      ]
+    }
+  }
+}

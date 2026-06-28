@@ -1,0 +1,306 @@
+{
+  "config": {},
+  "extra": {
+    "ds": {
+      "offset": [
+        355.2635309872793,
+        24.02276483909397
+      ],
+      "scale": 0.6484648752568305
+    },
+    "frontendVersion": "1.44.19"
+  },
+  "groups": [],
+  "id": "6a7153c2-a483-48c6-bddf-7a3884dee602",
+  "last_link_id": 16,
+  "last_node_id": 18,
+  "links": [
+    [
+      2,
+      3,
+      0,
+      1,
+      0,
+      "CLIP"
+    ],
+    [
+      3,
+      1,
+      0,
+      4,
+      0,
+      "STRING"
+    ],
+    [
+      13,
+      13,
+      0,
+      1,
+      1,
+      "IMAGE"
+    ],
+    [
+      14,
+      12,
+      0,
+      1,
+      3,
+      "AUDIO"
+    ]
+  ],
+  "nodes": [
+    {
+      "flags": {},
+      "id": 3,
+      "inputs": [],
+      "mode": 0,
+      "order": 0,
+      "outputs": [
+        {
+          "links": [
+            2
+          ],
+          "name": "CLIP",
+          "type": "CLIP"
+        }
+      ],
+      "pos": [
+        10,
+        270
+      ],
+      "properties": {
+        "Node name for S&R": "CLIPLoader",
+        "cnr_id": "comfy-core",
+        "models": [
+          {
+            "directory": "text_encoders",
+            "name": "gemma4_e4b_it_fp8_scaled.safetensors",
+            "url": "https://huggingface.co/Comfy-Org/gemma-4/resolve/main/text_encoders/gemma4_e4b_it_fp8_scaled.safetensors"
+          }
+        ],
+        "ver": "0.21.0"
+      },
+      "showAdvanced": false,
+      "size": [
+        370,
+        150
+      ],
+      "type": "CLIPLoader",
+      "widgets_values": [
+        "gemma4_e4b_it_fp8_scaled.safetensors",
+        "stable_diffusion",
+        "default"
+      ]
+    },
+    {
+      "flags": {
+        "collapsed": false
+      },
+      "id": 4,
+      "inputs": [
+        {
+          "link": 3,
+          "name": "source",
+          "type": "*"
+        }
+      ],
+      "mode": 0,
+      "order": 5,
+      "outputs": [
+        {
+          "links": null,
+          "name": "STRING",
+          "type": "STRING"
+        }
+      ],
+      "pos": [
+        970,
+        270
+      ],
+      "properties": {
+        "Node name for S&R": "PreviewAny",
+        "cnr_id": "comfy-core",
+        "ver": "0.21.0"
+      },
+      "size": [
+        560,
+        660
+      ],
+      "type": "PreviewAny",
+      "widgets_values": [
+        null,
+        null,
+        null
+      ]
+    },
+    {
+      "flags": {},
+      "id": 1,
+      "inputs": [
+        {
+          "link": 2,
+          "name": "clip",
+          "type": "CLIP"
+        },
+        {
+          "link": 13,
+          "name": "image",
+          "shape": 7,
+          "type": "IMAGE"
+        },
+        {
+          "link": null,
+          "name": "video",
+          "shape": 7,
+          "type": "IMAGE"
+        },
+        {
+          "link": 14,
+          "name": "audio",
+          "shape": 7,
+          "type": "AUDIO"
+        }
+      ],
+      "mode": 0,
+      "order": 4,
+      "outputs": [
+        {
+          "links": [
+            3
+          ],
+          "name": "generated_text",
+          "type": "STRING"
+        }
+      ],
+      "pos": [
+        520,
+        270
+      ],
+      "properties": {
+        "Node name for S&R": "TextGenerate",
+        "cnr_id": "comfy-core",
+        "ver": "0.21.0"
+      },
+      "showAdvanced": true,
+      "size": [
+        400,
+        562.6666870117188
+      ],
+      "type": "TextGenerate",
+      "widgets_values": [
+        "Introduce yourself",
+        2048,
+        "on",
+        0.7,
+        64,
+        0.95,
+        0.05,
+        1.05,
+        0,
+        0,
+        false,
+        true
+      ]
+    },
+    {
+      "bgcolor": "#000",
+      "color": "#222",
+      "flags": {},
+      "id": 9,
+      "inputs": [],
+      "mode": 0,
+      "order": 1,
+      "outputs": [],
+      "pos": [
+        -652.8948214347043,
+        584.0052630216919
+      ],
+      "properties": {},
+      "size": [
+        660,
+        600
+      ],
+      "title": "Gemma4 Core Capabilities",
+      "type": "MarkdownNote",
+      "widgets_values": [
+        "**Core Capabilities**\n\n[Gemma 4](https://huggingface.co/google/gemma-4-E2B-it) models handle a broad range of tasks across text, vision, and audio. Key capabilities include:\n\n+   **Thinking** \u2013 Built-in reasoning mode that lets the model think step-by-step before answering.\n+   **Long Context** \u2013 Context windows of up to 128K tokens (E2B/E4B) and 256K tokens (26B A4B/31B).\n+   **Image Understanding** \u2013 Object detection, Document/PDF parsing, screen and UI understanding, chart comprehension, OCR (including multilingual), handwriting recognition, and pointing. Images can be processed at variable aspect ratios and resolutions.\n+   **Video Understanding** \u2013 Analyze video by processing sequences of frames.\n+   **Interleaved Multimodal Input** \u2013 Freely mix text and images in any order within a single prompt.\n+   **Function Calling** \u2013 Native support for structured tool use, enabling agentic workflows.\n+   **Coding** \u2013 Code generation, completion, and correction.\n+   **Multilingual** \u2013 Out-of-the-box support for 35+ languages, pre-trained on 140+ languages.\n+   **Audio** (E2B and E4B only) \u2013 Automatic speech recognition (ASR) and speech-to-translated-text translation across multiple languages.\n"
+      ]
+    },
+    {
+      "flags": {},
+      "id": 12,
+      "inputs": [],
+      "mode": 0,
+      "order": 2,
+      "outputs": [
+        {
+          "links": [
+            14
+          ],
+          "name": "audio",
+          "type": "AUDIO"
+        }
+      ],
+      "pos": [
+        95.35483914805639,
+        461.1426994921891
+      ],
+      "properties": {
+        "Node name for S&R": "OptionalAudioInput"
+      },
+      "size": [
+        270,
+        238.66665649414062
+      ],
+      "type": "OptionalAudioInput",
+      "widgets_values": [
+        false,
+        "",
+        "auto",
+        null,
+        null
+      ]
+    },
+    {
+      "flags": {},
+      "id": 13,
+      "inputs": [],
+      "mode": 0,
+      "order": 3,
+      "outputs": [
+        {
+          "links": [
+            13
+          ],
+          "name": "image",
+          "type": "IMAGE"
+        },
+        {
+          "links": null,
+          "name": "mask",
+          "type": "MASK"
+        }
+      ],
+      "pos": [
+        102.29430521893312,
+        747.9739637550889
+      ],
+      "properties": {
+        "Node name for S&R": "OptionalImageInput"
+      },
+      "size": [
+        270,
+        194.6666717529297
+      ],
+      "type": "OptionalImageInput",
+      "widgets_values": [
+        false,
+        "",
+        "auto",
+        "image"
+      ]
+    }
+  ],
+  "revision": 0,
+  "version": 0.4
+}

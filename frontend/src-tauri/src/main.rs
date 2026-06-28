@@ -1291,7 +1291,7 @@ fn recover_stale_backend(path: &Path, launch: &BackendLaunchSpec) -> io::Result<
     ))
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, test))]
 fn process_is_running(pid: u32) -> bool {
     unsafe { libc::kill(pid as i32, 0) == 0 }
 }
@@ -1327,7 +1327,42 @@ fn stale_backend_matches(lease: &BackendProcessLease, launch: &BackendLaunchSpec
     }
     let command = unix_process_command(lease.pid);
     let cwd = unix_process_cwd(lease.pid);
-    command.contains(&expected_program) && cwd.as_ref() == Some(&expected_cwd)
+    command_matches_backend_launch(&command, &expected_program, launch)
+        && cwd.as_ref() == Some(&expected_cwd)
+}
+
+#[cfg(unix)]
+fn command_matches_backend_launch(
+    command: &str,
+    expected_program: &str,
+    launch: &BackendLaunchSpec,
+) -> bool {
+    if command.contains(expected_program) {
+        return true;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        // Framework Python builds can appear in ps as Python.app even when
+        // launched through bin/python3.x.
+        if command.contains("/Python.app/Contents/MacOS/Python")
+            && command_contains_launch_args(command, &launch.args)
+        {
+            return true;
+        }
+    }
+
+    false
+}
+
+#[cfg(unix)]
+fn command_contains_launch_args(command: &str, args: &[OsString]) -> bool {
+    let expected_args = args
+        .iter()
+        .map(|arg| arg.to_string_lossy())
+        .collect::<Vec<_>>()
+        .join(" ");
+    !expected_args.is_empty() && command.contains(&expected_args)
 }
 
 #[cfg(unix)]
@@ -2127,6 +2162,27 @@ mod tests {
         assert!(!stale_backend_matches(&reused, &launch));
 
         terminate_child_tree(&mut child);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn backend_command_match_accepts_framework_python_app_display_path() {
+        let launch = BackendLaunchSpec {
+            program: OsString::from(
+                "/Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12",
+            ),
+            args: python_backend_args(),
+            current_dir: PathBuf::from("/tmp/noofy-backend"),
+            env: Vec::new(),
+            remove_env: Vec::new(),
+        };
+        let command = "/Library/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python -m app --port 0";
+
+        assert!(command_matches_backend_launch(
+            command,
+            "/Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12",
+            &launch,
+        ));
     }
 
     #[cfg(unix)]

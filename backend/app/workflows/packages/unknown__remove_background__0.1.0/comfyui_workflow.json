@@ -1,0 +1,236 @@
+{
+  "config": {},
+  "extra": {
+    "ds": {
+      "offset": [
+        340.2543095392182,
+        521.0541287236699
+      ],
+      "scale": 0.7315144579706706
+    },
+    "frontendVersion": "1.44.19"
+  },
+  "groups": [],
+  "id": "fff22fd3-64b3-45cd-bdd0-f12fa818704d",
+  "last_link_id": 16,
+  "last_node_id": 373,
+  "links": [
+    [
+      5,
+      2,
+      0,
+      359,
+      0,
+      "IMAGE"
+    ],
+    [
+      6,
+      359,
+      0,
+      368,
+      0,
+      "IMAGE"
+    ],
+    [
+      7,
+      359,
+      1,
+      368,
+      1,
+      "MASK"
+    ],
+    [
+      8,
+      368,
+      0,
+      370,
+      0,
+      "IMAGE"
+    ]
+  ],
+  "nodes": [
+    {
+      "flags": {},
+      "id": 2,
+      "inputs": [],
+      "mode": 0,
+      "order": 0,
+      "outputs": [
+        {
+          "links": [
+            5
+          ],
+          "name": "IMAGE",
+          "type": "IMAGE"
+        },
+        {
+          "links": null,
+          "name": "MASK",
+          "type": "MASK"
+        }
+      ],
+      "pos": [
+        100,
+        130
+      ],
+      "properties": {
+        "Node name for S&R": "LoadImage",
+        "cnr_id": "comfy-core",
+        "ver": "0.24.1"
+      },
+      "size": [
+        282.73333740234375,
+        396
+      ],
+      "type": "LoadImage",
+      "widgets_values": [
+        "__noofy_runtime_image_input_required__",
+        "image"
+      ]
+    },
+    {
+      "bgcolor": "#364254",
+      "color": "#222e40",
+      "flags": {},
+      "id": 359,
+      "inputs": [
+        {
+          "link": 5,
+          "name": "image",
+          "type": "IMAGE"
+        }
+      ],
+      "mode": 0,
+      "order": 1,
+      "outputs": [
+        {
+          "links": [
+            6
+          ],
+          "name": "IMAGE",
+          "type": "IMAGE"
+        },
+        {
+          "links": [
+            7
+          ],
+          "name": "MASK",
+          "type": "MASK"
+        },
+        {
+          "links": null,
+          "name": "MASK_IMAGE",
+          "type": "IMAGE"
+        }
+      ],
+      "pos": [
+        482.7333297729492,
+        130
+      ],
+      "properties": {
+        "Node name for S&R": "BiRefNetRMBG",
+        "cnr_id": "comfyui-rmbg",
+        "ver": "3.0.0"
+      },
+      "size": [
+        340,
+        339.3333435058594
+      ],
+      "type": "BiRefNetRMBG",
+      "widgets_values": [
+        "BiRefNet-HR",
+        0,
+        0,
+        false,
+        false,
+        "Alpha",
+        "#222222"
+      ]
+    },
+    {
+      "bgcolor": "#4b5b73",
+      "color": "#2e3e57",
+      "flags": {},
+      "id": 368,
+      "inputs": [
+        {
+          "link": 6,
+          "name": "image",
+          "shape": 7,
+          "type": "IMAGE"
+        },
+        {
+          "link": 7,
+          "name": "mask",
+          "shape": 7,
+          "type": "MASK"
+        }
+      ],
+      "mode": 0,
+      "order": 2,
+      "outputs": [
+        {
+          "links": [
+            8
+          ],
+          "name": "IMAGE",
+          "type": "IMAGE"
+        },
+        {
+          "links": null,
+          "name": "MASK",
+          "type": "MASK"
+        }
+      ],
+      "pos": [
+        922.7333297729492,
+        130
+      ],
+      "properties": {
+        "Node name for S&R": "AILab_CropObject",
+        "cnr_id": "comfyui-rmbg",
+        "ver": "3.0.0"
+      },
+      "size": [
+        300,
+        128
+      ],
+      "type": "AILab_CropObject",
+      "widgets_values": [
+        0
+      ]
+    },
+    {
+      "flags": {},
+      "id": 370,
+      "inputs": [
+        {
+          "link": 8,
+          "name": "images",
+          "type": "IMAGE"
+        }
+      ],
+      "mode": 0,
+      "order": 3,
+      "outputs": [],
+      "pos": [
+        1322.7333297729492,
+        130
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.24.1"
+      },
+      "size": [
+        270,
+        316
+      ],
+      "type": "SaveImage",
+      "widgets_values": [
+        "ComfyUI"
+      ]
+    }
+  ],
+  "revision": 0,
+  "version": 0.4
+}

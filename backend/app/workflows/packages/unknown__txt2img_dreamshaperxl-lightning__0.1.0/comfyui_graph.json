@@ -1,0 +1,120 @@
+{
+  "100": {
+    "_meta": {
+      "title": "Empty Latent Image"
+    },
+    "class_type": "EmptyLatentImage",
+    "inputs": {
+      "batch_size": 1,
+      "height": 1024,
+      "width": 1024
+    }
+  },
+  "121": {
+    "_meta": {
+      "title": "Load Checkpoint"
+    },
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "DreamShaperXL_Lightning.safetensors"
+    }
+  },
+  "135": {
+    "_meta": {
+      "title": "CLIP Set Last Layer"
+    },
+    "class_type": "CLIPSetLastLayer",
+    "inputs": {
+      "clip": [
+        "121",
+        1
+      ],
+      "stop_at_clip_layer": -2
+    }
+  },
+  "19": {
+    "_meta": {
+      "title": "CLIP Text Encode (Prompt)"
+    },
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "135",
+        0
+      ],
+      "text": "blur, ugly, extra legs, wrong anatomy, this is negative prompt"
+    }
+  },
+  "6": {
+    "_meta": {
+      "title": "CLIP Text Encode (Prompt)"
+    },
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "135",
+        0
+      ],
+      "text": "a green horse riding on the moon"
+    }
+  },
+  "8": {
+    "_meta": {
+      "title": "VAE Decode"
+    },
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "98",
+        0
+      ],
+      "vae": [
+        "121",
+        2
+      ]
+    }
+  },
+  "98": {
+    "_meta": {
+      "title": "KSampler"
+    },
+    "class_type": "KSampler",
+    "inputs": {
+      "cfg": 2.0,
+      "denoise": 1.0,
+      "latent_image": [
+        "100",
+        0
+      ],
+      "model": [
+        "121",
+        0
+      ],
+      "negative": [
+        "19",
+        0
+      ],
+      "positive": [
+        "6",
+        0
+      ],
+      "sampler_name": "dpmpp_sde_gpu",
+      "scheduler": "karras",
+      "seed": 323956037610255,
+      "steps": 4
+    }
+  },
+  "99": {
+    "_meta": {
+      "title": "Save Image"
+    },
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "text2image",
+      "images": [
+        "8",
+        0
+      ]
+    }
+  }
+}

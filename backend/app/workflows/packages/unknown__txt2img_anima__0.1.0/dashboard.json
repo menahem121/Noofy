@@ -1,0 +1,223 @@
+{
+  "inputs": [
+    {
+      "binding": {
+        "input_name": "text",
+        "node_id": "60:11"
+      },
+      "control": "textarea",
+      "default": "Anime monochrome cyberpunk front portrait, male figure, sleek skin with delicate mechanical lines, piercing glowing eyes, partial exposed metallic mecha components and light cables, sharp domineering cool style, textured anime brushwork, faint circuit background, high contrast chiaroscuro lighting, immersive cinematic shadows, ultra fine details, 8K high-def render, futuristic dystopian mood",
+      "default_pinned": true,
+      "id": "ctrl-node-60:11-text",
+      "label": "Prompt",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "text",
+        "node_id": "60:12"
+      },
+      "control": "textarea",
+      "default": "worst quality, low quality, score_1, score_2, score_3, blurry, jpeg artifacts, sepia",
+      "default_pinned": true,
+      "id": "ctrl-node-60:12-text",
+      "label": "Negative prompt",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "height",
+        "node_id": "60:28"
+      },
+      "control": "slider",
+      "default": 1024,
+      "default_pinned": true,
+      "id": "ctrl-node-60:28-height",
+      "label": "Height",
+      "validation": {
+        "max": 4096,
+        "min": 64,
+        "step": 64
+      }
+    },
+    {
+      "binding": {
+        "input_name": "width",
+        "node_id": "60:28"
+      },
+      "control": "slider",
+      "default": 1024,
+      "default_pinned": true,
+      "id": "ctrl-node-60:28-width",
+      "label": "Width",
+      "validation": {
+        "max": 4096,
+        "min": 64,
+        "step": 64
+      }
+    },
+    {
+      "binding": {
+        "input_name": "seed",
+        "node_id": "60:19"
+      },
+      "control": "seed_widget",
+      "default": 508374812281025,
+      "default_pinned": true,
+      "id": "ctrl-node-60:19-seed",
+      "label": "Variation ID",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "steps",
+        "node_id": "60:19"
+      },
+      "control": "slider",
+      "default": 60,
+      "default_pinned": true,
+      "id": "ctrl-node-60:19-steps",
+      "label": "Refinement Level",
+      "validation": {
+        "max": 100,
+        "min": 1,
+        "step": 1
+      }
+    }
+  ],
+  "outputs": [
+    {
+      "id": "image",
+      "kind": "image",
+      "label": "Result",
+      "node_id": "46",
+      "type": "image"
+    }
+  ],
+  "sections": [
+    {
+      "controls": [
+        {
+          "description": "Describe what you want to create.",
+          "id": "ctrl-node-60:11-text",
+          "input_id": "ctrl-node-60:11-text",
+          "label": "Prompt",
+          "required": false,
+          "type": "textarea"
+        },
+        {
+          "description": "Describe what you don't want to create.",
+          "id": "ctrl-node-60:12-text",
+          "input_id": "ctrl-node-60:12-text",
+          "label": "Negative prompt",
+          "required": false,
+          "type": "textarea"
+        },
+        {
+          "description": "Output height in pixels.",
+          "id": "ctrl-node-60:28-height",
+          "input_id": "ctrl-node-60:28-height",
+          "label": "Height",
+          "required": false,
+          "type": "slider"
+        },
+        {
+          "description": "Output width in pixels.",
+          "id": "ctrl-node-60:28-width",
+          "input_id": "ctrl-node-60:28-width",
+          "label": "Width",
+          "required": false,
+          "type": "slider"
+        },
+        {
+          "description": "Lock or change to get a different variation.",
+          "id": "ctrl-node-60:19-seed",
+          "input_id": "ctrl-node-60:19-seed",
+          "label": "Variation ID",
+          "layout": {
+            "h": 4,
+            "min_h": 3,
+            "min_w": 4,
+            "w": 8,
+            "x": 12,
+            "y": 23
+          },
+          "required": false,
+          "type": "seed_widget"
+        },
+        {
+          "description": "More passes can add detail but take longer.",
+          "id": "ctrl-node-60:19-steps",
+          "input_id": "ctrl-node-60:19-steps",
+          "label": "Refinement Level",
+          "layout": {
+            "h": 4,
+            "min_h": 4,
+            "min_w": 6,
+            "w": 12,
+            "x": 20,
+            "y": 23
+          },
+          "required": false,
+          "type": "slider"
+        },
+        {
+          "description": "Generated image will appear here.",
+          "id": "ctrl-node-46-output_image",
+          "label": "Result",
+          "layout": {
+            "h": 21,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 20,
+            "x": 12,
+            "y": 2
+          },
+          "output_id": "image",
+          "required": false,
+          "type": "display_image"
+        }
+      ],
+      "groups": [
+        {
+          "control_ids": [
+            "ctrl-node-60:11-text",
+            "ctrl-node-60:12-text"
+          ],
+          "description": "",
+          "id": "group-1",
+          "layout": {
+            "h": 16,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 12,
+            "x": 0,
+            "y": 0
+          },
+          "title": "Prompt"
+        },
+        {
+          "control_ids": [
+            "ctrl-node-60:28-height",
+            "ctrl-node-60:28-width"
+          ],
+          "description": "",
+          "id": "group-2",
+          "layout": {
+            "h": 11,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 12,
+            "x": 0,
+            "y": 16
+          },
+          "title": "Height + Width"
+        }
+      ],
+      "id": "main",
+      "title": "Main"
+    }
+  ],
+  "status": "configured",
+  "version": "0.1.0"
+}

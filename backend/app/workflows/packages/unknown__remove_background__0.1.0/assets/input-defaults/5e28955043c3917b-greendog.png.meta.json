@@ -1,0 +1,9 @@
+{
+  "asset_id": "input-defaults/5e28955043c3917b-greendog.png",
+  "content_type": "image/png",
+  "filename": "greenDog.png",
+  "kind": "image",
+  "sha256": "sha256:5e28955043c3917bcb749e55ed5b3e808b2d257428ea3755f58011c4d8d6bb98",
+  "size_bytes": 1444887,
+  "source": "package_asset"
+}

@@ -1,0 +1,104 @@
+{
+  "inputs": [
+    {
+      "binding": {
+        "input_name": "image",
+        "node_id": "76"
+      },
+      "control": "load_image",
+      "default": {
+        "asset_id": "input-defaults/1821ec4e615012f9-villageonrock.png",
+        "content_type": "image/png",
+        "filename": "villageOnRock.png",
+        "kind": "image",
+        "sha256": "sha256:1821ec4e615012f932e9b1833966ed83d4df04c7d689c27e4185a027c5d87a59",
+        "size_bytes": 3548096,
+        "source": "package_asset"
+      },
+      "default_pinned": true,
+      "id": "input-76-image",
+      "label": "Input image",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "text",
+        "node_id": "75:74"
+      },
+      "control": "textarea",
+      "default": "Blow it up",
+      "default_pinned": true,
+      "id": "ctrl-node-75:74-text",
+      "label": "Positive prompt",
+      "validation": {}
+    }
+  ],
+  "outputs": [
+    {
+      "id": "image",
+      "kind": "image",
+      "label": "Result",
+      "node_id": "9",
+      "type": "image"
+    }
+  ],
+  "sections": [
+    {
+      "controls": [
+        {
+          "description": "Pick an image",
+          "id": "ctrl-node-76-image",
+          "input_id": "input-76-image",
+          "label": "Input image",
+          "layout": {
+            "h": 10,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 11,
+            "x": 0,
+            "y": 3
+          },
+          "required": false,
+          "type": "load_image"
+        },
+        {
+          "description": "Describe what you want to create.",
+          "id": "ctrl-node-75:74-text",
+          "input_id": "ctrl-node-75:74-text",
+          "label": "Positive prompt",
+          "layout": {
+            "h": 12,
+            "min_h": 4,
+            "min_w": 5,
+            "w": 11,
+            "x": 0,
+            "y": 13
+          },
+          "required": false,
+          "type": "textarea"
+        },
+        {
+          "description": "Generated image will appear here.",
+          "id": "ctrl-node-9-output_image",
+          "label": "Result",
+          "layout": {
+            "h": 24,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 21,
+            "x": 11,
+            "y": 2
+          },
+          "output_id": "image",
+          "required": false,
+          "type": "display_image"
+        }
+      ],
+      "groups": [],
+      "id": "main",
+      "title": "Main"
+    }
+  ],
+  "status": "configured",
+  "version": "0.1.0"
+}

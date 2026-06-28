@@ -1,0 +1,301 @@
+{
+  "123": {
+    "_meta": {
+      "title": "KSampler"
+    },
+    "class_type": "KSampler",
+    "inputs": {
+      "cfg": 1.0,
+      "denoise": 1.0,
+      "latent_image": [
+        "167",
+        0
+      ],
+      "model": [
+        "394",
+        0
+      ],
+      "negative": [
+        "165",
+        0
+      ],
+      "positive": [
+        "400",
+        0
+      ],
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "seed": 862873275677551,
+      "steps": 4
+    }
+  },
+  "146": {
+    "_meta": {
+      "title": "Resize Mask"
+    },
+    "class_type": "ResizeMask",
+    "inputs": {
+      "crop": "disabled",
+      "height": [
+        "398",
+        1
+      ],
+      "keep_proportions": false,
+      "mask": [
+        "359",
+        1
+      ],
+      "upscale_method": "nearest-exact",
+      "width": [
+        "398",
+        0
+      ]
+    }
+  },
+  "165": {
+    "_meta": {
+      "title": "ConditioningZeroOut"
+    },
+    "class_type": "ConditioningZeroOut",
+    "inputs": {
+      "conditioning": [
+        "396",
+        0
+      ]
+    }
+  },
+  "167": {
+    "_meta": {
+      "title": "Set Latent Noise Mask"
+    },
+    "class_type": "SetLatentNoiseMask",
+    "inputs": {
+      "mask": [
+        "390",
+        1
+      ],
+      "samples": [
+        "168",
+        0
+      ]
+    }
+  },
+  "168": {
+    "_meta": {
+      "title": "VAE Encode"
+    },
+    "class_type": "VAEEncode",
+    "inputs": {
+      "pixels": [
+        "397",
+        0
+      ],
+      "vae": [
+        "393",
+        0
+      ]
+    }
+  },
+  "170": {
+    "_meta": {
+      "title": "ImageCompositeMasked"
+    },
+    "class_type": "ImageCompositeMasked",
+    "inputs": {
+      "destination": [
+        "36",
+        0
+      ],
+      "mask": [
+        "390",
+        0
+      ],
+      "resize_source": false,
+      "source": [
+        "397",
+        0
+      ],
+      "x": 0,
+      "y": 0
+    }
+  },
+  "184": {
+    "_meta": {
+      "title": "Save Image"
+    },
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": [
+        "170",
+        0
+      ]
+    }
+  },
+  "359": {
+    "_meta": {
+      "title": "BiRefNet Remove Background (RMBG)"
+    },
+    "class_type": "BiRefNetRMBG",
+    "inputs": {
+      "background": "Alpha",
+      "background_color": "#222222",
+      "image": [
+        "397",
+        0
+      ],
+      "invert_output": false,
+      "mask_blur": 0,
+      "mask_offset": 0,
+      "model": "BiRefNet_toonout",
+      "refine_foreground": false
+    }
+  },
+  "36": {
+    "_meta": {
+      "title": "VAE Decode"
+    },
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "123",
+        0
+      ],
+      "vae": [
+        "393",
+        0
+      ]
+    }
+  },
+  "390": {
+    "_meta": {
+      "title": "Grow Mask With Blur"
+    },
+    "class_type": "GrowMaskWithBlur",
+    "inputs": {
+      "blur_radius": 1.0,
+      "decay_factor": 1.0,
+      "expand": -3,
+      "fill_holes": false,
+      "flip_input": false,
+      "incremental_expandrate": 0.0,
+      "lerp_alpha": 1.0,
+      "mask": [
+        "146",
+        0
+      ],
+      "tapered_corners": false
+    }
+  },
+  "393": {
+    "_meta": {
+      "title": "Load VAE"
+    },
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "flux2-vae.safetensors"
+    }
+  },
+  "394": {
+    "_meta": {
+      "title": "Load Diffusion Model"
+    },
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "flux-2-klein-4b-fp8.safetensors",
+      "weight_dtype": "default"
+    }
+  },
+  "395": {
+    "_meta": {
+      "title": "Load CLIP"
+    },
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen_3_4b_fp4_flux2.safetensors",
+      "device": "default",
+      "type": "flux2"
+    }
+  },
+  "396": {
+    "_meta": {
+      "title": "CLIP Text Encode (Prompt)"
+    },
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "395",
+        0
+      ],
+      "text": "move him into a nice beach, same anime style"
+    }
+  },
+  "397": {
+    "_meta": {
+      "title": "ImageScaleToTotalPixels"
+    },
+    "class_type": "ImageScaleToTotalPixels",
+    "inputs": {
+      "image": [
+        "401",
+        0
+      ],
+      "megapixels": 1.0,
+      "resolution_steps": 1,
+      "upscale_method": "nearest-exact"
+    }
+  },
+  "398": {
+    "_meta": {
+      "title": "Get Image Size"
+    },
+    "class_type": "GetImageSize",
+    "inputs": {
+      "image": [
+        "397",
+        0
+      ]
+    }
+  },
+  "399": {
+    "_meta": {
+      "title": "ReferenceLatent"
+    },
+    "class_type": "ReferenceLatent",
+    "inputs": {
+      "conditioning": [
+        "396",
+        0
+      ],
+      "latent": [
+        "168",
+        0
+      ]
+    }
+  },
+  "400": {
+    "_meta": {
+      "title": "FluxGuidance"
+    },
+    "class_type": "FluxGuidance",
+    "inputs": {
+      "conditioning": [
+        "399",
+        0
+      ],
+      "guidance": 4.0
+    }
+  },
+  "401": {
+    "_meta": {
+      "title": "Load Image"
+    },
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "__noofy_runtime_image_input_required__"
+    },
+    "is_changed": [
+      "5e28955043c3917bcb749e55ed5b3e808b2d257428ea3755f58011c4d8d6bb98"
+    ]
+  }
+}

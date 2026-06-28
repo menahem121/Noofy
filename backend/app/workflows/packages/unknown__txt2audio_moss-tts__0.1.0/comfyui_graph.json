@@ -1,0 +1,56 @@
+{
+  "1": {
+    "_meta": {
+      "title": "MOSS-TTS Model Loader"
+    },
+    "class_type": "MossTTSModelLoader",
+    "inputs": {
+      "codec_local_path": "",
+      "local_model_path": "",
+      "model_variant": "MOSS-TTS (Delay 8B)"
+    },
+    "is_changed": [
+      "8b0db26f7cc4afecbc355c3bdf683648"
+    ]
+  },
+  "2": {
+    "_meta": {
+      "title": "MOSS-TTS Generate"
+    },
+    "class_type": "MossTTSGenerate",
+    "inputs": {
+      "duration_tokens": 325,
+      "enable_duration_control": false,
+      "head_handle": 0.0,
+      "language": "auto",
+      "max_new_tokens": 4096,
+      "moss_pipe": [
+        "1",
+        0
+      ],
+      "repetition_penalty": 1.0,
+      "seed": 806859614244461,
+      "tail_handle": 0.0,
+      "temperature": 1.7,
+      "text": "I hope you like Noofy.\n\nThis is a simple text-to-speech workflow demo.\nType your text, choose a voice, press Run, and let Noofy create the audio for you.\n\nNo nodes. No complicated setup. Just your words, spoken out loud.",
+      "top_k": 25,
+      "top_p": 0.8
+    },
+    "is_changed": [
+      806859614244461
+    ]
+  },
+  "3": {
+    "_meta": {
+      "title": "Preview Audio"
+    },
+    "class_type": "PreviewAudio",
+    "inputs": {
+      "audio": [
+        "2",
+        0
+      ],
+      "audioUI": "/api/view?filename=ComfyUI_temp_imrui_00001_.flac&type=temp&subfolder=&rand=0.9100867044393814"
+    }
+  }
+}

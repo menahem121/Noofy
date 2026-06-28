@@ -28,6 +28,7 @@ Status categories:
 
 ## Active Plans / Future Work
 
+- [CROSS_PLATFORM_RELEASE_STRATEGY.md](CROSS_PLATFORM_RELEASE_STRATEGY.md): full ComfyUI-parity release strategy, OS/CPU target matrix, accelerator backend gaps, packaging direction, and validation gates.
 - [MEMORY_GOVERNOR_PRODUCTION_REMAINING.md](MEMORY_GOVERNOR_PRODUCTION_REMAINING.md): reconciled post-P0/P1 roadmap for Memory Governor P2/P3 production completion, hardware validation, and long-term EngineService cleanup.
 - [MODEL_COMPATIBILITY_PLAN.md](MODEL_COMPATIBILITY_PLAN.md): not started. Backend model identity scanning, compatibility resolution, optional registry lookup, LoRA download/verification, and frontend compatible-LoRA picker.
 

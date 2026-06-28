@@ -1,0 +1,244 @@
+{
+  "inputs": [
+    {
+      "binding": {
+        "input_name": "image",
+        "node_id": "97"
+      },
+      "control": "load_image",
+      "default": {
+        "asset_id": "input-defaults/5e28955043c3917b-greendog.png",
+        "content_type": "image/png",
+        "filename": "greenDog.png",
+        "kind": "image",
+        "sha256": "sha256:5e28955043c3917bcb749e55ed5b3e808b2d257428ea3755f58011c4d8d6bb98",
+        "size_bytes": 1444887,
+        "source": "package_asset"
+      },
+      "default_pinned": true,
+      "id": "input-97-image",
+      "label": "Input image",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "text",
+        "node_id": "129:93"
+      },
+      "control": "textarea",
+      "default": "A green dog moves in a cute and playful way, gently bouncing and wagging its tail. The dog looks happy, expressive, and charming, with soft natural movement, adorable body language, smooth animation, bright friendly atmosphere, high quality, realistic motion, cinematic lighting.",
+      "default_pinned": true,
+      "id": "ctrl-node-129:93-text",
+      "label": "Positive prompt",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "text",
+        "node_id": "129:89"
+      },
+      "control": "textarea",
+      "default": "overexposed, blurry details, subtitles, style, artwork, painting, image, still, overall grayish, worst quality, low quality, JPEG compression residue, ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn faces, deformed, disfigured, distorted limbs, fingers fused together, static image, cluttered background, three legs, many people in the background, walking backwards",
+      "default_pinned": true,
+      "id": "ctrl-node-129:89-text",
+      "label": "Negative prompt",
+      "validation": {}
+    },
+    {
+      "binding": {
+        "input_name": "height",
+        "node_id": "129:98"
+      },
+      "control": "slider",
+      "default": 640,
+      "default_pinned": true,
+      "id": "ctrl-node-129:98-height",
+      "label": "Height",
+      "validation": {
+        "max": 2048,
+        "min": 256,
+        "step": 64
+      }
+    },
+    {
+      "binding": {
+        "input_name": "width",
+        "node_id": "129:98"
+      },
+      "control": "slider",
+      "default": 640,
+      "default_pinned": true,
+      "id": "ctrl-node-129:98-width",
+      "label": "Width",
+      "validation": {
+        "max": 2048,
+        "min": 256,
+        "step": 64
+      }
+    },
+    {
+      "binding": {
+        "input_name": "value",
+        "node_id": "129:161"
+      },
+      "control": "slider",
+      "default": 5,
+      "default_pinned": true,
+      "id": "ctrl-node-129:161-value",
+      "label": "Video duration (in seconds)",
+      "validation": {
+        "max": 9,
+        "min": 3,
+        "step": 1
+      }
+    },
+    {
+      "binding": {
+        "input_name": "noise_seed",
+        "node_id": "129:86"
+      },
+      "control": "seed_widget",
+      "default": 613191391586160,
+      "default_pinned": true,
+      "id": "ctrl-node-129:86-noise_seed",
+      "label": "Noise seed",
+      "validation": {
+        "seed_mode": "randomize"
+      }
+    }
+  ],
+  "outputs": [
+    {
+      "id": "video",
+      "kind": "video",
+      "label": "Output video",
+      "node_id": "108",
+      "type": "video"
+    }
+  ],
+  "sections": [
+    {
+      "controls": [
+        {
+          "description": "Pick an image",
+          "id": "ctrl-node-97-image",
+          "input_id": "input-97-image",
+          "label": "Input image",
+          "layout": {
+            "h": 10,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 12,
+            "x": 0,
+            "y": 0
+          },
+          "required": false,
+          "type": "load_image"
+        },
+        {
+          "description": "Describe what you want to create.",
+          "id": "ctrl-node-129:93-text",
+          "input_id": "ctrl-node-129:93-text",
+          "label": "Positive prompt",
+          "required": false,
+          "type": "textarea"
+        },
+        {
+          "description": "Describe what you don't want to create.",
+          "id": "ctrl-node-129:89-text",
+          "input_id": "ctrl-node-129:89-text",
+          "label": "Negative prompt",
+          "required": false,
+          "type": "textarea"
+        },
+        {
+          "description": "Output height in pixels.",
+          "id": "ctrl-node-129:98-height",
+          "input_id": "ctrl-node-129:98-height",
+          "label": "Height",
+          "layout": {
+            "h": 4,
+            "min_h": 4,
+            "min_w": 6,
+            "w": 12,
+            "x": 0,
+            "y": 23
+          },
+          "required": false,
+          "type": "slider"
+        },
+        {
+          "description": "Output width in pixels.",
+          "id": "ctrl-node-129:98-width",
+          "input_id": "ctrl-node-129:98-width",
+          "label": "Width",
+          "layout": {
+            "h": 4,
+            "min_h": 4,
+            "min_w": 6,
+            "w": 10,
+            "x": 12,
+            "y": 23
+          },
+          "required": false,
+          "type": "slider"
+        },
+        {
+          "description": "",
+          "id": "ctrl-node-129:161-value",
+          "input_id": "ctrl-node-129:161-value",
+          "label": "Video duration (in seconds)",
+          "layout": {
+            "h": 4,
+            "min_h": 4,
+            "min_w": 6,
+            "w": 10,
+            "x": 22,
+            "y": 23
+          },
+          "required": false,
+          "type": "slider"
+        },
+        {
+          "description": "",
+          "id": "ctrl-node-108-output_video",
+          "label": "Output video",
+          "layout": {
+            "h": 21,
+            "min_h": 7,
+            "min_w": 8,
+            "w": 20,
+            "x": 12,
+            "y": 2
+          },
+          "output_id": "video",
+          "required": false,
+          "type": "display_video"
+        }
+      ],
+      "groups": [
+        {
+          "control_ids": [
+            "ctrl-node-129:93-text",
+            "ctrl-node-129:89-text"
+          ],
+          "description": "",
+          "id": "group-1",
+          "layout": {
+            "h": 13,
+            "min_h": 6,
+            "min_w": 6,
+            "w": 12,
+            "x": 0,
+            "y": 10
+          },
+          "title": "Prompt"
+        }
+      ],
+      "id": "main",
+      "title": "Main"
+    }
+  ],
+  "status": "configured",
+  "version": "0.1.0"
+}

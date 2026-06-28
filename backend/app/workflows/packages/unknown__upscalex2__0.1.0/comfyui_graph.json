@@ -1,0 +1,122 @@
+{
+  "134": {
+    "_meta": {
+      "title": "Load Upscale Model"
+    },
+    "class_type": "UpscaleModelLoader",
+    "inputs": {
+      "model_name": "2xNomosUni_span_multijpg_ldl.safetensors"
+    }
+  },
+  "140": {
+    "_meta": {
+      "title": "Join Image with Alpha"
+    },
+    "class_type": "JoinImageWithAlpha",
+    "inputs": {
+      "alpha": [
+        "191",
+        0
+      ],
+      "image": [
+        "31",
+        0
+      ]
+    }
+  },
+  "151": {
+    "_meta": {
+      "title": "Get Image Size"
+    },
+    "class_type": "GetImageSize",
+    "inputs": {
+      "image": [
+        "31",
+        0
+      ]
+    }
+  },
+  "191": {
+    "_meta": {
+      "title": "Resize Image/Mask"
+    },
+    "class_type": "ResizeImageMaskNode",
+    "inputs": {
+      "input": [
+        "192",
+        1
+      ],
+      "resize_type": "scale dimensions",
+      "resize_type.crop": "disabled",
+      "resize_type.height": [
+        "151",
+        1
+      ],
+      "resize_type.width": [
+        "151",
+        0
+      ],
+      "scale_method": "nearest-exact"
+    }
+  },
+  "192": {
+    "_meta": {
+      "title": "Load Image"
+    },
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "__noofy_runtime_image_input_required__"
+    },
+    "is_changed": [
+      "1821ec4e615012f932e9b1833966ed83d4df04c7d689c27e4185a027c5d87a59"
+    ]
+  },
+  "193": {
+    "_meta": {
+      "title": "ColorMatchV2"
+    },
+    "class_type": "ColorMatchV2",
+    "inputs": {
+      "image_ref": [
+        "192",
+        0
+      ],
+      "image_target": [
+        "140",
+        0
+      ],
+      "method": "mkl",
+      "multithread": true,
+      "strength": 1.0
+    }
+  },
+  "24": {
+    "_meta": {
+      "title": "Save Image"
+    },
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "NomosschatL",
+      "images": [
+        "193",
+        0
+      ]
+    }
+  },
+  "31": {
+    "_meta": {
+      "title": "Upscale Image (using Model)"
+    },
+    "class_type": "ImageUpscaleWithModel",
+    "inputs": {
+      "image": [
+        "192",
+        0
+      ],
+      "upscale_model": [
+        "134",
+        0
+      ]
+    }
+  }
+}

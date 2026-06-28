@@ -188,6 +188,10 @@ class WorkflowPackageLoader:
             data: dict[str, Any] = json.load(file)
 
         package_dir = package_file.parent
+        if not isinstance(data.get("comfyui_graph"), dict):
+            graph = _read_adjacent_workflow_graph(package_dir)
+            if graph is not None:
+                data["comfyui_graph"] = graph
         dashboard_dir = self._dashboard_dir_for_package(package_dir, data)
         inputs, outputs, dashboard = _load_dashboard_from_dir(dashboard_dir)
 
@@ -226,6 +230,8 @@ class WorkflowPackageLoader:
 
         # Strip inputs/outputs from data before model_validate to avoid conflicts
         data_clean = {k: v for k, v in data.items() if k not in ("inputs", "outputs", "dashboard")}
+        if "source_policy" in data_clean and not isinstance(data_clean.get("source_policy"), dict):
+            data_clean.pop("source_policy", None)
         _enrich_required_models_from_capsule_lock(data_clean, package_dir / _CAPSULE_LOCK_FILENAME)
         _repair_required_model_source_urls_from_source_files(data_clean, package_dir)
         _repair_imported_custom_nodes_from_source_files(data_clean, package_dir)
@@ -272,6 +278,12 @@ def _package_id_from_data(data: dict[str, Any]) -> str | None:
         return None
     workflow_id = metadata.get("id")
     return workflow_id if isinstance(workflow_id, str) and workflow_id else None
+
+
+def _read_adjacent_workflow_graph(package_dir: Path) -> dict[str, Any] | None:
+    return _read_optional_source_json(package_dir / "comfyui_graph.json") or _read_optional_source_json(
+        package_dir / "source-files" / "comfyui_graph.json"
+    )
 
 
 def _enrich_required_models_from_capsule_lock(package_data: dict[str, Any], capsule_path: Path) -> None:
