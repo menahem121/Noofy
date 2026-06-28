@@ -1,0 +1,67 @@
+{
+  "author": "Menahem121",
+  "category": "Txt2img",
+  "custom_nodes": [],
+  "description": "",
+  "display_name": "txt2img_chroma1-hd",
+  "engine": "comfyui",
+  "icon": "image",
+  "metadata": {
+    "author": "Menahem121",
+    "category": "Txt2img",
+    "description": "",
+    "display_name": "txt2img_chroma1-hd",
+    "icon": "image",
+    "id": "unknown__txt2img_chroma1-hd__0.1.0",
+    "name": "txt2img_chroma1-hd",
+    "tags": [],
+    "version": "0.1.0",
+    "website": "https://github.com/menahem121/Noofy"
+  },
+  "package_id": "txt2img_chroma1-hd",
+  "publisher_id": "unknown",
+  "required_models": [
+    {
+      "bundled": false,
+      "checksum": "sha256:afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38",
+      "filename": "ae.safetensors",
+      "folder": "vae",
+      "size_bytes": 335304388,
+      "source_url": "https://huggingface.co/Comfy-Org/Lumina_Image_2.0_Repackaged/resolve/main/split_files/vae/ae.safetensors",
+      "source_urls": [
+        "https://huggingface.co/Comfy-Org/Lumina_Image_2.0_Repackaged/resolve/main/split_files/vae/ae.safetensors"
+      ],
+      "verification_level": "sha256_size"
+    },
+    {
+      "bundled": false,
+      "checksum": "sha256:a2928ca6075f308f4d5e2182e2b96120fa8ad270ec6ea9b1b5c724c85c49a575",
+      "filename": "Chroma1-HD-fp8mixed.safetensors",
+      "folder": "diffusion_models",
+      "size_bytes": 9193379316,
+      "source_url": "https://huggingface.co/Comfy-Org/Chroma1-HD_repackaged/resolve/main/split_files/diffusion_models/Chroma1-HD-fp8mixed.safetensors",
+      "source_urls": [
+        "https://huggingface.co/Comfy-Org/Chroma1-HD_repackaged/resolve/main/split_files/diffusion_models/Chroma1-HD-fp8mixed.safetensors"
+      ],
+      "verification_level": "sha256_size"
+    },
+    {
+      "bundled": false,
+      "checksum": "sha256:a498f0485dc9536735258018417c3fd7758dc3bccc0a645feaa472b34955557a",
+      "filename": "t5xxl_fp8_e4m3fn_scaled.safetensors",
+      "folder": "text_encoders",
+      "size_bytes": 5157348688,
+      "source_url": "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/t5xxl_fp8_e4m3fn_scaled.safetensors",
+      "source_urls": [
+        "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/t5xxl_fp8_e4m3fn_scaled.safetensors"
+      ],
+      "verification_level": "sha256_size"
+    }
+  ],
+  "schema_version": "0.1.0",
+  "source_policy": "local",
+  "tags": [],
+  "trust_level": "quarantined_community",
+  "version": "0.1.0",
+  "website": "https://github.com/menahem121/Noofy"
+}

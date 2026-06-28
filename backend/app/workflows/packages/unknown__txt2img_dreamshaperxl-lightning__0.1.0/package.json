@@ -1,0 +1,40 @@
+{
+  "author": "Menahem121",
+  "category": "Txt2img",
+  "custom_nodes": [],
+  "description": "",
+  "display_name": "txt2img_DreamShaperXL-Lightning",
+  "engine": "comfyui",
+  "icon": "image",
+  "metadata": {
+    "author": "Menahem121",
+    "category": "Txt2img",
+    "description": "",
+    "display_name": "txt2img_DreamShaperXL-Lightning",
+    "icon": "image",
+    "id": "unknown__txt2img_dreamshaperxl-lightning__0.1.0",
+    "name": "txt2img_DreamShaperXL-Lightning",
+    "tags": [],
+    "version": "0.1.0",
+    "website": "https://github.com/menahem121/Noofy"
+  },
+  "package_id": "txt2img_dreamshaperxl-lightning",
+  "publisher_id": "unknown",
+  "required_models": [
+    {
+      "bundled": false,
+      "checksum": "sha256:fdbe56354b8f876b736f24d3ad867ecd4140c019f57642ec8ddd878088d44f64",
+      "filename": "DreamShaperXL_Lightning.safetensors",
+      "folder": "checkpoints",
+      "size_bytes": 6939220250,
+      "source_urls": [],
+      "verification_level": "sha256_size"
+    }
+  ],
+  "schema_version": "0.1.0",
+  "source_policy": "local",
+  "tags": [],
+  "trust_level": "quarantined_community",
+  "version": "0.1.0",
+  "website": "https://github.com/menahem121/Noofy"
+}

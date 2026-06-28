@@ -1,0 +1,79 @@
+{
+  "author": "Menahem121",
+  "category": "Img2img",
+  "custom_nodes": [],
+  "description": "",
+  "display_name": "image_longcat_image_edit Copy",
+  "engine": "comfyui",
+  "icon": "image",
+  "metadata": {
+    "author": "Menahem121",
+    "category": "Img2img",
+    "description": "",
+    "display_name": "image_longcat_image_edit Copy",
+    "icon": "image",
+    "id": "local__image_longcat_image_edit-copy__0.1.0",
+    "name": "image_longcat_image_edit Copy",
+    "tags": [],
+    "version": "0.1.0",
+    "website": "github.com/menahem121/Noofy"
+  },
+  "package_id": "image_longcat_image_edit-copy",
+  "publisher_id": "local",
+  "required_models": [
+    {
+      "bundled": false,
+      "checksum": "sha256:8e65ba6ab2f6b323c1619347cd681e4ff78a017b608c82c7bf30f1d125925fab",
+      "filename": "longcat_image_edit_bf16.safetensors",
+      "folder": "diffusion_models",
+      "input_name": "unet_name",
+      "model_type": "diffusion_model",
+      "node_id": "22:1",
+      "node_type": "UNETLoader",
+      "size_bytes": 12541383144,
+      "source_url": "https://huggingface.co/TalmajM/LongCat-Image-Edit_ComfyUI_repackaged/resolve/main/split_files/diffusion_models/longcat_image_edit_bf16.safetensors",
+      "source_urls": [
+        "https://huggingface.co/TalmajM/LongCat-Image-Edit_ComfyUI_repackaged/resolve/main/split_files/diffusion_models/longcat_image_edit_bf16.safetensors"
+      ],
+      "verification_level": "sha256_size"
+    },
+    {
+      "bundled": false,
+      "checksum": "sha256:cb5636d852a0ea6a9075ab1bef496c0db7aef13c02350571e388aea959c5c0b4",
+      "filename": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+      "folder": "text_encoders",
+      "input_name": "clip_name",
+      "model_type": "text_encoder",
+      "node_id": "22:2",
+      "node_type": "CLIPLoader",
+      "size_bytes": 9384670680,
+      "source_url": "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors",
+      "source_urls": [
+        "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors"
+      ],
+      "verification_level": "sha256_size"
+    },
+    {
+      "bundled": false,
+      "checksum": "sha256:afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38",
+      "filename": "ae.safetensors",
+      "folder": "vae",
+      "input_name": "vae_name",
+      "model_type": "vae",
+      "node_id": "22:3",
+      "node_type": "VAELoader",
+      "size_bytes": 335304388,
+      "source_url": "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/vae/ae.safetensors",
+      "source_urls": [
+        "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/vae/ae.safetensors"
+      ],
+      "verification_level": "sha256_size"
+    }
+  ],
+  "schema_version": "0.1.0",
+  "source_policy": "local",
+  "tags": [],
+  "trust_level": "quarantined_community",
+  "version": "0.1.0",
+  "website": "github.com/menahem121/Noofy"
+}

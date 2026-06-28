@@ -1,0 +1,57 @@
+{
+  "author": "Menahem121",
+  "category": "Upscaling",
+  "custom_nodes": [
+    {
+      "folder_name": "github-kijai-ComfyUI-KJNodes",
+      "has_install_py": false,
+      "id": "github-kijai-ComfyUI-KJNodes",
+      "included": true,
+      "node_types": [
+        "ColorMatchV2"
+      ],
+      "requirements_files": [],
+      "resolution_method": "github_search_auto",
+      "source": "https://codeload.github.com/kijai/ComfyUI-KJNodes/zip/7f43f2ce910a27971bdbbf3fb5a52081457f32e2",
+      "source_archive_subdir": "ComfyUI-KJNodes-7f43f2ce910a27971bdbbf3fb5a52081457f32e2",
+      "source_content_hash": "sha256:de8e760a2364cc49ac6ed7d0aeed17bdd37b2a8a0f5e58993d87a6bd0042032c",
+      "source_ref": "7f43f2ce910a27971bdbbf3fb5a52081457f32e2",
+      "source_repo_url": "https://github.com/kijai/ComfyUI-KJNodes"
+    }
+  ],
+  "description": "",
+  "display_name": "upscaleX2",
+  "engine": "comfyui",
+  "icon": "maximize",
+  "metadata": {
+    "author": "Menahem121",
+    "category": "Upscaling",
+    "description": "",
+    "display_name": "upscaleX2",
+    "icon": "maximize",
+    "id": "unknown__upscalex2__0.1.0",
+    "name": "upscaleX2",
+    "tags": [],
+    "version": "0.1.0",
+    "website": "https://github.com/menahem121/Noofy"
+  },
+  "package_id": "upscalex2",
+  "publisher_id": "unknown",
+  "required_models": [
+    {
+      "bundled": false,
+      "checksum": "sha256:a3d35e01b8b71b4b3041ad1686f8ebd7bc4e1f3a10378319c2ac61c78b67012a",
+      "filename": "2xNomosUni_span_multijpg_ldl.safetensors",
+      "folder": "upscale_models",
+      "size_bytes": 8903384,
+      "source_urls": [],
+      "verification_level": "sha256_size"
+    }
+  ],
+  "schema_version": "0.1.0",
+  "source_policy": "local",
+  "tags": [],
+  "trust_level": "quarantined_community",
+  "version": "0.1.0",
+  "website": "https://github.com/menahem121/Noofy"
+}

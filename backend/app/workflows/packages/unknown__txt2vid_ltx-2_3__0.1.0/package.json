@@ -1,0 +1,137 @@
+{
+  "author": "Menahem121",
+  "category": "txt2vid",
+  "custom_nodes": [],
+  "description": "",
+  "display_name": "txt2vid_LTX-2_3",
+  "engine": "comfyui",
+  "icon": "video",
+  "metadata": {
+    "author": "Menahem121",
+    "category": "txt2vid",
+    "description": "",
+    "display_name": "txt2vid_LTX-2_3",
+    "icon": "video",
+    "id": "unknown__txt2vid_ltx-2_3__0.1.0",
+    "name": "txt2vid_LTX-2_3",
+    "tags": [],
+    "version": "0.1.0",
+    "website": "https://github.com/menahem121/Noofy"
+  },
+  "package_id": "txt2vid_ltx-2_3",
+  "publisher_id": "unknown",
+  "required_models": [
+    {
+      "bundled": false,
+      "checksum": "sha256:28606c5b5a06ce56f896d4dfcb20f212739e07a68fbe48e53638188449d26450",
+      "filename": "ltx-2.3-22b-dev-fp8.safetensors",
+      "folder": "checkpoints",
+      "input_name": "ckpt_name",
+      "model_type": "checkpoint",
+      "node_id": "267:221",
+      "node_type": "LTXVAudioVAELoader",
+      "size_bytes": 29145431166,
+      "source_urls": [],
+      "verification_level": "sha256_size"
+    },
+    {
+      "bundled": false,
+      "checksum": "sha256:31e0c0195fb841bf31af78e8b60858f489e87ddcea4a5239abc80943da65e3ac",
+      "filename": "ltx_2.3_22b_distilled_1.1_lora_dynamic_fro09_avg_rank_111_bf16.safetensors",
+      "folder": "loras",
+      "input_name": "lora_name",
+      "model_type": "lora",
+      "node_id": "267:232",
+      "node_type": "LoraLoaderModelOnly",
+      "size_bytes": 2741024390,
+      "source_url": "https://huggingface.co/Comfy-Org/ltx-2.3/resolve/main/split_files/loras/ltx_2.3_22b_distilled_1.1_lora_dynamic_fro09_avg_rank_111_bf16.safetensors",
+      "source_urls": [
+        "https://huggingface.co/Comfy-Org/ltx-2.3/resolve/main/split_files/loras/ltx_2.3_22b_distilled_1.1_lora_dynamic_fro09_avg_rank_111_bf16.safetensors"
+      ],
+      "verification_level": "sha256_size"
+    },
+    {
+      "bundled": false,
+      "checksum": "sha256:5f416311fa8172b65af67530758964708d29a317b830d689a51143b7f91913ed",
+      "filename": "ltx-2.3-spatial-upscaler-x2-1.1.safetensors",
+      "folder": "latent_upscale_models",
+      "input_name": "model_name",
+      "model_type": "upscale_model",
+      "node_id": "267:233",
+      "node_type": "LatentUpscaleModelLoader",
+      "size_bytes": 995743560,
+      "source_url": "https://huggingface.co/Lightricks/LTX-2.3/resolve/main/ltx-2.3-spatial-upscaler-x2-1.1.safetensors",
+      "source_urls": [
+        "https://huggingface.co/Lightricks/LTX-2.3/resolve/main/ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
+      ],
+      "verification_level": "sha256_size"
+    },
+    {
+      "bundled": false,
+      "checksum": "sha256:28606c5b5a06ce56f896d4dfcb20f212739e07a68fbe48e53638188449d26450",
+      "filename": "ltx-2.3-22b-dev-fp8.safetensors",
+      "folder": "checkpoints",
+      "input_name": "ckpt_name",
+      "model_type": "checkpoint",
+      "node_id": "267:236",
+      "node_type": "CheckpointLoaderSimple",
+      "size_bytes": 29145431166,
+      "source_urls": [],
+      "verification_level": "sha256_size"
+    },
+    {
+      "bundled": false,
+      "checksum": "sha256:28606c5b5a06ce56f896d4dfcb20f212739e07a68fbe48e53638188449d26450",
+      "filename": "ltx-2.3-22b-dev-fp8.safetensors",
+      "folder": "checkpoints",
+      "input_name": "ckpt_name",
+      "model_type": "checkpoint",
+      "node_id": "267:243",
+      "node_type": "LTXAVTextEncoderLoader",
+      "size_bytes": 29145431166,
+      "source_url": "https://huggingface.co/Lightricks/LTX-2.3-fp8/resolve/main/ltx-2.3-22b-dev-fp8.safetensors",
+      "source_urls": [
+        "https://huggingface.co/Lightricks/LTX-2.3-fp8/resolve/main/ltx-2.3-22b-dev-fp8.safetensors"
+      ],
+      "verification_level": "sha256_size"
+    },
+    {
+      "bundled": false,
+      "checksum": "sha256:87bcabeac9bec9f374232b5122d6511c2b2112d479e50176149e944b3712eb4a",
+      "filename": "gemma-3-12b-it-abliterated_lora_rank64_bf16.safetensors",
+      "folder": "loras",
+      "input_name": "lora_name",
+      "model_type": "lora",
+      "node_id": "267:326",
+      "node_type": "LoraLoader",
+      "size_bytes": 628203616,
+      "source_url": "https://huggingface.co/Comfy-Org/ltx-2/resolve/main/split_files/loras/gemma-3-12b-it-abliterated_lora_rank64_bf16.safetensors",
+      "source_urls": [
+        "https://huggingface.co/Comfy-Org/ltx-2/resolve/main/split_files/loras/gemma-3-12b-it-abliterated_lora_rank64_bf16.safetensors"
+      ],
+      "verification_level": "sha256_size"
+    },
+    {
+      "bundled": false,
+      "checksum": "sha256:aaca463d11e6d8d2a4bdb0d6299214c15ef78a3f73e0ef8113d5a9d0219b3f6d",
+      "filename": "gemma_3_12B_it_fp4_mixed.safetensors",
+      "folder": "text_encoders",
+      "input_name": "text_encoder",
+      "model_type": "text_encoders",
+      "node_id": "267:243",
+      "node_type": "LTXAVTextEncoderLoader",
+      "size_bytes": 9447702218,
+      "source_url": "https://huggingface.co/Comfy-Org/ltx-2/resolve/main/split_files/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors",
+      "source_urls": [
+        "https://huggingface.co/Comfy-Org/ltx-2/resolve/main/split_files/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors"
+      ],
+      "verification_level": "sha256_size"
+    }
+  ],
+  "schema_version": "0.1.0",
+  "source_policy": "local",
+  "tags": [],
+  "trust_level": "quarantined_community",
+  "version": "0.1.0",
+  "website": "https://github.com/menahem121/Noofy"
+}

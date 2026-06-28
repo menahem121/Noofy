@@ -1,0 +1,67 @@
+{
+  "author": "Menahem121",
+  "category": "Txt2img",
+  "custom_nodes": [],
+  "description": "",
+  "display_name": "txt2img_Anima",
+  "engine": "comfyui",
+  "icon": "image",
+  "metadata": {
+    "author": "Menahem121",
+    "category": "Txt2img",
+    "description": "",
+    "display_name": "txt2img_Anima",
+    "icon": "image",
+    "id": "unknown__txt2img_anima__0.1.0",
+    "name": "txt2img_Anima",
+    "tags": [],
+    "version": "0.1.0",
+    "website": "https://github.com/menahem121/Noofy"
+  },
+  "package_id": "txt2img_anima",
+  "publisher_id": "unknown",
+  "required_models": [
+    {
+      "bundled": false,
+      "checksum": "sha256:a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f",
+      "filename": "qwen_image_vae.safetensors",
+      "folder": "vae",
+      "size_bytes": 253806246,
+      "source_url": "https://huggingface.co/circlestone-labs/Anima/resolve/main/split_files/vae/qwen_image_vae.safetensors",
+      "source_urls": [
+        "https://huggingface.co/circlestone-labs/Anima/resolve/main/split_files/vae/qwen_image_vae.safetensors"
+      ],
+      "verification_level": "sha256_size"
+    },
+    {
+      "bundled": false,
+      "checksum": "sha256:bd43b7cffe1ed1153d9c41e7beb2f18cb1273eafbaa3af3edd6a173dc90a006e",
+      "filename": "anima-base-v1.0.safetensors",
+      "folder": "diffusion_models",
+      "size_bytes": 4182218328,
+      "source_url": "https://huggingface.co/circlestone-labs/Anima/resolve/main/split_files/diffusion_models/anima-base-v1.0.safetensors",
+      "source_urls": [
+        "https://huggingface.co/circlestone-labs/Anima/resolve/main/split_files/diffusion_models/anima-base-v1.0.safetensors"
+      ],
+      "verification_level": "sha256_size"
+    },
+    {
+      "bundled": false,
+      "checksum": "sha256:cd2a512003e2f9f3cd3c32a9c3573f820bb28c940f73c57b1ddaa983d9223eba",
+      "filename": "qwen_3_06b_base.safetensors",
+      "folder": "text_encoders",
+      "size_bytes": 1192135096,
+      "source_url": "https://huggingface.co/circlestone-labs/Anima/resolve/main/split_files/text_encoders/qwen_3_06b_base.safetensors",
+      "source_urls": [
+        "https://huggingface.co/circlestone-labs/Anima/resolve/main/split_files/text_encoders/qwen_3_06b_base.safetensors"
+      ],
+      "verification_level": "sha256_size"
+    }
+  ],
+  "schema_version": "0.1.0",
+  "source_policy": "local",
+  "tags": [],
+  "trust_level": "quarantined_community",
+  "version": "0.1.0",
+  "website": "https://github.com/menahem121/Noofy"
+}

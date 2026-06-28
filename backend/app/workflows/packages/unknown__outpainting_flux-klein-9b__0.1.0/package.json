@@ -1,0 +1,129 @@
+{
+  "author": "Menahem121",
+  "category": "Outpainting",
+  "comfyui_widget_metadata": {
+    "nodes": {
+      "166": {
+        "inputs": {
+          "color": {
+            "input_group": "required",
+            "input_type": "STRING",
+            "tooltip": "Color as RGB/RGBA values in range 0-255 or 0.0-1.0, separated by commas. Ex: 255, 0, 0, 128"
+          },
+          "device": {
+            "input_group": "optional",
+            "input_type": "COMBO",
+            "options": [
+              "cpu",
+              "gpu"
+            ],
+            "tooltip": "Device to use for processing"
+          }
+        },
+        "outputs": [
+          "IMAGE"
+        ]
+      },
+      "167": {
+        "inputs": {
+          "method": {
+            "input_group": "required",
+            "input_type": "COMBO",
+            "options": [
+              "mkl",
+              "hm",
+              "reinhard",
+              "mvgd",
+              "hm-mvgd-hm",
+              "hm-mkl-hm"
+            ]
+          },
+          "multithread": {
+            "input_group": "optional",
+            "input_type": "BOOLEAN"
+          },
+          "strength": {
+            "input_group": "optional",
+            "input_type": "FLOAT"
+          }
+        },
+        "outputs": [
+          "IMAGE"
+        ]
+      }
+    },
+    "schema_version": "0.1.0"
+  },
+  "custom_nodes": [
+    {
+      "folder_name": "github-kijai-ComfyUI-KJNodes",
+      "has_install_py": false,
+      "id": "github-kijai-ComfyUI-KJNodes",
+      "included": true,
+      "node_types": [
+        "ColorMatch",
+        "DrawMaskOnImage"
+      ],
+      "requirements_files": [],
+      "resolution_method": "github_search_auto",
+      "source": "https://codeload.github.com/kijai/ComfyUI-KJNodes/zip/988a877bba8d26d23b9e5afb72ab15c36815f211",
+      "source_archive_subdir": "ComfyUI-KJNodes-988a877bba8d26d23b9e5afb72ab15c36815f211",
+      "source_content_hash": "sha256:08050094ff307a5b8b13a19280c0f7809f9c53379a32d3b11d28829f438863b4",
+      "source_ref": "988a877bba8d26d23b9e5afb72ab15c36815f211",
+      "source_repo_url": "https://github.com/kijai/ComfyUI-KJNodes"
+    }
+  ],
+  "description": "",
+  "display_name": "outpainting_flux-klein-9b",
+  "engine": "comfyui",
+  "icon": "maximize",
+  "metadata": {
+    "author": "Menahem121",
+    "category": "Outpainting",
+    "description": "",
+    "display_name": "outpainting_flux-klein-9b",
+    "icon": "maximize",
+    "id": "unknown__outpainting_flux-klein-9b__0.1.0",
+    "name": "outpainting_flux-klein-9b",
+    "tags": [],
+    "version": "0.1.0",
+    "website": "https://github.com/menahem121/Noofy"
+  },
+  "package_id": "outpainting_flux-klein-9b",
+  "publisher_id": "unknown",
+  "required_models": [
+    {
+      "bundled": false,
+      "checksum": "sha256:abad16806e0cbabc54e0325d6565847443fe396d5f0be38bb3cd3fe75a1201d6",
+      "filename": "qwen_3_8b_fp8mixed.safetensors",
+      "folder": "text_encoders",
+      "size_bytes": 8664848742,
+      "source_urls": [],
+      "verification_level": "sha256_size"
+    },
+    {
+      "bundled": false,
+      "checksum": "sha256:865ba09f5b4c3cbd3468a4bd3acb9fcb2f8740c54317482f0bcd4ed1d3655cee",
+      "filename": "flux-2-klein-9b-fp8.safetensors",
+      "folder": "diffusion_models",
+      "size_bytes": 9433061528,
+      "source_urls": [],
+      "verification_level": "sha256_size"
+    },
+    {
+      "bundled": false,
+      "checksum": "sha256:d64f3a68e1cc4f9f4e29b6e0da38a0204fe9a49f2d4053f0ec1fa1ca02f9c4b5",
+      "filename": "flux2-vae.safetensors",
+      "folder": "vae",
+      "size_bytes": 336213556,
+      "source_urls": [],
+      "verification_level": "sha256_size"
+    }
+  ],
+  "schema_version": "0.1.0",
+  "source_policy": "local",
+  "tags": [],
+  "trust_level": "quarantined_community",
+  "version": "0.1.0",
+  "website": "https://github.com/menahem121/Noofy"
+}

@@ -1,0 +1,58 @@
+{
+  "author": "Menahem121",
+  "category": "Txt2img",
+  "custom_nodes": [],
+  "description": "",
+  "display_name": "txt2img_flux-klein-9b-turbo",
+  "engine": "comfyui",
+  "icon": "image",
+  "metadata": {
+    "author": "Menahem121",
+    "category": "Txt2img",
+    "description": "",
+    "display_name": "txt2img_flux-klein-9b-turbo",
+    "icon": "image",
+    "id": "unknown__txt2img_flux-klein-9b-turbo__0.1.0",
+    "name": "txt2img_flux-klein-9b-turbo",
+    "tags": [],
+    "version": "0.1.0",
+    "website": "https://github.com/menahem121/Noofy"
+  },
+  "package_id": "txt2img_flux-klein-9b-turbo",
+  "publisher_id": "unknown",
+  "required_models": [
+    {
+      "bundled": false,
+      "checksum": "sha256:865ba09f5b4c3cbd3468a4bd3acb9fcb2f8740c54317482f0bcd4ed1d3655cee",
+      "filename": "flux-2-klein-9b-fp8.safetensors",
+      "folder": "diffusion_models",
+      "size_bytes": 9433061528,
+      "source_urls": [],
+      "verification_level": "sha256_size"
+    },
+    {
+      "bundled": false,
+      "checksum": "sha256:abad16806e0cbabc54e0325d6565847443fe396d5f0be38bb3cd3fe75a1201d6",
+      "filename": "qwen_3_8b_fp8mixed.safetensors",
+      "folder": "text_encoders",
+      "size_bytes": 8664848742,
+      "source_urls": [],
+      "verification_level": "sha256_size"
+    },
+    {
+      "bundled": false,
+      "checksum": "sha256:d64f3a68e1cc4f9f4e29b6e0da38a0204fe9a49f2d4053f0ec1fa1ca02f9c4b5",
+      "filename": "flux2-vae.safetensors",
+      "folder": "vae",
+      "size_bytes": 336213556,
+      "source_urls": [],
+      "verification_level": "sha256_size"
+    }
+  ],
+  "schema_version": "0.1.0",
+  "source_policy": "local",
+  "tags": [],
+  "trust_level": "quarantined_community",
+  "version": "0.1.0",
+  "website": "https://github.com/menahem121/Noofy"
+}

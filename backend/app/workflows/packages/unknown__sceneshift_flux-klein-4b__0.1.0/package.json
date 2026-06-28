@@ -1,0 +1,590 @@
+{
+  "author": "Menahem121",
+  "category": "Background Replacement",
+  "comfyui_widget_metadata": {
+    "nodes": {
+      "123": {
+        "inputs": {
+          "cfg": {
+            "display_name": "cfg",
+            "input_group": "required",
+            "input_type": "FLOAT"
+          },
+          "denoise": {
+            "display_name": "denoise",
+            "input_group": "required",
+            "input_type": "FLOAT"
+          },
+          "sampler_name": {
+            "display_name": "sampler_name",
+            "input_group": "required",
+            "input_type": "COMBO",
+            "options": [
+              "euler",
+              "euler_cfg_pp",
+              "euler_ancestral",
+              "euler_ancestral_cfg_pp",
+              "heun",
+              "heunpp2",
+              "exp_heun_2_x0",
+              "exp_heun_2_x0_sde",
+              "dpm_2",
+              "dpm_2_ancestral",
+              "lms",
+              "dpm_fast",
+              "dpm_adaptive",
+              "dpmpp_2s_ancestral",
+              "dpmpp_2s_ancestral_cfg_pp",
+              "dpmpp_sde",
+              "dpmpp_sde_gpu",
+              "dpmpp_2m",
+              "dpmpp_2m_cfg_pp",
+              "dpmpp_2m_sde",
+              "dpmpp_2m_sde_gpu",
+              "dpmpp_2m_sde_heun",
+              "dpmpp_2m_sde_heun_gpu",
+              "dpmpp_3m_sde",
+              "dpmpp_3m_sde_gpu",
+              "ddpm",
+              "lcm",
+              "ipndm",
+              "ipndm_v",
+              "deis",
+              "res_multistep",
+              "res_multistep_cfg_pp",
+              "res_multistep_ancestral",
+              "res_multistep_ancestral_cfg_pp",
+              "gradient_estimation",
+              "gradient_estimation_cfg_pp",
+              "er_sde",
+              "seeds_2",
+              "seeds_3",
+              "sa_solver",
+              "sa_solver_pece",
+              "ddim",
+              "uni_pc",
+              "uni_pc_bh2"
+            ]
+          },
+          "scheduler": {
+            "display_name": "scheduler",
+            "input_group": "required",
+            "input_type": "COMBO",
+            "options": [
+              "simple",
+              "sgm_uniform",
+              "karras",
+              "exponential",
+              "ddim_uniform",
+              "beta",
+              "normal",
+              "linear_quadratic",
+              "kl_optimal"
+            ]
+          },
+          "seed": {
+            "display_name": "seed",
+            "input_group": "required",
+            "input_type": "INT"
+          },
+          "steps": {
+            "display_name": "steps",
+            "input_group": "required",
+            "input_type": "INT"
+          }
+        },
+        "outputs": [
+          "LATENT"
+        ]
+      },
+      "146": {
+        "inputs": {
+          "crop": {
+            "display_name": "crop",
+            "input_group": "required",
+            "input_type": "COMBO",
+            "options": [
+              "disabled",
+              "center"
+            ]
+          },
+          "height": {
+            "display_name": "height",
+            "input_group": "required",
+            "input_type": "INT"
+          },
+          "keep_proportions": {
+            "display_name": "keep_proportions",
+            "input_group": "required",
+            "input_type": "BOOLEAN"
+          },
+          "upscale_method": {
+            "display_name": "upscale_method",
+            "input_group": "required",
+            "input_type": "COMBO",
+            "options": [
+              "nearest-exact",
+              "bilinear",
+              "area",
+              "bicubic",
+              "lanczos"
+            ]
+          },
+          "width": {
+            "display_name": "width",
+            "input_group": "required",
+            "input_type": "INT"
+          }
+        },
+        "outputs": [
+          "MASK",
+          "INT",
+          "INT"
+        ]
+      },
+      "165": {
+        "outputs": [
+          "CONDITIONING"
+        ]
+      },
+      "167": {
+        "outputs": [
+          "LATENT"
+        ]
+      },
+      "168": {
+        "outputs": [
+          "LATENT"
+        ]
+      },
+      "170": {
+        "inputs": {
+          "resize_source": {
+            "display_name": "resize_source",
+            "input_group": "required",
+            "input_type": "BOOLEAN"
+          },
+          "x": {
+            "display_name": "x",
+            "input_group": "required",
+            "input_type": "INT"
+          },
+          "y": {
+            "display_name": "y",
+            "input_group": "required",
+            "input_type": "INT"
+          }
+        },
+        "outputs": [
+          "IMAGE"
+        ]
+      },
+      "184": {
+        "inputs": {
+          "filename_prefix": {
+            "display_name": "filename_prefix",
+            "input_group": "required",
+            "input_type": "STRING"
+          }
+        }
+      },
+      "359": {
+        "inputs": {
+          "background": {
+            "display_name": "Background",
+            "input_group": "optional",
+            "input_type": "COMBO",
+            "options": [
+              "Alpha",
+              "Color"
+            ]
+          },
+          "background_color": {
+            "display_name": "Background Color",
+            "input_group": "optional",
+            "input_type": "COLORCODE"
+          },
+          "invert_output": {
+            "display_name": "Invert Output",
+            "input_group": "optional",
+            "input_type": "BOOLEAN"
+          },
+          "mask_blur": {
+            "display_name": "Mask Blur",
+            "input_group": "optional",
+            "input_type": "INT"
+          },
+          "mask_offset": {
+            "display_name": "Mask Offset",
+            "input_group": "optional",
+            "input_type": "INT"
+          },
+          "model": {
+            "display_name": "Model",
+            "input_group": "required",
+            "input_type": "COMBO",
+            "options": [
+              "BiRefNet-general",
+              "BiRefNet_512x512",
+              "BiRefNet-HR",
+              "BiRefNet-portrait",
+              "BiRefNet-matting",
+              "BiRefNet-HR-matting",
+              "BiRefNet_lite",
+              "BiRefNet_lite-2K",
+              "BiRefNet_dynamic",
+              "BiRefNet_lite-matting",
+              "BiRefNet_toonout"
+            ]
+          },
+          "refine_foreground": {
+            "display_name": "Refine Foreground",
+            "input_group": "optional",
+            "input_type": "BOOLEAN"
+          }
+        },
+        "outputs": [
+          "IMAGE",
+          "MASK",
+          "IMAGE"
+        ]
+      },
+      "36": {
+        "outputs": [
+          "IMAGE"
+        ]
+      },
+      "390": {
+        "inputs": {
+          "blur_radius": {
+            "display_name": "blur_radius",
+            "input_group": "required",
+            "input_type": "FLOAT"
+          },
+          "decay_factor": {
+            "display_name": "decay_factor",
+            "input_group": "required",
+            "input_type": "FLOAT"
+          },
+          "expand": {
+            "display_name": "expand",
+            "input_group": "required",
+            "input_type": "INT"
+          },
+          "fill_holes": {
+            "display_name": "fill_holes",
+            "input_group": "optional",
+            "input_type": "BOOLEAN"
+          },
+          "flip_input": {
+            "display_name": "flip_input",
+            "input_group": "required",
+            "input_type": "BOOLEAN"
+          },
+          "incremental_expandrate": {
+            "display_name": "incremental_expandrate",
+            "input_group": "required",
+            "input_type": "FLOAT"
+          },
+          "lerp_alpha": {
+            "display_name": "lerp_alpha",
+            "input_group": "required",
+            "input_type": "FLOAT"
+          },
+          "tapered_corners": {
+            "display_name": "tapered_corners",
+            "input_group": "required",
+            "input_type": "BOOLEAN"
+          }
+        },
+        "outputs": [
+          "MASK",
+          "MASK"
+        ]
+      },
+      "393": {
+        "inputs": {
+          "vae_name": {
+            "display_name": "vae_name",
+            "input_group": "required",
+            "input_type": "COMBO",
+            "options": [
+              "ae.safetensors",
+              "flux2-vae.safetensors",
+              "full_encoder_small_decoder.safetensors",
+              "qwen_image_vae.safetensors",
+              "pixel_space"
+            ]
+          }
+        },
+        "outputs": [
+          "VAE"
+        ]
+      },
+      "394": {
+        "inputs": {
+          "unet_name": {
+            "display_name": "unet_name",
+            "input_group": "required",
+            "input_type": "COMBO",
+            "options": [
+              "anima-base-v1.0.safetensors",
+              "flux-2-klein-4b-fp8.safetensors",
+              "flux-2-klein-base-9b-fp8.safetensors",
+              "longcat_image_edit_bf16.safetensors",
+              "z_image_turbo_nvfp4.safetensors"
+            ]
+          },
+          "weight_dtype": {
+            "display_name": "weight_dtype",
+            "input_group": "required",
+            "input_type": "COMBO",
+            "options": [
+              "default",
+              "fp8_e4m3fn",
+              "fp8_e4m3fn_fast",
+              "fp8_e5m2"
+            ]
+          }
+        },
+        "outputs": [
+          "MODEL"
+        ]
+      },
+      "395": {
+        "inputs": {
+          "clip_name": {
+            "display_name": "clip_name",
+            "input_group": "required",
+            "input_type": "COMBO",
+            "options": [
+              "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+              "qwen_3_4b_fp4_flux2.safetensors",
+              "qwen_3_8b_fp8mixed.safetensors"
+            ]
+          },
+          "device": {
+            "display_name": "device",
+            "input_group": "optional",
+            "input_type": "COMBO",
+            "options": [
+              "default",
+              "cpu"
+            ]
+          },
+          "type": {
+            "display_name": "type",
+            "input_group": "required",
+            "input_type": "COMBO",
+            "options": [
+              "stable_diffusion",
+              "stable_cascade",
+              "sd3",
+              "stable_audio",
+              "mochi",
+              "ltxv",
+              "pixart",
+              "cosmos",
+              "lumina2",
+              "wan",
+              "hidream",
+              "chroma",
+              "ace",
+              "omnigen2",
+              "qwen_image",
+              "hunyuan_image",
+              "flux2",
+              "ovis",
+              "longcat_image",
+              "cogvideox",
+              "lens",
+              "pixeldit",
+              "ideogram4"
+            ]
+          }
+        },
+        "outputs": [
+          "CLIP"
+        ]
+      },
+      "396": {
+        "inputs": {
+          "text": {
+            "display_name": "text",
+            "input_group": "required",
+            "input_type": "STRING"
+          }
+        },
+        "outputs": [
+          "CONDITIONING"
+        ]
+      },
+      "397": {
+        "inputs": {
+          "megapixels": {
+            "display_name": "megapixels",
+            "input_group": "required",
+            "input_type": "FLOAT"
+          },
+          "resolution_steps": {
+            "display_name": "resolution_steps",
+            "input_group": "required",
+            "input_type": "INT"
+          },
+          "upscale_method": {
+            "display_name": "upscale_method",
+            "input_group": "required",
+            "input_type": "COMBO",
+            "options": [
+              "nearest-exact",
+              "bilinear",
+              "area",
+              "bicubic",
+              "lanczos"
+            ]
+          }
+        },
+        "outputs": [
+          "IMAGE"
+        ]
+      },
+      "398": {
+        "outputs": [
+          "INT",
+          "INT",
+          "INT"
+        ]
+      },
+      "399": {
+        "outputs": [
+          "CONDITIONING"
+        ]
+      },
+      "400": {
+        "inputs": {
+          "guidance": {
+            "display_name": "guidance",
+            "input_group": "required",
+            "input_type": "FLOAT"
+          }
+        },
+        "outputs": [
+          "CONDITIONING"
+        ]
+      },
+      "401": {
+        "inputs": {
+          "image": {
+            "display_name": "image",
+            "image_upload": true,
+            "input_group": "required",
+            "input_type": "COMBO"
+          }
+        },
+        "outputs": [
+          "IMAGE",
+          "MASK"
+        ]
+      }
+    },
+    "schema_version": "0.1.0"
+  },
+  "custom_nodes": [
+    {
+      "folder_name": "ComfyUI-KJNodes",
+      "has_install_py": false,
+      "id": "comfyui-kjnodes",
+      "included": true,
+      "node_types": [
+        "GrowMaskWithBlur",
+        "ResizeMask"
+      ],
+      "requirements_files": [
+        "pyproject.toml",
+        "requirements.txt"
+      ],
+      "sha256_manifest": "9636e62af5dc4067ddedb4df468841eaa96d63ea7758c31423c3b67f4a93ce20",
+      "source": "bundled_from_creator_machine"
+    },
+    {
+      "folder_name": "comfyui-rmbg",
+      "has_install_py": false,
+      "id": "comfyui-rmbg",
+      "included": true,
+      "node_types": [
+        "BiRefNetRMBG"
+      ],
+      "requirements_files": [
+        "pyproject.toml",
+        "requirements.txt"
+      ],
+      "sha256_manifest": "f7009fdb368b16f9f37204354e9644293c605b69980e1a735dcd3d0121d651b5",
+      "source": "bundled_from_creator_machine"
+    }
+  ],
+  "description": "",
+  "display_name": "sceneshift_flux-klein-4b",
+  "engine": "comfyui",
+  "icon": "sparkles",
+  "metadata": {
+    "author": "Menahem121",
+    "category": "Background Replacement",
+    "description": "",
+    "display_name": "sceneshift_flux-klein-4b",
+    "icon": "sparkles",
+    "id": "unknown__sceneshift_flux-klein-4b__0.1.0",
+    "name": "sceneshift_flux-klein-4b",
+    "tags": [],
+    "version": "0.1.0",
+    "website": "https://github.com/menahem121/Noofy"
+  },
+  "package_id": "sceneshift_flux-klein-4b",
+  "publisher_id": "unknown",
+  "required_models": [
+    {
+      "bundled": false,
+      "checksum": "sha256:d64f3a68e1cc4f9f4e29b6e0da38a0204fe9a49f2d4053f0ec1fa1ca02f9c4b5",
+      "filename": "flux2-vae.safetensors",
+      "folder": "vae",
+      "input_name": "vae_name",
+      "model_type": "vae",
+      "node_id": "393",
+      "node_type": "VAELoader",
+      "size_bytes": 336213556,
+      "source_urls": [],
+      "verification_level": "sha256_size"
+    },
+    {
+      "bundled": false,
+      "checksum": "sha256:97ed34fe0567e436200f2faee3939b88f2b5d99f8af2a4dc16532c4245c0ccb6",
+      "filename": "flux-2-klein-4b-fp8.safetensors",
+      "folder": "diffusion_models",
+      "input_name": "unet_name",
+      "model_type": "diffusion_model",
+      "node_id": "394",
+      "node_type": "UNETLoader",
+      "size_bytes": 4070624520,
+      "source_urls": [],
+      "verification_level": "sha256_size"
+    },
+    {
+      "bundled": false,
+      "checksum": "sha256:3eab03a77adb0ee5304a4e677d5c10ac22f9049c1d7c894adca4f8bb39206ca8",
+      "filename": "qwen_3_4b_fp4_flux2.safetensors",
+      "folder": "text_encoders",
+      "input_name": "clip_name",
+      "model_type": "text_encoder",
+      "node_id": "395",
+      "node_type": "CLIPLoader",
+      "size_bytes": 3848213998,
+      "source_urls": [],
+      "verification_level": "sha256_size"
+    }
+  ],
+  "schema_version": "0.1.0",
+  "source_policy": "local",
+  "tags": [],
+  "trust_level": "quarantined_community",
+  "version": "0.1.0",
+  "website": "https://github.com/menahem121/Noofy"
+}

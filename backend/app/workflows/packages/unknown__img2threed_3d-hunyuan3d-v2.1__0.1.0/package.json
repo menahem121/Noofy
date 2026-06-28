@@ -1,0 +1,43 @@
+{
+  "author": "Menahem121",
+  "category": "imgTo3D",
+  "custom_nodes": [],
+  "description": "",
+  "display_name": "img2threeD_3d-hunyuan3d",
+  "engine": "comfyui",
+  "icon": "package",
+  "metadata": {
+    "author": "Menahem121",
+    "category": "imgTo3D",
+    "description": "",
+    "display_name": "img2threeD_3d-hunyuan3d",
+    "icon": "package",
+    "id": "unknown__img2threed_3d-hunyuan3d-v2.1__0.1.0",
+    "name": "img2threeD_3d-hunyuan3d",
+    "tags": [],
+    "version": "0.1.0",
+    "website": "https://github.com/menahem121/Noofy"
+  },
+  "package_id": "img2threed_3d-hunyuan3d-v2.1",
+  "publisher_id": "unknown",
+  "required_models": [
+    {
+      "bundled": false,
+      "checksum": "sha256:5f21e98a6cb99b13b5e224abaee33929570fff7af2b6a0060001559a04ba9d72",
+      "filename": "hunyuan_3d_v2.1.safetensors",
+      "folder": "checkpoints",
+      "size_bytes": 7365943290,
+      "source_url": "https://huggingface.co/Comfy-Org/hunyuan3D_2.1_repackaged/resolve/main/hunyuan_3d_v2.1.safetensors",
+      "source_urls": [
+        "https://huggingface.co/Comfy-Org/hunyuan3D_2.1_repackaged/resolve/main/hunyuan_3d_v2.1.safetensors"
+      ],
+      "verification_level": "sha256_size"
+    }
+  ],
+  "schema_version": "0.1.0",
+  "source_policy": "local",
+  "tags": [],
+  "trust_level": "quarantined_community",
+  "version": "0.1.0",
+  "website": "https://github.com/menahem121/Noofy"
+}

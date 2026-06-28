@@ -1,0 +1,91 @@
+{
+  "author": "Menahem121",
+  "category": "imgTo3D",
+  "custom_nodes": [],
+  "description": "",
+  "display_name": "img2threeD_3D-triposplat",
+  "engine": "comfyui",
+  "icon": "model3d",
+  "metadata": {
+    "author": "Menahem121",
+    "category": "imgTo3D",
+    "description": "",
+    "display_name": "img2threeD_3D-triposplat",
+    "icon": "model3d",
+    "id": "unknown__img2threed_3d-triposplat__0.1.0",
+    "name": "img2threeD_3D-triposplat",
+    "tags": [],
+    "version": "0.1.0",
+    "website": "https://github.com/menahem121/Noofy"
+  },
+  "package_id": "img2threed_3d-triposplat",
+  "publisher_id": "unknown",
+  "required_models": [
+    {
+      "bundled": false,
+      "checksum": "sha256:ed0d0c3d43b599e326845d0ec70f3cf77be9a55e2d97627ac3b34d2830763cc8",
+      "filename": "triposplat_vae_decoder_fp16.safetensors",
+      "folder": "vae",
+      "size_bytes": 576148442,
+      "source_url": "https://huggingface.co/VAST-AI/TripoSplat/resolve/main/vae/triposplat_vae_decoder_fp16.safetensors",
+      "source_urls": [
+        "https://huggingface.co/VAST-AI/TripoSplat/resolve/main/vae/triposplat_vae_decoder_fp16.safetensors"
+      ],
+      "verification_level": "sha256_size"
+    },
+    {
+      "bundled": false,
+      "checksum": "sha256:c870b97ac1d6bc9177608a5ec625e19ef9f3c5019aa68f64b0fb7803abcd6d20",
+      "filename": "triposplat_fp16.safetensors",
+      "folder": "diffusion_models",
+      "size_bytes": 741106994,
+      "source_url": "https://huggingface.co/VAST-AI/TripoSplat/resolve/main/diffusion_models/triposplat_fp16.safetensors",
+      "source_urls": [
+        "https://huggingface.co/VAST-AI/TripoSplat/resolve/main/diffusion_models/triposplat_fp16.safetensors"
+      ],
+      "verification_level": "sha256_size"
+    },
+    {
+      "bundled": false,
+      "checksum": "sha256:a29ef35101a16966972a0d50732a6f3a608ff7cfffb2afa9bbe9007cb842cc53",
+      "filename": "dino_v3_vit_h.safetensors",
+      "folder": "clip_vision",
+      "size_bytes": 1681247696,
+      "source_url": "https://huggingface.co/VAST-AI/TripoSplat/resolve/main/clip_vision/dino_v3_vit_h.safetensors",
+      "source_urls": [
+        "https://huggingface.co/VAST-AI/TripoSplat/resolve/main/clip_vision/dino_v3_vit_h.safetensors"
+      ],
+      "verification_level": "sha256_size"
+    },
+    {
+      "bundled": false,
+      "checksum": "sha256:d64f3a68e1cc4f9f4e29b6e0da38a0204fe9a49f2d4053f0ec1fa1ca02f9c4b5",
+      "filename": "flux2-vae.safetensors",
+      "folder": "vae",
+      "size_bytes": 336213556,
+      "source_url": "https://huggingface.co/VAST-AI/TripoSplat/resolve/main/vae/flux2-vae.safetensors",
+      "source_urls": [
+        "https://huggingface.co/VAST-AI/TripoSplat/resolve/main/vae/flux2-vae.safetensors"
+      ],
+      "verification_level": "sha256_size"
+    },
+    {
+      "bundled": false,
+      "checksum": "sha256:9ab37426bf4de0567af6b5d21b16151357149139362e6e8992021b8ce356a154",
+      "filename": "birefnet.safetensors",
+      "folder": "background_removal",
+      "size_bytes": 444473596,
+      "source_url": "https://huggingface.co/Comfy-Org/BiRefNet/resolve/main/background_removal/birefnet.safetensors",
+      "source_urls": [
+        "https://huggingface.co/Comfy-Org/BiRefNet/resolve/main/background_removal/birefnet.safetensors"
+      ],
+      "verification_level": "sha256_size"
+    }
+  ],
+  "schema_version": "0.1.0",
+  "source_policy": "local",
+  "tags": [],
+  "trust_level": "quarantined_community",
+  "version": "0.1.0",
+  "website": "https://github.com/menahem121/Noofy"
+}

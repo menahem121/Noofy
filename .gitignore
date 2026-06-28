@@ -41,3 +41,4 @@ tests/
 playwright.config.ts
 package-lock.json
 package.json
+!backend/app/workflows/packages/**/package.json

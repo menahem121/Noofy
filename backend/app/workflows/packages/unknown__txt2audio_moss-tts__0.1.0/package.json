@@ -1,0 +1,139 @@
+{
+  "author": "Menahem121",
+  "category": "txt2audio",
+  "comfyui_widget_metadata": {
+    "nodes": {
+      "1": {
+        "inputs": {
+          "codec_local_path": {
+            "input_group": "required",
+            "input_type": "STRING"
+          },
+          "local_model_path": {
+            "input_group": "required",
+            "input_type": "STRING"
+          },
+          "model_variant": {
+            "input_group": "required",
+            "input_type": "COMBO",
+            "options": [
+              "MOSS-TTS (Delay 8B)",
+              "MOSS-TTS (Local 1.7B)",
+              "MOSS-TTSD v1.0",
+              "MOSS-VoiceGenerator",
+              "MOSS-SoundEffect"
+            ]
+          }
+        },
+        "outputs": [
+          "MOSS_TTS_PIPE"
+        ]
+      },
+      "2": {
+        "inputs": {
+          "duration_tokens": {
+            "input_group": "required",
+            "input_type": "INT"
+          },
+          "enable_duration_control": {
+            "input_group": "required",
+            "input_type": "BOOLEAN"
+          },
+          "head_handle": {
+            "input_group": "required",
+            "input_type": "FLOAT"
+          },
+          "language": {
+            "input_group": "required",
+            "input_type": "COMBO",
+            "options": [
+              "auto",
+              "zh",
+              "en",
+              "ja",
+              "ko"
+            ]
+          },
+          "max_new_tokens": {
+            "input_group": "required",
+            "input_type": "INT"
+          },
+          "repetition_penalty": {
+            "input_group": "required",
+            "input_type": "FLOAT"
+          },
+          "seed": {
+            "input_group": "required",
+            "input_type": "INT"
+          },
+          "tail_handle": {
+            "input_group": "required",
+            "input_type": "FLOAT"
+          },
+          "temperature": {
+            "input_group": "required",
+            "input_type": "FLOAT"
+          },
+          "text": {
+            "input_group": "required",
+            "input_type": "STRING"
+          },
+          "top_k": {
+            "input_group": "required",
+            "input_type": "INT"
+          },
+          "top_p": {
+            "input_group": "required",
+            "input_type": "FLOAT"
+          }
+        },
+        "outputs": [
+          "AUDIO"
+        ]
+      }
+    },
+    "schema_version": "0.1.0"
+  },
+  "custom_nodes": [
+    {
+      "folder_name": "comfyui-moss-tts",
+      "has_install_py": false,
+      "id": "comfyui-moss-tts",
+      "included": true,
+      "node_types": [
+        "MossTTSGenerate",
+        "MossTTSModelLoader"
+      ],
+      "requirements_files": [
+        "requirements.txt"
+      ],
+      "sha256_manifest": "fdc48c27506823c3a967e39a011924a15b550b37e7b1bdf2fc55ce9bac8b90c5",
+      "source": "bundled_from_creator_machine"
+    }
+  ],
+  "description": "",
+  "display_name": "txt2audio_MOSS-TTS",
+  "engine": "comfyui",
+  "icon": "audio",
+  "metadata": {
+    "author": "Menahem121",
+    "category": "txt2audio",
+    "description": "",
+    "display_name": "txt2audio_MOSS-TTS",
+    "icon": "audio",
+    "id": "unknown__txt2audio_moss-tts__0.1.0",
+    "name": "txt2audio_MOSS-TTS",
+    "tags": [],
+    "version": "0.1.0",
+    "website": "https://github.com/menahem121/Noofy"
+  },
+  "package_id": "txt2audio_moss-tts",
+  "publisher_id": "unknown",
+  "required_models": [],
+  "schema_version": "0.1.0",
+  "source_policy": "local",
+  "tags": [],
+  "trust_level": "quarantined_community",
+  "version": "0.1.0",
+  "website": "https://github.com/menahem121/Noofy"
+}

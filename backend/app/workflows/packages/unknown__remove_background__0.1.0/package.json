@@ -1,0 +1,128 @@
+{
+  "author": "Menahem121",
+  "category": "Background Removal",
+  "comfyui_widget_metadata": {
+    "nodes": {
+      "359": {
+        "inputs": {
+          "background": {
+            "display_name": "Background",
+            "input_group": "optional",
+            "input_type": "COMBO",
+            "options": [
+              "Alpha",
+              "Color"
+            ],
+            "tooltip": "Choose background type: Alpha (transparent) or Color (custom background color)."
+          },
+          "background_color": {
+            "input_group": "optional",
+            "input_type": "COLORCODE",
+            "tooltip": "Choose background color (Alpha = transparent)"
+          },
+          "invert_output": {
+            "input_group": "optional",
+            "input_type": "BOOLEAN",
+            "tooltip": "Enable to invert both the image and mask output (useful for certain effects)."
+          },
+          "mask_blur": {
+            "input_group": "optional",
+            "input_type": "INT",
+            "tooltip": "Specify the amount of blur to apply to the mask edges (0 for no blur, higher values for more blur)."
+          },
+          "mask_offset": {
+            "input_group": "optional",
+            "input_type": "INT",
+            "tooltip": "Adjust the mask boundary (positive values expand the mask, negative values shrink it)."
+          },
+          "model": {
+            "display_name": "Model",
+            "input_group": "required",
+            "input_type": "COMBO",
+            "options": [
+              "BiRefNet-general",
+              "BiRefNet_512x512",
+              "BiRefNet-HR",
+              "BiRefNet-portrait",
+              "BiRefNet-matting",
+              "BiRefNet-HR-matting",
+              "BiRefNet_lite",
+              "BiRefNet_lite-2K",
+              "BiRefNet_dynamic",
+              "BiRefNet_lite-matting",
+              "BiRefNet_toonout"
+            ],
+            "tooltip": "Select the BiRefNet model variant to use."
+          },
+          "refine_foreground": {
+            "input_group": "optional",
+            "input_type": "BOOLEAN",
+            "tooltip": "Use Fast Foreground Colour Estimation to optimize transparent background"
+          }
+        },
+        "outputs": [
+          "IMAGE",
+          "MASK",
+          "IMAGE"
+        ]
+      },
+      "368": {
+        "inputs": {
+          "padding": {
+            "input_group": "optional",
+            "input_type": "INT"
+          }
+        },
+        "outputs": [
+          "IMAGE",
+          "MASK"
+        ]
+      }
+    },
+    "schema_version": "0.1.0"
+  },
+  "custom_nodes": [
+    {
+      "folder_name": "github-1038lab-ComfyUI-RMBG",
+      "has_install_py": false,
+      "id": "github-1038lab-ComfyUI-RMBG",
+      "included": true,
+      "node_types": [
+        "AILab_CropObject",
+        "BiRefNetRMBG"
+      ],
+      "requirements_files": [],
+      "resolution_method": "github_search_auto",
+      "source": "https://codeload.github.com/1038lab/ComfyUI-RMBG/zip/d7402513f23f58db7d56754b02a4f51a148b4941",
+      "source_archive_subdir": "ComfyUI-RMBG-d7402513f23f58db7d56754b02a4f51a148b4941",
+      "source_content_hash": "sha256:06d8b0aa41790f36156fb6e3c932f930e84b0047d179b2fa7fbd01fad4d34113",
+      "source_ref": "d7402513f23f58db7d56754b02a4f51a148b4941",
+      "source_repo_url": "https://github.com/1038lab/ComfyUI-RMBG"
+    }
+  ],
+  "description": "",
+  "display_name": "Remove_background",
+  "engine": "comfyui",
+  "icon": "sliders",
+  "metadata": {
+    "author": "Menahem121",
+    "category": "Background Removal",
+    "description": "",
+    "display_name": "Remove_background",
+    "icon": "sliders",
+    "id": "unknown__remove_background__0.1.0",
+    "name": "Remove_background",
+    "tags": [],
+    "version": "0.1.0",
+    "website": "https://github.com/menahem121/Noofy"
+  },
+  "package_id": "remove_background",
+  "publisher_id": "unknown",
+  "required_models": [],
+  "schema_version": "0.1.0",
+  "source_policy": "local",
+  "tags": [],
+  "trust_level": "quarantined_community",
+  "version": "0.1.0",
+  "website": "https://github.com/menahem121/Noofy"
+}

@@ -1,0 +1,225 @@
+{
+  "author": "Menahem121",
+  "category": "txt2txt",
+  "comfyui_widget_metadata": {
+    "nodes": {
+      "1": {
+        "inputs": {
+          "max_length": {
+            "input_group": "required",
+            "input_type": "INT"
+          },
+          "prompt": {
+            "input_group": "required",
+            "input_type": "STRING"
+          },
+          "sampling_mode": {
+            "display_name": "Sampling Mode",
+            "input_group": "required",
+            "input_type": "COMFY_DYNAMICCOMBO_V3",
+            "options": [
+              "on",
+              "off"
+            ]
+          },
+          "thinking": {
+            "input_group": "optional",
+            "input_type": "BOOLEAN",
+            "tooltip": "Operate in thinking mode if the model supports it."
+          },
+          "use_default_template": {
+            "input_group": "optional",
+            "input_type": "BOOLEAN",
+            "tooltip": "Use the built in system prompt/template if the model has one."
+          }
+        },
+        "outputs": [
+          "STRING"
+        ]
+      },
+      "12": {
+        "inputs": {
+          "audio": {
+            "audio_upload": true,
+            "display_name": "audio",
+            "input_group": "required",
+            "input_type": "COMBO"
+          },
+          "enabled": {
+            "input_group": "required",
+            "input_type": "BOOLEAN"
+          },
+          "mode": {
+            "display_name": "mode",
+            "input_group": "optional",
+            "input_type": "COMBO",
+            "options": [
+              "auto",
+              "force_on",
+              "force_off",
+              "legacy_toggle"
+            ]
+          }
+        },
+        "outputs": [
+          "AUDIO"
+        ]
+      },
+      "13": {
+        "inputs": {
+          "enabled": {
+            "input_group": "required",
+            "input_type": "BOOLEAN"
+          },
+          "image": {
+            "display_name": "image",
+            "image_upload": true,
+            "input_group": "required",
+            "input_type": "COMBO"
+          },
+          "mode": {
+            "display_name": "mode",
+            "input_group": "optional",
+            "input_type": "COMBO",
+            "options": [
+              "auto",
+              "force_on",
+              "force_off",
+              "legacy_toggle"
+            ]
+          }
+        },
+        "outputs": [
+          "IMAGE",
+          "MASK"
+        ]
+      },
+      "3": {
+        "inputs": {
+          "clip_name": {
+            "display_name": "clip_name",
+            "input_group": "required",
+            "input_type": "COMBO",
+            "options": [
+              "gemma4_e4b_it_fp8_scaled.safetensors",
+              "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+              "qwen_3_06b_base.safetensors",
+              "qwen_3_4b.safetensors",
+              "qwen_3_4b_fp4_flux2.safetensors",
+              "qwen_3_4b_fp4_mixed.safetensors",
+              "qwen_3_8b_fp8mixed.safetensors",
+              "t5xxl_fp8_e4m3fn_scaled.safetensors"
+            ]
+          },
+          "device": {
+            "display_name": "device",
+            "input_group": "optional",
+            "input_type": "COMBO",
+            "options": [
+              "default",
+              "cpu"
+            ]
+          },
+          "type": {
+            "display_name": "type",
+            "input_group": "required",
+            "input_type": "COMBO",
+            "options": [
+              "stable_diffusion",
+              "stable_cascade",
+              "sd3",
+              "stable_audio",
+              "mochi",
+              "ltxv",
+              "pixart",
+              "cosmos",
+              "lumina2",
+              "wan",
+              "hidream",
+              "chroma",
+              "ace",
+              "omnigen2",
+              "qwen_image",
+              "hunyuan_image",
+              "flux2",
+              "ovis",
+              "longcat_image",
+              "cogvideox",
+              "lens",
+              "pixeldit",
+              "ideogram4"
+            ]
+          }
+        },
+        "outputs": [
+          "CLIP"
+        ]
+      },
+      "4": {
+        "outputs": [
+          "STRING"
+        ]
+      }
+    },
+    "schema_version": "0.1.0"
+  },
+  "custom_nodes": [
+    {
+      "folder_name": "ComfyUI_optional_media_input",
+      "has_install_py": false,
+      "id": "comfyui_optional_media_input",
+      "included": true,
+      "node_types": [
+        "OptionalAudioInput",
+        "OptionalImageInput"
+      ],
+      "requirements_files": [
+        "pyproject.toml"
+      ],
+      "sha256_manifest": "3cc70e835e6d623651d2b38ac816839e28582925d41cabfd97007f2f144f509f",
+      "source": "bundled_from_creator_machine"
+    }
+  ],
+  "description": "",
+  "display_name": "txt2txt_gemma4-e4b-it",
+  "engine": "comfyui",
+  "icon": "text",
+  "metadata": {
+    "author": "Menahem121",
+    "category": "txt2txt",
+    "description": "",
+    "display_name": "txt2txt_gemma4-e4b-it",
+    "icon": "text",
+    "id": "unknown__txt2txt_gemma4-e4b-it-v2__0.1.0",
+    "name": "txt2txt_gemma4-e4b-it",
+    "tags": [],
+    "version": "0.1.0",
+    "website": "https://github.com/menahem121/Noofy"
+  },
+  "package_id": "txt2txt_gemma4-e4b-it-v2",
+  "publisher_id": "unknown",
+  "required_models": [
+    {
+      "bundled": false,
+      "checksum": "sha256:bf0b4fa2e41a25684dc9e9b256cd505564f02fed09be3da95ce024e653e2c52b",
+      "filename": "gemma4_e4b_it_fp8_scaled.safetensors",
+      "folder": "text_encoders",
+      "input_name": "clip_name",
+      "model_type": "text_encoder",
+      "node_id": "3",
+      "node_type": "CLIPLoader",
+      "size_bytes": 9057782194,
+      "source_url": "https://huggingface.co/Comfy-Org/gemma-4/resolve/main/text_encoders/gemma4_e4b_it_fp8_scaled.safetensors",
+      "source_urls": [
+        "https://huggingface.co/Comfy-Org/gemma-4/resolve/main/text_encoders/gemma4_e4b_it_fp8_scaled.safetensors"
+      ],
+      "verification_level": "sha256_size"
+    }
+  ],
+  "schema_version": "0.1.0",
+  "source_policy": "local",
+  "tags": [],
+  "trust_level": "quarantined_community",
+  "version": "0.1.0",
+  "website": "https://github.com/menahem121/Noofy"
+}
