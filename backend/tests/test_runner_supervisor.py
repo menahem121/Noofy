@@ -2299,6 +2299,49 @@ async def test_run_workflow_auto_prepare_failure_reports_root_cause() -> None:
 
 
 @pytest.mark.anyio
+async def test_run_workflow_no_source_prepare_failure_returns_missing_models() -> None:
+    core_adapter = RecordingAdapter(models=[])
+    supervisor = RunnerSupervisor()
+    supervisor.register_core_runner(_core_descriptor(), core_adapter)
+    lifecycle = AutoPrepareLifecycle(supervisor, RecordingAdapter())
+
+    async def fail_prepare(workflow_id: str) -> dict[str, object]:
+        lifecycle.prepare_calls.append(workflow_id)
+        lifecycle.install_status = "failed"
+        return {
+            "workflow_id": workflow_id,
+            "status": "failed",
+            "user_facing_message": "Cannot prepare automatically",
+            "last_error": (
+                "No source URLs available to download model "
+                "checkpoints/v1-5-pruned-emaonly-fp16.safetensors"
+            ),
+        }
+
+    lifecycle.prepare_workflow = fail_prepare  # type: ignore[method-assign]
+    service = EngineService(
+        workflow_loader=WorkflowPackageLoader(PACKAGE_DIR),
+        workflow_validator=WorkflowPackageValidator(),
+        runner_supervisor=supervisor,
+        runtime_manager=StubRuntimeManager(),
+        log_store=LogStore(),
+        workflow_runner_lifecycle_service=lifecycle,
+    )
+
+    result = await service.run_workflow("text_to_image_v0", inputs={}, options={})
+
+    assert isinstance(result, WorkflowValidationResult)
+    assert result.valid is False
+    assert result.error_category is None
+    assert [model.filename for model in result.missing_models] == [
+        "v1-5-pruned-emaonly-fp16.safetensors"
+    ]
+    assert lifecycle.prepare_calls == ["text_to_image_v0"]
+    assert lifecycle.start_calls == []
+    assert core_adapter.run_calls == []
+
+
+@pytest.mark.anyio
 async def test_run_workflow_repairs_stale_ready_runtime_artifacts_before_submit() -> None:
     core_adapter = RecordingAdapter(
         models=[

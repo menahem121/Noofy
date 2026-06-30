@@ -507,6 +507,35 @@ def test_bundled_package_model_identity_is_not_weaker_than_capsule_lock() -> Non
             assert package_model.get("verification_level") == ModelVerificationLevel.SHA256_SIZE.value
 
 
+def test_bundled_upscale_workflows_declare_model_source_urls() -> None:
+    packages_dir = Path("app/workflows/packages")
+    expected = {
+        "unknown__upscalex2__0.1.0": {
+            "filename": "2xNomosUni_span_multijpg_ldl.safetensors",
+            "url": "https://huggingface.co/Phips/2xNomosUni_span_multijpg_ldl/resolve/main/2xNomosUni_span_multijpg_ldl.safetensors",
+        },
+        "unknown__upscalex4__0.1.0": {
+            "filename": "4xNomos8k_atd_jpg.safetensors",
+            "url": "https://huggingface.co/dong625/StableDiffusionModel/resolve/main/4xNomos8k_atd_jpg.safetensors",
+        },
+    }
+
+    for workflow_id, model in expected.items():
+        workflow_dir = packages_dir / workflow_id
+        package_data = json.loads((workflow_dir / "package.json").read_text(encoding="utf-8"))
+        capsule_data = json.loads((workflow_dir / "capsule.lock.json").read_text(encoding="utf-8"))
+        package_model = package_data["required_models"][0]
+        capsule_model = capsule_data["models"][0]
+
+        assert package_model["folder"] == "upscale_models"
+        assert package_model["filename"] == model["filename"]
+        assert package_model["source_url"] == model["url"]
+        assert package_model["source_urls"] == [model["url"]]
+        assert capsule_model["comfyui_folder"] == "upscale_models"
+        assert capsule_model["filename"] == model["filename"]
+        assert capsule_model["source_urls"] == [model["url"]]
+
+
 def test_engine_service_workflow_summary_includes_phase6_trust_metadata() -> None:
     service = EngineService(
         workflow_loader=WorkflowPackageLoader(Path("app/workflows/packages")),

@@ -44,7 +44,10 @@
       "filename": "4xNomos8k_atd_jpg.safetensors",
       "folder": "upscale_models",
       "size_bytes": 81689540,
-      "source_urls": [],
+      "source_url": "https://huggingface.co/dong625/StableDiffusionModel/resolve/main/4xNomos8k_atd_jpg.safetensors",
+      "source_urls": [
+        "https://huggingface.co/dong625/StableDiffusionModel/resolve/main/4xNomos8k_atd_jpg.safetensors"
+      ],
       "verification_level": "sha256_size"
     }
   ],

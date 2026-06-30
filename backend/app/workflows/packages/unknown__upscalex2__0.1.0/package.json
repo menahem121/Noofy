@@ -44,7 +44,10 @@
       "filename": "2xNomosUni_span_multijpg_ldl.safetensors",
       "folder": "upscale_models",
       "size_bytes": 8903384,
-      "source_urls": [],
+      "source_url": "https://huggingface.co/Phips/2xNomosUni_span_multijpg_ldl/resolve/main/2xNomosUni_span_multijpg_ldl.safetensors",
+      "source_urls": [
+        "https://huggingface.co/Phips/2xNomosUni_span_multijpg_ldl/resolve/main/2xNomosUni_span_multijpg_ldl.safetensors"
+      ],
       "verification_level": "sha256_size"
     }
   ],

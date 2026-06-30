@@ -35,7 +35,9 @@
       "id": "upscale_models/4xNomos8k_atd_jpg.safetensors",
       "sha256": "sha256:009671cec5a384db31052b52e344e5989b0c51a5ad4d25a8c2c629f658754d13",
       "size_bytes": 81689540,
-      "source_urls": []
+      "source_urls": [
+        "https://huggingface.co/dong625/StableDiffusionModel/resolve/main/4xNomos8k_atd_jpg.safetensors"
+      ]
     }
   ],
   "runtime": {

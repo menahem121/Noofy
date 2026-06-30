@@ -20,8 +20,7 @@ import { useOptionalResourceStatus } from "./ResourceStatusProvider";
 import { useOptionalRuntimeStatus } from "./RuntimeStatusProvider";
 import { WorkflowTabsTopBar, useOptionalWorkflowTabs, type WorkflowTabRuntimeState } from "./WorkflowTabs";
 
-// Replace with your real Tipeee / donation URL when ready.
-const SUPPORT_URL = "https://example.com/buy-me-a-coffee";
+const SUPPORT_URL = "https://ko-fi.com/menahem121";
 
 export type AppRouteId = "home" | "workflows" | "history" | "models" | "gallery" | "settings";
 export interface AppNavigateOptions {

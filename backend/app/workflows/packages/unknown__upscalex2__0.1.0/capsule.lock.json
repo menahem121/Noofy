@@ -35,7 +35,9 @@
       "id": "upscale_models/2xNomosUni_span_multijpg_ldl.safetensors",
       "sha256": "sha256:a3d35e01b8b71b4b3041ad1686f8ebd7bc4e1f3a10378319c2ac61c78b67012a",
       "size_bytes": 8903384,
-      "source_urls": []
+      "source_urls": [
+        "https://huggingface.co/Phips/2xNomosUni_span_multijpg_ldl/resolve/main/2xNomosUni_span_multijpg_ldl.safetensors"
+      ]
     }
   ],
   "runtime": {

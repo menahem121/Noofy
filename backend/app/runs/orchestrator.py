@@ -350,6 +350,27 @@ class RunOrchestrator:
         if self.ensure_workflow_runner is not None:
             runner_unavailable = await self.ensure_workflow_runner(package, queue_id)
             if isinstance(runner_unavailable, WorkflowValidationResult):
+                if (
+                    not validated_before_queue
+                    and _workflow_preparation_model_source_missing(runner_unavailable)
+                ):
+                    runner = self.runner_supervisor.acquire_runner(package)
+                    adapter = self.runner_supervisor.get_adapter(runner.runner_id)
+                    validation = await self.validate_package(runtime_package, adapter)
+                    if validation.missing_models:
+                        self._record_run_blocked(package, "; ".join(validation.errors) or "Workflow validation failed")
+                        self.log_store.add(
+                            "warning",
+                            "Workflow run blocked by missing models after workflow preparation source lookup failed",
+                            "runs.orchestrator",
+                            workflow_id=workflow_id,
+                            details={
+                                "runner_id": runner.runner_id,
+                                "missing_models": [model.model_dump() for model in validation.missing_models],
+                                "preparation_errors": runner_unavailable.errors,
+                            },
+                        )
+                        return validation
                 message = (
                     "; ".join(runner_unavailable.errors)
                     or "Workflow preparation failed"
@@ -446,6 +467,7 @@ class RunOrchestrator:
                     valid=False,
                     errors=[runner_unavailable],
                 )
+
         runner = self.runner_supervisor.acquire_runner(package)
         adapter = self.runner_supervisor.get_adapter(runner.runner_id)
 
@@ -1206,6 +1228,18 @@ class RunOrchestrator:
             status="canceled",
             message="Workflow run canceled.",
         )
+
+
+def _workflow_preparation_model_source_missing(
+    validation: WorkflowValidationResult,
+) -> bool:
+    return (
+        validation.error_category == "workflow_preparation"
+        and any(
+            "No source URLs available to download model" in error
+            for error in validation.errors
+        )
+    )
 
 
 def _dashboard_unavailable_reason(package: WorkflowPackage) -> str | None:

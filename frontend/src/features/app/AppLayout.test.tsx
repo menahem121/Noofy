@@ -77,7 +77,7 @@ describe("AppLayout sidebar", () => {
     expect(githubCard.compareDocumentPosition(version!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Support Noofy" }));
-    expect(openExternalUrl).toHaveBeenCalledWith("https://example.com/buy-me-a-coffee");
+    expect(openExternalUrl).toHaveBeenCalledWith("https://ko-fi.com/menahem121");
 
     fireEvent.click(screen.getByRole("button", { name: "Open Noofy on GitHub" }));
 
