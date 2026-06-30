@@ -1583,11 +1583,18 @@ class EngineService:
         if (
             comfyui_status.mode != "managed"
             or comfyui_status.reachable
-            or not comfyui_status.sidecar_starting
+            or not (
+                comfyui_status.sidecar_starting
+                or comfyui_status.environment_bootstrap_running
+            )
         ):
             return None
 
-        message = "Starting the local ComfyUI engine before this run."
+        message = (
+            "Installing the local ComfyUI engine before this run."
+            if comfyui_status.environment_bootstrap_running
+            else "Starting the local ComfyUI engine before this run."
+        )
         memory_status = {
             "state": "starting_engine",
             "message": message,
@@ -1605,6 +1612,9 @@ class EngineService:
             details={
                 "runtime_mode": comfyui_status.mode,
                 "sidecar_starting": comfyui_status.sidecar_starting,
+                "environment_bootstrap_running": (
+                    comfyui_status.environment_bootstrap_running
+                ),
                 "managed_process_running": comfyui_status.managed_process_running,
             },
         )

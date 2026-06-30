@@ -306,6 +306,96 @@
   }
 }
 
+.modal-backdrop.engine-install-backdrop {
+  z-index: 120;
+}
+
+.engine-install-modal {
+  width: min(520px, 100%);
+  overflow: hidden;
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  background: var(--surface-1);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.42);
+}
+
+.engine-install-modal__header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 16px;
+  padding: 22px;
+}
+
+.engine-install-modal__icon {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  color: var(--primary-hover);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.engine-install-modal h2 {
+  margin: 4px 0 8px;
+  font-family: Manrope, Inter, sans-serif;
+  font-size: 22px;
+  line-height: 1.25;
+}
+
+.engine-install-modal p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.engine-install-progress {
+  display: grid;
+  gap: 10px;
+  padding: 0 22px 22px;
+}
+
+.engine-install-progress__track {
+  position: relative;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.engine-install-progress__track span {
+  position: absolute;
+  inset-block: 0;
+  left: -42%;
+  width: 42%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, transparent, var(--primary-hover), transparent);
+  animation: engine-install-progress 1.25s ease-in-out infinite;
+}
+
+.engine-install-progress p {
+  min-height: 20px;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+@keyframes engine-install-progress {
+  to {
+    left: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .engine-install-progress__track span {
+    left: 0;
+    width: 100%;
+    animation: none;
+    background: var(--primary-hover);
+  }
+}
+
 .page-heading {
   display: flex;
   align-items: flex-start;

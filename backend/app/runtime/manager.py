@@ -131,6 +131,8 @@ class RuntimeManager:
         self._last_error: str | None = None
         self._last_reachable_at: datetime | None = None
         self._sidecar_starting: bool = False
+        self._environment_bootstrap_running: bool = False
+        self._environment_bootstrap_label: str | None = None
         self._start_lock: asyncio.Lock = asyncio.Lock()
 
         # Crash / restart state
@@ -191,6 +193,8 @@ class RuntimeManager:
             repo_dir=str(self.repo_dir),
             managed_process_running=self._is_managed_process_running(),
             sidecar_starting=self._sidecar_starting,
+            environment_bootstrap_running=self._environment_bootstrap_running,
+            environment_bootstrap_label=self._current_environment_bootstrap_label(),
             pid=self._process.pid if self._is_managed_process_running() else None,
             error=error,
             transient_health_failure=transient_health_failure,
@@ -421,7 +425,13 @@ class RuntimeManager:
                 status="not_configured",
                 environment=status.environment,
             )
-        return await self.environment.bootstrap()
+        self._environment_bootstrap_running = True
+        self._environment_bootstrap_label = "Preparing ComfyUI engine"
+        try:
+            return await self.environment.bootstrap()
+        finally:
+            self._environment_bootstrap_running = False
+            self._environment_bootstrap_label = None
 
     def is_managed_process_running(self) -> bool:
         return self._is_managed_process_running()
@@ -430,6 +440,12 @@ class RuntimeManager:
         if not self._is_managed_process_running():
             return None
         return self._process.pid if self._process is not None else None
+
+    def _current_environment_bootstrap_label(self) -> str | None:
+        if not self._environment_bootstrap_running:
+            return None
+        label = getattr(self.environment, "bootstrap_status_label", None)
+        return label or self._environment_bootstrap_label
 
     # ------------------------------------------------------------------
     # Process lifecycle

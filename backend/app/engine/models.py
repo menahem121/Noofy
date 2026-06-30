@@ -436,6 +436,8 @@ class ComfyUIRuntimeStatus(BaseModel):
     repo_dir: str
     managed_process_running: bool = False
     sidecar_starting: bool = False
+    environment_bootstrap_running: bool = False
+    environment_bootstrap_label: str | None = None
     pid: int | None = None
     error: str | None = None
     transient_health_failure: bool = False

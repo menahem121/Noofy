@@ -78,6 +78,11 @@ class RuntimeEnvironment:
         self.log_store = log_store
         self._command_runner = command_runner or self._run_command
         self._last_bootstrap_python_attempts: list[dict[str, object]] = []
+        self._bootstrap_status_label: str | None = None
+
+    @property
+    def bootstrap_status_label(self) -> str | None:
+        return self._bootstrap_status_label
 
     @property
     def requirements_file(self) -> Path:
@@ -176,169 +181,182 @@ class RuntimeEnvironment:
         )
 
     async def bootstrap(self) -> RuntimeBootstrapResult:
-        current = await self.status()
-        if current.prepared:
-            self.log_store.add(
-                "info",
-                "ComfyUI runtime environment already prepared",
-                "runtime.environment",
-            )
-            return RuntimeBootstrapResult(
-                status="already_prepared", environment=current
-            )
+        self._bootstrap_status_label = "Checking ComfyUI engine requirements"
+        try:
+            current = await self.status()
+            if current.prepared:
+                self.log_store.add(
+                    "info",
+                    "ComfyUI runtime environment already prepared",
+                    "runtime.environment",
+                )
+                return RuntimeBootstrapResult(
+                    status="already_prepared", environment=current
+                )
 
-        if not current.requirements_file_exists:
-            self.log_store.add(
-                "error",
-                "ComfyUI requirements file missing",
-                "runtime.environment",
-                details={"requirements_file": current.requirements_file},
-            )
-            return RuntimeBootstrapResult(
-                status="requirements_missing", environment=current
-            )
+            if not current.requirements_file_exists:
+                self.log_store.add(
+                    "error",
+                    "ComfyUI requirements file missing",
+                    "runtime.environment",
+                    details={"requirements_file": current.requirements_file},
+                )
+                return RuntimeBootstrapResult(
+                    status="requirements_missing", environment=current
+                )
 
-        if _torch_install_plan_is_unsupported(current.torch_install_plan):
-            self.log_store.add(
-                "error",
-                "ComfyUI managed runtime is not supported on this platform",
-                "runtime.environment",
-                details={"reason": current.torch_install_plan.reason},
-            )
-            return RuntimeBootstrapResult(
-                status="platform_unsupported", environment=current
-            )
+            if _torch_install_plan_is_unsupported(current.torch_install_plan):
+                self.log_store.add(
+                    "error",
+                    "ComfyUI managed runtime is not supported on this platform",
+                    "runtime.environment",
+                    details={"reason": current.torch_install_plan.reason},
+                )
+                return RuntimeBootstrapResult(
+                    status="platform_unsupported", environment=current
+                )
 
-        if self.python_executable_override:
-            self.log_store.add(
-                "error",
-                "Noofy engine runtime override is not prepared",
-                "runtime.environment",
-                details={
-                    "python_executable": self.python_executable_override,
-                    "error": current.error,
-                },
-            )
-            return RuntimeBootstrapResult(
-                status="python_not_prepared", environment=current
-            )
+            if self.python_executable_override:
+                self.log_store.add(
+                    "error",
+                    "Noofy engine runtime override is not prepared",
+                    "runtime.environment",
+                    details={
+                        "python_executable": self.python_executable_override,
+                        "error": current.error,
+                    },
+                )
+                return RuntimeBootstrapResult(
+                    status="python_not_prepared", environment=current
+                )
 
-        bootstrap_python = await self._resolve_bootstrap_python_executable()
-        if bootstrap_python is None:
-            error = self._bootstrap_python_missing_message()
-            log_details: dict[str, object] = {
-                "configured_python_executable": self.bootstrap_python_executable,
-                "expected_python_version": self.expected_python_version,
-                "runtime_distribution": (
-                    "packaged" if self.packaged_runtime else "source_checkout"
-                ),
-                "attempts": self._last_bootstrap_python_attempts,
-            }
-            if self.packaged_runtime:
-                log_message = "Packaged Noofy bundled Python does not match the selected runtime profile"
-            else:
-                log_message = "Source-checkout ComfyUI bootstrap Python does not match the selected runtime profile"
-            self.log_store.add(
-                "error",
-                log_message,
-                "runtime.environment",
-                details=log_details,
-            )
-            return RuntimeBootstrapResult(
-                status="python_missing",
-                environment=current.model_copy(
-                    update={
-                        "error": error,
-                        "bootstrap_python_attempts": list(
-                            self._last_bootstrap_python_attempts
-                        ),
-                    }
-                ),
-            )
-
-        self._ensure_writable_runtime_dirs()
-        if (
-            current.python_exists
-            and self.expected_python_version is not None
-            and current.python_version != self.expected_python_version
-        ):
-            self.log_store.add(
-                "info",
-                "Rebuilding ComfyUI runtime environment for selected profile Python",
-                "runtime.environment",
-                details={
-                    "python_executable": current.python_executable,
-                    "current_python_version": current.python_version,
+            self._bootstrap_status_label = "Finding bundled Python runtime"
+            bootstrap_python = await self._resolve_bootstrap_python_executable()
+            if bootstrap_python is None:
+                error = self._bootstrap_python_missing_message()
+                log_details: dict[str, object] = {
+                    "configured_python_executable": self.bootstrap_python_executable,
                     "expected_python_version": self.expected_python_version,
+                    "runtime_distribution": (
+                        "packaged" if self.packaged_runtime else "source_checkout"
+                    ),
+                    "attempts": self._last_bootstrap_python_attempts,
+                }
+                if self.packaged_runtime:
+                    log_message = (
+                        "Packaged Noofy bundled Python does not match the "
+                        "selected runtime profile"
+                    )
+                else:
+                    log_message = (
+                        "Source-checkout ComfyUI bootstrap Python does not "
+                        "match the selected runtime profile"
+                    )
+                self.log_store.add(
+                    "error",
+                    log_message,
+                    "runtime.environment",
+                    details=log_details,
+                )
+                return RuntimeBootstrapResult(
+                    status="python_missing",
+                    environment=current.model_copy(
+                        update={
+                            "error": error,
+                            "bootstrap_python_attempts": list(
+                                self._last_bootstrap_python_attempts
+                            ),
+                        }
+                    ),
+                )
+
+            self._bootstrap_status_label = "Preparing ComfyUI runtime folders"
+            self._ensure_writable_runtime_dirs()
+            if (
+                current.python_exists
+                and self.expected_python_version is not None
+                and current.python_version != self.expected_python_version
+            ):
+                self.log_store.add(
+                    "info",
+                    "Rebuilding ComfyUI runtime environment for selected profile Python",
+                    "runtime.environment",
+                    details={
+                        "python_executable": current.python_executable,
+                        "current_python_version": current.python_version,
+                        "expected_python_version": self.expected_python_version,
+                    },
+                )
+                shutil.rmtree(self.venv_dir, ignore_errors=True)
+            venv_result = await self._run_logged(
+                [bootstrap_python, "-m", "venv", str(self.venv_dir)],
+                cwd=None,
+                action="Create ComfyUI runtime virtual environment",
+            )
+            if venv_result.returncode != 0:
+                return RuntimeBootstrapResult(
+                    status="bootstrap_failed", environment=await self.status()
+                )
+
+            torch_plan = (await self.status()).torch_install_plan
+            torch_result = await self._run_logged(
+                [
+                    self.python_executable,
+                    "-m",
+                    "pip",
+                    "install",
+                    *torch_plan.pip_args,
+                    *torch_plan.packages,
+                ],
+                cwd=None,
+                action=f"Install PyTorch runtime ({torch_plan.accelerator})",
+                details={
+                    "accelerator": torch_plan.accelerator,
+                    "reason": torch_plan.reason,
+                    "warnings": torch_plan.warnings,
                 },
             )
-            shutil.rmtree(self.venv_dir, ignore_errors=True)
-        venv_result = await self._run_logged(
-            [bootstrap_python, "-m", "venv", str(self.venv_dir)],
-            cwd=None,
-            action="Create ComfyUI runtime virtual environment",
-        )
-        if venv_result.returncode != 0:
-            return RuntimeBootstrapResult(
-                status="bootstrap_failed", environment=await self.status()
-            )
+            if torch_result.returncode != 0:
+                return RuntimeBootstrapResult(
+                    status="bootstrap_failed", environment=await self.status()
+                )
 
-        torch_plan = (await self.status()).torch_install_plan
-        torch_result = await self._run_logged(
-            [
-                self.python_executable,
-                "-m",
-                "pip",
-                "install",
-                *torch_plan.pip_args,
-                *torch_plan.packages,
-            ],
-            cwd=None,
-            action=f"Install PyTorch runtime ({torch_plan.accelerator})",
-            details={
-                "accelerator": torch_plan.accelerator,
-                "reason": torch_plan.reason,
-                "warnings": torch_plan.warnings,
-            },
-        )
-        if torch_result.returncode != 0:
-            return RuntimeBootstrapResult(
-                status="bootstrap_failed", environment=await self.status()
+            install_result = await self._run_logged(
+                [
+                    self.python_executable,
+                    "-m",
+                    "pip",
+                    "install",
+                    "-r",
+                    str(self.requirements_file),
+                ],
+                cwd=self.repo_dir,
+                action="Install ComfyUI runtime requirements",
             )
+            if install_result.returncode != 0:
+                return RuntimeBootstrapResult(
+                    status="bootstrap_failed", environment=await self.status()
+                )
 
-        install_result = await self._run_logged(
-            [
-                self.python_executable,
-                "-m",
-                "pip",
-                "install",
-                "-r",
-                str(self.requirements_file),
-            ],
-            cwd=self.repo_dir,
-            action="Install ComfyUI runtime requirements",
-        )
-        if install_result.returncode != 0:
-            return RuntimeBootstrapResult(
-                status="bootstrap_failed", environment=await self.status()
-            )
+            self._bootstrap_status_label = "Checking installed ComfyUI components"
+            prepared = await self.status()
+            if prepared.prepared:
+                self.log_store.add(
+                    "info", "ComfyUI runtime environment prepared", "runtime.environment"
+                )
+                return RuntimeBootstrapResult(status="prepared", environment=prepared)
 
-        prepared = await self.status()
-        if prepared.prepared:
             self.log_store.add(
-                "info", "ComfyUI runtime environment prepared", "runtime.environment"
+                "error",
+                "ComfyUI runtime dependency check failed after bootstrap",
+                "runtime.environment",
+                details={"error": prepared.error},
             )
-            return RuntimeBootstrapResult(status="prepared", environment=prepared)
-
-        self.log_store.add(
-            "error",
-            "ComfyUI runtime dependency check failed after bootstrap",
-            "runtime.environment",
-            details={"error": prepared.error},
-        )
-        return RuntimeBootstrapResult(
-            status="dependency_check_failed", environment=prepared
-        )
+            return RuntimeBootstrapResult(
+                status="dependency_check_failed", environment=prepared
+            )
+        finally:
+            self._bootstrap_status_label = None
 
     def _status_error(
         self,
@@ -535,6 +553,7 @@ class RuntimeEnvironment:
         action: str,
         details: dict[str, object] | None = None,
     ) -> CommandResult:
+        self._bootstrap_status_label = action
         log_details = {"command": self._redacted_command(command)}
         if details is not None:
             log_details.update(details)

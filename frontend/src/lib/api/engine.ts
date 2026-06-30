@@ -146,6 +146,8 @@ export interface RuntimeStatus {
   repo_dir: string;
   managed_process_running: boolean;
   sidecar_starting: boolean;
+  environment_bootstrap_running?: boolean;
+  environment_bootstrap_label?: string | null;
   pid: number | null;
   error: string | null;
   transient_health_failure?: boolean;

@@ -6,6 +6,7 @@ import {
   type AppNavigateOptions,
   type AppRouteId,
 } from "./features/app/AppLayout";
+import { EngineInstallProgressModal } from "./features/app/EngineInstallProgressModal";
 import { ResourceStatusProvider } from "./features/app/ResourceStatusProvider";
 import { RuntimeStatusProvider } from "./features/app/RuntimeStatusProvider";
 import { WorkflowTabsProvider, WorkflowTabsRouteProvider, useWorkflowTabs, type WorkflowTabRuntimeState } from "./features/app/WorkflowTabs";
@@ -509,6 +510,7 @@ function AppContent() {
           onConfirm={() => void confirmStopAndClose()}
         />
       ) : null}
+      <EngineInstallProgressModal />
       <FirstLaunchOnboarding
         workflows={workflowLibrary.workflows}
         hasLoadedWorkflows={workflowLibrary.hasLoaded}

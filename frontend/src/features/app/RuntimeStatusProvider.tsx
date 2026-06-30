@@ -5,7 +5,7 @@ import type { AppStatusView } from "./AppLayout";
 import { recordBackendSessionRestart } from "./sessionRestore";
 
 export type BackendStatus = "unknown" | "reachable" | "unreachable";
-export type EngineStatus = "unknown" | "ready" | "starting" | "busy" | "offline";
+export type EngineStatus = "unknown" | "ready" | "installing" | "starting" | "busy" | "offline";
 
 export interface RuntimeHealthState {
   backendStatus: BackendStatus;
@@ -290,6 +290,15 @@ export function runtimeStatusView(state: RuntimeHealthState): AppStatusView {
     };
   }
 
+  if (state.engineStatus === "installing") {
+    return {
+      label: "Installing",
+      description: state.runtime?.environment_bootstrap_label ?? "Preparing ComfyUI",
+      tone: "info",
+      loading: true,
+    };
+  }
+
   if (state.engineStatus === "busy") {
     return {
       label: "Working",
@@ -344,6 +353,7 @@ function stateFromFailure(current: RuntimeHealthState, error: unknown, silent: b
 }
 
 function engineStatusFromRuntime(runtime: RuntimeStatus): EngineStatus {
+  if (runtime.environment_bootstrap_running) return "installing";
   if (runtime.reachable && runtime.transient_health_failure) return "busy";
   if (runtime.reachable) return "ready";
   if (runtime.sidecar_starting || runtime.managed_process_running) return "starting";

@@ -46,6 +46,15 @@ const startingRuntime = {
   sidecar_starting: true,
 };
 
+const installingRuntime = {
+  ...readyRuntime,
+  reachable: false,
+  managed_process_running: false,
+  sidecar_starting: false,
+  environment_bootstrap_running: true,
+  environment_bootstrap_label: "Install PyTorch runtime (mps)",
+};
+
 const offlineRuntime = {
   ...readyRuntime,
   reachable: false,
@@ -267,6 +276,21 @@ describe("RuntimeStatusProvider", () => {
     expect(result.current.backendStatus).toBe("reachable");
     expect(result.current.engineStatus).toBe("busy");
     expect(result.current.statusView.label).toBe("Working");
+  });
+
+  it("maps first-launch engine environment bootstrap to Installing", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(installingRuntime));
+    const { result } = renderHook(() => useRuntimeStatus(), {
+      wrapper: wrapper(),
+    });
+
+    await act(async () => {
+      await result.current.refreshRuntime({ force: true, silent: false });
+    });
+
+    expect(result.current.engineStatus).toBe("installing");
+    expect(result.current.statusView.label).toBe("Installing");
+    expect(result.current.statusView.description).toBe("Install PyTorch runtime (mps)");
   });
 
   it("marks page refresh required without auto-reloading when a later runtime response reports a new backend session", async () => {

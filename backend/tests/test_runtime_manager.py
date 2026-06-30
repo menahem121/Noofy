@@ -553,6 +553,80 @@ async def test_passive_status_skips_environment_dependency_checks(
 
 
 @pytest.mark.anyio
+async def test_status_reports_environment_bootstrap_progress(
+    tmp_path: Path,
+) -> None:
+    repo_dir = tmp_path / "ComfyUI"
+    repo_dir.mkdir()
+    (repo_dir / "main.py").write_text("", encoding="utf-8")
+    (repo_dir / "requirements.txt").write_text("aiohttp\n", encoding="utf-8")
+    bootstrap_python = tmp_path / "bootstrap-python"
+    bootstrap_python.write_text("", encoding="utf-8")
+    bootstrap_python.chmod(0o755)
+    venv_python = tmp_path / "runtime" / "comfyui-venv" / "bin" / "python"
+    command_started = asyncio.Event()
+    release_command = asyncio.Event()
+
+    async def command_runner(command: list[str], cwd: Path | None):
+        del cwd
+        if command == [str(bootstrap_python), "-m", "venv", str(venv_python.parent.parent)]:
+            command_started.set()
+            await release_command.wait()
+            venv_python.parent.mkdir(parents=True, exist_ok=True)
+            venv_python.write_text("", encoding="utf-8")
+            venv_python.chmod(0o755)
+            return _command_result()
+        if "sys.version_info" in command[-1]:
+            return _command_result(stdout="3.13\n")
+        return _command_result()
+
+    async def unreachable(_: str) -> tuple[bool, str | None]:
+        return False, "not reachable"
+
+    environment = RuntimeEnvironment(
+        repo_dir=repo_dir,
+        runtime_dir=tmp_path / "runtime",
+        bootstrap_python_executable=str(bootstrap_python),
+        required_imports=("json",),
+        required_runtime_checks=(),
+        hardware_profile=RuntimeHardwareProfile(
+            os_name="Linux",
+            os_version="",
+            machine="x86_64",
+            architecture="x86_64",
+            accelerator="cpu",
+        ),
+        command_runner=command_runner,
+        log_store=LogStore(),
+    )
+    manager = RuntimeManager(
+        mode="managed",
+        external_base_url="http://127.0.0.1:8188",
+        repo_dir=repo_dir,
+        python_executable=str(venv_python),
+        environment=environment,
+        health_check=unreachable,
+        log_store=LogStore(),
+    )
+
+    bootstrap_task = asyncio.create_task(manager.bootstrap_environment())
+    await asyncio.wait_for(command_started.wait(), timeout=1)
+
+    status = await manager.status()
+
+    assert status.environment_bootstrap_running
+    assert status.environment_bootstrap_label == "Create ComfyUI runtime virtual environment"
+
+    release_command.set()
+    result = await bootstrap_task
+    finished_status = await manager.status()
+
+    assert result.status == "prepared"
+    assert not finished_status.environment_bootstrap_running
+    assert finished_status.environment_bootstrap_label is None
+
+
+@pytest.mark.anyio
 async def test_passive_status_preserves_recent_reachable_runtime_during_health_timeout(
     tmp_path: Path,
 ) -> None:
@@ -676,6 +750,12 @@ async def test_passive_status_does_not_preserve_non_timeout_failure(
 
 def _arg_value(command: list[str], flag: str) -> str:
     return command[command.index(flag) + 1]
+
+
+def _command_result(returncode: int = 0, stdout: str = "", stderr: str = ""):
+    from app.runtime.environment import CommandResult
+
+    return CommandResult(returncode=returncode, stdout=stdout, stderr=stderr)
 
 
 # ---------------------------------------------------------------------------
