@@ -686,6 +686,47 @@ def test_workflow_default_asset_route_serves_packaged_media(tmp_path: Path) -> N
     assert range_response.headers["content-range"] == f"bytes 0-3/{len(PNG_BYTES)}"
 
 
+def test_workflow_default_asset_route_allows_query_token_for_media_elements(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NOOFY_API_TOKEN", "secret-token")
+    source = tmp_path / "starter.png"
+    source.write_bytes(PNG_BYTES)
+    engine_service = FakeEngineService()
+    engine_service.default_asset = (
+        source,
+        {
+            "source": "package_asset",
+            "asset_id": "input-defaults/starter.png",
+            "kind": "image",
+            "filename": "starter.png",
+            "content_type": "image/png",
+            "size_bytes": len(PNG_BYTES),
+        },
+    )
+
+    with TestClient(create_app(engine_service=engine_service)) as client:
+        missing = client.get(
+            "/api/workflows/wf/inputs/image/default-asset",
+            params={"asset_id": "input-defaults/starter.png"},
+        )
+        wrong = client.get(
+            "/api/workflows/wf/inputs/image/default-asset",
+            params={"asset_id": "input-defaults/starter.png", "token": "wrong-token"},
+        )
+        allowed = client.get(
+            "/api/workflows/wf/inputs/image/default-asset",
+            params={"asset_id": "input-defaults/starter.png", "token": "secret-token"},
+        )
+
+    assert missing.status_code == 401
+    assert wrong.status_code == 401
+    assert allowed.status_code == 200
+    assert allowed.headers["content-type"] == "image/png"
+    assert allowed.content == PNG_BYTES
+
+
 def test_workflow_default_asset_route_rejects_stale_asset_version(tmp_path: Path) -> None:
     source = tmp_path / "starter.png"
     source.write_bytes(PNG_BYTES)

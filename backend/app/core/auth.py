@@ -24,6 +24,12 @@ def is_job_query_token_request(request: Request) -> bool:
         path.endswith("/export") or path.endswith("/export/comfyui-json")
     ):
         return True
+    if (
+        path.startswith("/api/workflows/")
+        and "/inputs/" in path
+        and path.endswith("/default-asset")
+    ):
+        return True
     if path.startswith("/api/assets/"):
         return True
     return path.startswith("/api/gallery/") and (
