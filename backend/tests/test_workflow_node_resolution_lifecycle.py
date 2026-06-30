@@ -1,6 +1,10 @@
 import pytest
 
 from app.runtime.capsule_installer import CapsuleInstallError
+from app.runtime.node_registry import (
+    NodeRegistryResolutionError,
+    NodeRegistryResolutionErrorCode,
+)
 from app.runtime.dependencies.isolation import (
     CapsuleLock,
     InstallState,
@@ -54,18 +58,95 @@ async def test_prepare_workflow_exposes_neutral_payload_when_auto_resolution_has
     assert "managed ComfyUI engine is too old" in resolution["update_guidance"]
 
 
+@pytest.mark.anyio
+async def test_prepare_workflow_caches_portable_custom_node_source_before_prepare() -> None:
+    loader = _WorkflowLoader(_package())
+    installer = _Installer(mode="ready")
+    store = _ImportedStore(loader, mode="resolved")
+    cache = _CustomNodeSourceCache()
+    service = _service(
+        loader=loader,
+        installer=installer,
+        imported_store=store,
+        custom_node_source_cache=cache,
+        capsule=_capsule(
+            custom_nodes=[
+                {
+                    "package_id": "github-example-comfyui-node",
+                    "source": "https://codeload.github.com/example/comfyui-node/zip/"
+                    + ("a" * 40),
+                    "source_ref": "a" * 40,
+                    "source_content_hash": "sha256:" + ("b" * 64),
+                    "source_archive_subdir": "comfyui-node-" + ("a" * 40),
+                    "source_repo_url": "https://github.com/example/comfyui-node",
+                    "trust_level": "quarantined_community",
+                    "node_types": ["ExampleNode"],
+                }
+            ]
+        ),
+    )
+
+    result = await service.prepare_workflow("workflow")
+
+    assert result["status"] == "ready"
+    assert installer.prepare_calls == 1
+    prepared_capsule = installer.prepared_capsules[0]
+    assert prepared_capsule.custom_nodes[0].source_cache_ref == "cached/source"
+    assert cache.sources[0].source_url.startswith(
+        "https://codeload.github.com/example/comfyui-node/zip/"
+    )
+    assert cache.source_origins == [["explicit-metadata"]]
+    assert cache.source_policies[0].automatic_preparation_allowed is True
+
+
+@pytest.mark.anyio
+async def test_prepare_workflow_reports_portable_custom_node_source_resolution_failure() -> None:
+    loader = _WorkflowLoader(_package())
+    installer = _Installer(mode="ready")
+    store = _ImportedStore(loader, mode="resolved")
+    service = _service(
+        loader=loader,
+        installer=installer,
+        imported_store=store,
+        custom_node_source_cache=_FailingCustomNodeSourceCache(),
+        capsule=_capsule(
+            custom_nodes=[
+                {
+                    "package_id": "github-example-comfyui-node",
+                    "source": "https://codeload.github.com/example/comfyui-node/zip/"
+                    + ("a" * 40),
+                    "source_ref": "a" * 40,
+                    "source_content_hash": "sha256:" + ("b" * 64),
+                    "trust_level": "quarantined_community",
+                    "node_types": ["ExampleNode"],
+                }
+            ]
+        ),
+    )
+
+    result = await service.prepare_workflow("workflow")
+
+    assert result["status"] == "failed"
+    assert result["last_error"] == "Noofy could not verify a downloaded workflow extension."
+    assert result["last_error_code"] == "hash_mismatch"
+    assert installer.prepare_calls == 0
+
+
 def _service(
     *,
     loader: "_WorkflowLoader",
     installer: "_Installer",
     imported_store: "_ImportedStore",
+    custom_node_source_cache: object | None = None,
+    capsule: CapsuleLock | None = None,
 ) -> WorkflowRunnerLifecycleService:
     return WorkflowRunnerLifecycleService(
         workflow_loader=loader,
-        capsule_loader=_CapsuleLoader(_capsule()),
+        capsule_loader=_CapsuleLoader(capsule or _capsule()),
         capsule_installer=installer,  # type: ignore[arg-type]
         runner_supervisor=_RunnerSupervisor(),  # type: ignore[arg-type]
         imported_package_store=imported_store,  # type: ignore[arg-type]
+        custom_node_source_cache=custom_node_source_cache,  # type: ignore[arg-type]
         log_store=_LogStore(),  # type: ignore[arg-type]
     )
 
@@ -102,18 +183,61 @@ class _Installer:
     def __init__(self, *, mode: str) -> None:
         self.mode = mode
         self.prepare_calls = 0
+        self.prepared_capsules: list[CapsuleLock] = []
+        self.install_state_store = _InstallStateStore()
 
     def get_state(self, capsule_lock: CapsuleLock) -> InstallState:
         return _install_state(InstallStatus.PENDING)
 
     async def prepare(self, *args, **kwargs) -> InstallState:
         self.prepare_calls += 1
-        if self.prepare_calls == 1:
+        self.prepared_capsules.append(args[0])
+        if self.mode != "ready" and self.prepare_calls == 1:
             raise CapsuleInstallError(
                 "This workflow uses nodes that the current engine does not recognize.",
                 state=_engine_missing_state(["FutureCoreNode"]),
             )
         return _install_state(InstallStatus.READY, smoke_status=SmokeTestStatus.PASSED)
+
+
+class _InstallStateStore:
+    def update(
+        self,
+        capsule_fingerprint: str,
+        **kwargs,
+    ) -> InstallState:
+        return _install_state(kwargs["status"]).model_copy(
+            update={
+                "last_error": kwargs.get("last_error"),
+                "last_error_code": kwargs.get("last_error_code"),
+            }
+        )
+
+
+class _CustomNodeSourceCache:
+    def __init__(self) -> None:
+        self.sources = []
+        self.source_policies = []
+        self.source_origins = []
+
+    def materialize(self, source, *, source_policy=None, source_origins=None):
+        self.sources.append(source)
+        self.source_policies.append(source_policy)
+        self.source_origins.append(source_origins)
+        return type("CachedSource", (), {"source_cache_ref": "cached/source"})()
+
+
+class _FailingCustomNodeSourceCache:
+    def materialize(self, source, *, source_policy=None, source_origins=None):
+        raise NodeRegistryResolutionError(
+            NodeRegistryResolutionErrorCode.HASH_MISMATCH,
+            "Noofy could not verify a downloaded workflow extension.",
+            developer_details={
+                "source_url": source.source_url,
+                "expected_sha256": "b" * 64,
+                "actual_sha256": "c" * 64,
+            },
+        )
 
 
 class _ImportedStore:
@@ -278,7 +402,7 @@ def _install_state(
     )
 
 
-def _capsule() -> CapsuleLock:
+def _capsule(custom_nodes: list[dict[str, object]] | None = None) -> CapsuleLock:
     return CapsuleLock.model_validate(
         {
             "schema_version": "0.1.0",
@@ -311,7 +435,7 @@ def _capsule() -> CapsuleLock:
                 "dependency_lock_hash": "sha256:" + ("6" * 64),
                 "runner_workspace_hash": "sha256:" + ("7" * 64),
             },
-            "custom_nodes": [],
+            "custom_nodes": custom_nodes or [],
             "dependencies": {
                 "lock_file": "community-runtime.lock",
                 "install_policy": "quarantined-community-v1",

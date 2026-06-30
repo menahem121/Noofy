@@ -21,6 +21,7 @@ from app.runtime.capsule_installer import CapsuleInstaller, CapsuleInstallError
 from app.runtime.install_state import user_facing_install_message
 from app.runtime.dependencies.isolation import (
     CapsuleLock,
+    CustomNodeLock,
     DependencyEnvManifest,
     InstallState,
     InstallStatus,
@@ -42,6 +43,14 @@ from app.runtime.memory.memory_governor import (
     MemoryReleaseStatus,
 )
 from app.runtime.models.model_store import LocalModelRequirement
+from app.runtime.node_registry import (
+    CUSTOM_NODE_SOURCE_CACHE_MANIFEST_FILENAME,
+    CustomNodeSourceCache,
+    NodeRegistryResolutionError,
+    NodeRegistryResolutionErrorCode,
+    NodeRegistrySource,
+    NodeRegistrySourceKind,
+)
 from app.runtime.runners.runner_coordinator import (
     RunnerProcessCoordinator,
     RunnerRuntimeActivationInProgressError,
@@ -104,6 +113,7 @@ class WorkflowRunnerLifecycleService:
         runtime_manager: RuntimeManager | None = None,
         memory_service: object | None = None,
         imported_package_store: ImportedWorkflowPackageStore | None = None,
+        custom_node_source_cache: CustomNodeSourceCache | None = None,
         workflow_summary: Callable[[WorkflowPackage], dict[str, object]] | None = None,
         has_pending_workflow_runs: Callable[[str], bool] | None = None,
         closed_view_auto_release_enabled: bool | None = None,
@@ -120,6 +130,11 @@ class WorkflowRunnerLifecycleService:
         self.runtime_manager = runtime_manager
         self.memory_service = memory_service
         self.imported_package_store = imported_package_store
+        self.custom_node_source_cache = custom_node_source_cache or getattr(
+            imported_package_store,
+            "custom_node_source_cache",
+            None,
+        )
         self.workflow_summary = workflow_summary
         self.has_pending_workflow_runs = has_pending_workflow_runs
         self._closed_view_auto_release_enabled = closed_view_auto_release_enabled
@@ -975,6 +990,37 @@ class WorkflowRunnerLifecycleService:
             )
 
         try:
+            capsule_lock = self._with_cached_portable_custom_node_sources(
+                workflow_id,
+                capsule_lock,
+            )
+        except NodeRegistryResolutionError as exc:
+            state = self.capsule_installer.install_state_store.update(
+                capsule_lock.runtime.capsule_fingerprint,
+                status=_custom_node_source_resolution_install_status(exc),
+                last_error=exc.user_message,
+                last_error_code=exc.code.value,
+                model_references=[],
+            )
+            self.log_store.add(
+                "warning",
+                "Workflow prepare blocked by unresolved custom-node source",
+                "runtime.runners.lifecycle_service",
+                workflow_id=workflow_id,
+                details={
+                    "capsule_fingerprint": capsule_lock.runtime.capsule_fingerprint,
+                    "code": exc.code.value,
+                    **exc.developer_details,
+                },
+            )
+            return self._install_payload(
+                workflow_id,
+                state,
+                capsule_lock=capsule_lock,
+                package=package,
+            )
+
+        try:
             state = await self.capsule_installer.prepare(
                 capsule_lock,
                 workflow_id=workflow_id,
@@ -1014,6 +1060,52 @@ class WorkflowRunnerLifecycleService:
             capsule_lock=capsule_lock,
             package=package,
         )
+
+    def _with_cached_portable_custom_node_sources(
+        self,
+        workflow_id: str,
+        capsule_lock: CapsuleLock,
+    ) -> CapsuleLock:
+        if self.custom_node_source_cache is None:
+            return capsule_lock
+        source_policy = capsule_source_policy(capsule_lock)
+        updated_nodes = []
+        cached_count = 0
+        for custom_node in capsule_lock.custom_nodes:
+            if not _custom_node_source_needs_cache(custom_node):
+                updated_nodes.append(custom_node)
+                continue
+            source_cache_ref = _existing_custom_node_source_cache_ref(
+                self.custom_node_source_cache,
+                custom_node,
+            )
+            if source_cache_ref is None:
+                source = _portable_custom_node_source(custom_node)
+                cached = self.custom_node_source_cache.materialize(
+                    source,
+                    source_policy=source_policy,
+                    source_origins=["explicit-metadata"],
+                )
+                source_cache_ref = cached.source_cache_ref
+            cached_count += 1
+            updated_nodes.append(
+                custom_node.model_copy(
+                    update={"source_cache_ref": source_cache_ref}
+                )
+            )
+        if cached_count == 0:
+            return capsule_lock
+        self.log_store.add(
+            "info",
+            "Resolved portable custom-node sources into Noofy cache",
+            "runtime.runners.lifecycle_service",
+            workflow_id=workflow_id,
+            details={
+                "capsule_fingerprint": capsule_lock.runtime.capsule_fingerprint,
+                "custom_node_count": cached_count,
+            },
+        )
+        return capsule_lock.model_copy(update={"custom_nodes": updated_nodes})
 
     async def _try_engine_missing_node_remediation(
         self,
@@ -2220,7 +2312,14 @@ def _effective_prepare_source_policy(
     *,
     local_model_requirements: list[LocalModelRequirement],
 ) -> SourcePolicy:
-    policy = package.source_policy or workflow_source_policy(package)
+    policy = (
+        package.source_policy
+        or capsule_lock.source_policy
+        or workflow_source_policy(
+            package,
+            community_preparation_opted_in=_community_preparation_opted_in(package),
+        )
+    )
     if capsule_lock.models and local_model_requirements:
         model_source_trust = ModelSourceTrust.MIXED
     elif capsule_lock.models:
@@ -2237,6 +2336,92 @@ def _workflow_requires_isolated_preparation(
     capsule_lock: CapsuleLock,
 ) -> bool:
     return package.import_metadata is not None or bool(capsule_lock.custom_nodes)
+
+
+def _custom_node_source_needs_cache(custom_node: CustomNodeLock) -> bool:
+    return (
+        custom_node.source_cache_ref is None
+        and custom_node.source.startswith("https://")
+    )
+
+
+def _portable_custom_node_source(custom_node: CustomNodeLock) -> NodeRegistrySource:
+    if custom_node.source_ref is None:
+        raise NodeRegistryResolutionError(
+            NodeRegistryResolutionErrorCode.MISSING_PINNED_SOURCE_REF,
+            "Noofy cannot prepare a workflow extension without a pinned source version.",
+            developer_details={
+                "package_id": custom_node.package_id,
+                "source_url": custom_node.source,
+            },
+        )
+    if custom_node.source_content_hash is None:
+        raise NodeRegistryResolutionError(
+            NodeRegistryResolutionErrorCode.MISSING_SOURCE_CONTENT_HASH,
+            "Noofy cannot prepare a workflow extension without a verified source hash.",
+            developer_details={
+                "package_id": custom_node.package_id,
+                "source_url": custom_node.source,
+            },
+        )
+    try:
+        return NodeRegistrySource(
+            source_kind=NodeRegistrySourceKind.HTTPS_ZIP_ARCHIVE,
+            source_url=custom_node.source,
+            source_ref=custom_node.source_ref,
+            source_content_hash=custom_node.source_content_hash,
+            archive_subdir=custom_node.source_archive_subdir,
+            source_repo_url=custom_node.source_repo_url,
+        )
+    except ValidationError as exc:
+        raise NodeRegistryResolutionError(
+            NodeRegistryResolutionErrorCode.UNPINNED_SOURCE_REF,
+            "Noofy cannot prepare a workflow extension without pinned and verified source facts.",
+            developer_details={
+                "package_id": custom_node.package_id,
+                "source_url": custom_node.source,
+                "validation_error": str(exc),
+            },
+        ) from exc
+
+
+def _existing_custom_node_source_cache_ref(
+    custom_node_source_cache: CustomNodeSourceCache,
+    custom_node: CustomNodeLock,
+) -> str | None:
+    cache_dir = getattr(custom_node_source_cache, "cache_dir", None)
+    if not isinstance(cache_dir, Path):
+        return None
+    digest = _custom_node_source_digest(custom_node.source_content_hash)
+    if digest is None:
+        return None
+    source_cache_ref = f"{digest}/source"
+    source_dir = cache_dir / source_cache_ref
+    manifest_path = cache_dir / digest / CUSTOM_NODE_SOURCE_CACHE_MANIFEST_FILENAME
+    if source_dir.is_dir() and manifest_path.exists():
+        return source_cache_ref
+    return None
+
+
+def _custom_node_source_digest(source_content_hash: str | None) -> str | None:
+    if source_content_hash is None:
+        return None
+    digest = source_content_hash.removeprefix("sha256:").lower()
+    if len(digest) == 64 and all(char in "0123456789abcdef" for char in digest):
+        return digest
+    return None
+
+
+def _custom_node_source_resolution_install_status(
+    exc: NodeRegistryResolutionError,
+) -> InstallStatus:
+    if exc.code in {
+        NodeRegistryResolutionErrorCode.COMMUNITY_OPT_IN_REQUIRED,
+        NodeRegistryResolutionErrorCode.POLICY_BLOCKED_TRUST_LEVEL,
+        NodeRegistryResolutionErrorCode.SOURCE_POLICY_BLOCKED,
+    }:
+        return InstallStatus.BLOCKED_BY_POLICY
+    return InstallStatus.FAILED
 
 
 def _engine_unrecognized_missing_node_types(state: InstallState) -> list[str]:

@@ -534,6 +534,22 @@ def test_bundled_upscale_workflows_declare_model_source_urls() -> None:
         assert capsule_model["comfyui_folder"] == "upscale_models"
         assert capsule_model["filename"] == model["filename"]
         assert capsule_model["source_urls"] == [model["url"]]
+        package_node = package_data["custom_nodes"][0]
+        capsule_node = capsule_data["custom_nodes"][0]
+        assert package_node["source"].startswith("https://codeload.github.com/")
+        assert package_node["source_ref"] == "7f43f2ce910a27971bdbbf3fb5a52081457f32e2"
+        assert package_node["source_content_hash"].startswith("sha256:")
+        assert package_node["source_archive_subdir"]
+        assert package_node["node_types"] == ["ColorMatchV2"]
+        assert "source_cache_ref" not in package_node
+        assert capsule_node["source"] == package_node["source"]
+        assert capsule_node["source_ref"] == package_node["source_ref"]
+        assert capsule_node["source_content_hash"] == package_node["source_content_hash"]
+        assert capsule_node["source_archive_subdir"] == package_node["source_archive_subdir"]
+        assert "ColorMatchV2" in {
+            node.get("class_type")
+            for node in json.loads((workflow_dir / "comfyui_graph.json").read_text(encoding="utf-8")).values()
+        }
 
 
 def test_engine_service_workflow_summary_includes_phase6_trust_metadata() -> None:
