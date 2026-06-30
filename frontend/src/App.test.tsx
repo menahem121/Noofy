@@ -121,7 +121,7 @@ describe("App workflow tabs", () => {
   let missingWorkflowIds: Set<string> = new Set();
 
   beforeEach(() => {
-    lastOpened = null;
+    lastOpened = "2026-05-29T11:00:00+00:00";
     activeRunCount = 0;
     failedCancelCount = 0;
     leaseAvailable = false;
@@ -416,6 +416,14 @@ describe("App workflow tabs", () => {
     });
   }
 
+  async function openTextToImageWorkflow() {
+    const recentSection = await screen.findByRole("region", { name: "Recently Opened" });
+    const heading = within(recentSection).getByRole("heading", { name: "Text to Image" });
+    const row = heading.closest("article");
+    if (!row) throw new Error("Text to Image recent row was not rendered.");
+    fireEvent.click(within(row).getByRole("button", { name: "Open" }));
+  }
+
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
@@ -428,7 +436,7 @@ describe("App workflow tabs", () => {
   it("opens a workflow tab, avoids duplicates, and closes active tabs back to Home", async () => {
     render(<App />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Open Text to Image" }));
+    await openTextToImageWorkflow();
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([url, init]) =>
         String(url).endsWith("/api/workflows/text_to_image_v0/open") && (init as RequestInit | undefined)?.method === "POST",
@@ -452,7 +460,7 @@ describe("App workflow tabs", () => {
     const recentSection = await screen.findByRole("region", { name: "Recently Opened" });
     expect(within(recentSection).getByRole("heading", { name: "Text to Image" })).toBeInTheDocument();
 
-    fireEvent.click(await screen.findByRole("button", { name: "Open Text to Image" }));
+    await openTextToImageWorkflow();
     expect(screen.getAllByRole("button", { name: "Close Text to Image workspace tab" })).toHaveLength(1);
 
     fireEvent.click(screen.getByRole("button", { name: "Close Text to Image workspace tab" }));
@@ -465,7 +473,7 @@ describe("App workflow tabs", () => {
   it("returns to the run page when canceling saved widget edits", async () => {
     render(<App />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Open Text to Image" }));
+    await openTextToImageWorkflow();
     expect(await screen.findByRole("button", { name: "Run workflow" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /workflow options/i }));
@@ -483,7 +491,7 @@ describe("App workflow tabs", () => {
   it("preserves the last output while its workflow tab is open and clears it when the tab closes", async () => {
     render(<App />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Open Text to Image" }));
+    await openTextToImageWorkflow();
     fireEvent.click(await screen.findByRole("button", { name: "Run workflow" }));
     expect(await screen.findByRole("progressbar", { name: "Workflow progress" })).toBeInTheDocument();
     jobProgressStatus = "completed";
@@ -511,7 +519,7 @@ describe("App workflow tabs", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Go to home" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Open Text to Image" }));
+    await openTextToImageWorkflow();
     expect(await screen.findByRole("button", { name: "Run workflow" })).toBeInTheDocument();
     expect(screen.queryByAltText("Generated workflow output")).not.toBeInTheDocument();
   });
@@ -729,7 +737,7 @@ describe("App workflow tabs", () => {
 
     render(<App />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Open Text to Image" }));
+    await openTextToImageWorkflow();
     expect(await screen.findByRole("button", { name: "Run workflow" })).toBeInTheDocument();
 
     dropFiles([new File(["archive"], "run-drop.noofy", { type: "application/octet-stream" })]);
@@ -920,7 +928,7 @@ describe("App workflow tabs", () => {
     };
     render(<App />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Open Text to Image" }));
+    await openTextToImageWorkflow();
     expect(await screen.findByRole("heading", { name: /Dashboard Builder/i })).toBeInTheDocument();
     const widget = await screen.findByTestId("created-widget-ctrl-node-6-text");
     const dataTransfer = internalWidgetDragDataTransfer();
@@ -986,7 +994,7 @@ describe("App workflow tabs", () => {
   it("keeps workflow progress visible across pages and avoids duplicate bars", async () => {
     render(<App />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Open Text to Image" }));
+    await openTextToImageWorkflow();
     fireEvent.click(await screen.findByRole("button", { name: "Run workflow" }));
 
     await waitFor(() => {
@@ -1035,7 +1043,7 @@ describe("App workflow tabs", () => {
   it("does not restore cached running progress after the job finishes away from its workflow page", async () => {
     render(<App />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Open Text to Image" }));
+    await openTextToImageWorkflow();
     fireEvent.click(await screen.findByRole("button", { name: "Run workflow" }));
     await waitFor(() => {
       expect(screen.getByRole("progressbar", { name: "Workflow progress" })).toHaveAttribute("aria-valuenow", "20");
@@ -1056,7 +1064,7 @@ describe("App workflow tabs", () => {
     jobProgressStatus = "unknown";
     render(<App />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Open Text to Image" }));
+    await openTextToImageWorkflow();
     fireEvent.click(await screen.findByRole("button", { name: "Run workflow" }));
 
     await waitFor(() => {
@@ -1095,7 +1103,7 @@ describe("App workflow tabs", () => {
   it("confirms before closing a tab with active workflow work and cancels only after confirmation", async () => {
     render(<App />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Open Text to Image" }));
+    await openTextToImageWorkflow();
     fireEvent.click(await screen.findByRole("button", { name: "Run workflow" }));
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/api/jobs/job-1/progress"))).toBe(true);
@@ -1125,7 +1133,7 @@ describe("App workflow tabs", () => {
     leaseAvailable = true;
     render(<App />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Open Text to Image" }));
+    await openTextToImageWorkflow();
     await screen.findByRole("button", { name: "Run workflow" });
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([url, init]) =>
@@ -1158,7 +1166,7 @@ describe("App workflow tabs", () => {
     failedCancelCount = 1;
     render(<App />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Open Text to Image" }));
+    await openTextToImageWorkflow();
     fireEvent.click(await screen.findByRole("button", { name: "Run workflow" }));
     fireEvent.click(screen.getByRole("button", { name: "Close Text to Image workspace tab" }));
 

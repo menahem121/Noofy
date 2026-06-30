@@ -18,16 +18,16 @@
     "runtime_profile_manifest_hash": "sha256:88c23738a01fcef584a2bc32e498ab6a2bed75c5f08a3c1aa1c4f12496cc07f2",
     "runtime_profile_catalog_version": "0.1.0",
     "fingerprint_schema_version": "0.2.0",
-    "dependency_env_fingerprint": "sha256:060bf15f13fcbadbd6ca9973f7ccfe0c6b80a380b9038d5078fe8b10e4bab97b",
-    "runner_fingerprint": "sha256:be4c1e4c6805b3d146e0443501f4731ae2e6738cfe77af5d515d70ca32c45eb2",
-    "capsule_fingerprint": "sha256:f613287067f64bb9904ab381ad02c7d17a6514bddbc72612e43a2d2c10839b0e",
+    "dependency_env_fingerprint": "sha256:8528472bb29fe5203ffb6d09c9cdc847120fabe1059c6ef06903dbe519551b1b",
+    "runner_fingerprint": "sha256:fa6feb9b66e38d7490b333d8d00009e083311a9529dd1dc1cc27e537656e4401",
+    "capsule_fingerprint": "sha256:16d3d7a5aef4091cf4d9eaee2fa7ff9e8916716bb13a50fb6b11df836dbf6635",
     "os": "linux",
     "architecture": "x64",
     "python_version": "3.13",
     "python_build_id": "cpython-3.13-noofy-v1",
     "gpu_backend": "cuda",
     "dependency_lock_hash": "sha256:d4619fe9e961cfc7e044fba7f8acce276bb0c4a43848a89dad1430a52dcd8986",
-    "runner_workspace_hash": "sha256:be4c1e4c6805b3d146e0443501f4731ae2e6738cfe77af5d515d70ca32c45eb2"
+    "runner_workspace_hash": "sha256:fa6feb9b66e38d7490b333d8d00009e083311a9529dd1dc1cc27e537656e4401"
   },
   "custom_nodes": [],
   "dependencies": {
