@@ -9,7 +9,7 @@ use std::{
     fs,
     io::{self, BufRead, BufReader},
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    process::{Child, Command, ExitStatus, Stdio},
     sync::{mpsc, Arc, Mutex},
     thread,
     time::Duration,
@@ -21,11 +21,36 @@ const NOOFY_RUNTIME_RESOURCE_DIR: &str = "noofy-runtime";
 const RUNTIME_MANIFEST_NAME: &str = "runtime-manifest.json";
 const OPEN_WORKFLOW_FILE_EVENT: &str = "noofy-open-workflow-file";
 const MAX_NOOFY_FILE_BYTES: u64 = 512 * 1024 * 1024;
+const BACKEND_STARTUP_LOG_LINE_LIMIT: usize = 40;
 
 struct BackendRuntime {
     process: BackendProcess,
     api_base_url: String,
     api_token: String,
+}
+
+#[derive(Clone, Default)]
+struct BackendStartupLog {
+    lines: Arc<Mutex<Vec<String>>>,
+}
+
+impl BackendStartupLog {
+    fn push(&self, line: String) {
+        let Ok(mut lines) = self.lines.lock() else {
+            return;
+        };
+        lines.push(truncate_backend_log_line(&line));
+        while lines.len() > BACKEND_STARTUP_LOG_LINE_LIMIT {
+            lines.remove(0);
+        }
+    }
+
+    fn snapshot(&self) -> Vec<String> {
+        self.lines
+            .lock()
+            .map(|lines| lines.clone())
+            .unwrap_or_default()
+    }
 }
 
 struct BackendProcess {
@@ -115,11 +140,17 @@ struct PackagedRuntimeLayout {
     backend_sidecar: Option<PathBuf>,
 }
 
-#[derive(Clone, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct FrontendRuntimeConfig {
     api_base_url: String,
     api_token: String,
+}
+
+#[derive(Clone, Debug)]
+enum DesktopStartupState {
+    Ready(FrontendRuntimeConfig),
+    Failed(String),
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -148,8 +179,13 @@ struct BackendProcessLease {
 }
 
 #[tauri::command]
-fn noofy_runtime_config(config: tauri::State<'_, FrontendRuntimeConfig>) -> FrontendRuntimeConfig {
-    config.inner().clone()
+fn noofy_runtime_config(
+    startup: tauri::State<'_, DesktopStartupState>,
+) -> Result<FrontendRuntimeConfig, String> {
+    match startup.inner() {
+        DesktopStartupState::Ready(config) => Ok(config.clone()),
+        DesktopStartupState::Failed(message) => Err(message.clone()),
+    }
 }
 
 #[tauri::command]
@@ -275,7 +311,7 @@ fn main() {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     let pending_for_run_event = pending_open_file.clone();
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(move |app, args, cwd| {
             let cwd = PathBuf::from(cwd);
             if let Some(file) = first_noofy_file_from_strings(args, Some(&cwd)) {
@@ -298,18 +334,31 @@ fn main() {
             open_folder
         ])
         .setup(move |app| {
-            let runtime = start_backend(app)?;
-            let init_script = runtime_config_script(&runtime.api_base_url, &runtime.api_token)?;
-            app.manage(FrontendRuntimeConfig {
-                api_base_url: runtime.api_base_url.clone(),
-                api_token: runtime.api_token.clone(),
-            });
             app.manage(pending_open_file.clone());
 
-            let mut backend_guard = backend_for_setup.lock().map_err(|_| {
-                io::Error::new(io::ErrorKind::Other, "backend process lock is poisoned")
-            })?;
-            *backend_guard = Some(runtime.process);
+            let init_script = match start_backend(app) {
+                Ok(runtime) => {
+                    let config = FrontendRuntimeConfig {
+                        api_base_url: runtime.api_base_url.clone(),
+                        api_token: runtime.api_token.clone(),
+                    };
+                    let init_script =
+                        runtime_config_script(&config.api_base_url, &config.api_token);
+                    app.manage(DesktopStartupState::Ready(config));
+
+                    let mut backend_guard = backend_for_setup.lock().map_err(|_| {
+                        io::Error::new(io::ErrorKind::Other, "backend process lock is poisoned")
+                    })?;
+                    *backend_guard = Some(runtime.process);
+                    init_script
+                }
+                Err(error) => {
+                    let message = format_backend_startup_error(error.as_ref());
+                    eprintln!("[noofy-launcher] backend startup failed: {message}");
+                    app.manage(DesktopStartupState::Failed(message));
+                    String::new()
+                }
+            };
 
             WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                 .title("Noofy")
@@ -326,24 +375,30 @@ fn main() {
                 terminate_backend(&backend_for_window);
             }
         })
-        .build(tauri::generate_context!())
-        .expect("failed to build Noofy Tauri application")
-        .run(move |app_handle, event| {
-            #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-            let _ = app_handle;
-            match event {
-                #[cfg(any(target_os = "macos", target_os = "ios"))]
-                RunEvent::Opened { urls } => {
-                    if let Some(file) = first_noofy_file_from_urls(urls) {
-                        handle_noofy_open_request(app_handle, &pending_for_run_event, file);
-                    }
+        .build(tauri::generate_context!());
+    let app = match app {
+        Ok(app) => app,
+        Err(error) => {
+            eprintln!("[noofy-launcher] failed to build Noofy Tauri application: {error}");
+            std::process::exit(1);
+        }
+    };
+    app.run(move |app_handle, event| {
+        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+        let _ = app_handle;
+        match event {
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            RunEvent::Opened { urls } => {
+                if let Some(file) = first_noofy_file_from_urls(urls) {
+                    handle_noofy_open_request(app_handle, &pending_for_run_event, file);
                 }
-                RunEvent::ExitRequested { .. } => {
-                    terminate_backend(&backend_for_exit);
-                }
-                _ => {}
             }
-        });
+            RunEvent::ExitRequested { .. } => {
+                terminate_backend(&backend_for_exit);
+            }
+            _ => {}
+        }
+    });
 }
 
 fn handle_noofy_open_request(
@@ -444,6 +499,7 @@ fn start_backend(app: &tauri::App) -> Result<BackendRuntime, Box<dyn std::error:
     let api_token = generate_api_token();
     let context = BackendLaunchContext::from_app(app)?;
     let launch = backend_launch_spec(&context)?;
+    let startup_log = BackendStartupLog::default();
     let lease_path = context
         .app_data_dir
         .as_ref()
@@ -488,36 +544,47 @@ fn start_backend(app: &tauri::App) -> Result<BackendRuntime, Box<dyn std::error:
 
     let (handoff_sender, handoff_receiver) = mpsc::channel();
     let stdout_api_token = api_token.clone();
+    let stdout_startup_log = startup_log.clone();
     thread::spawn(move || {
         let reader = BufReader::new(stdout);
         for line in reader.lines().map_while(Result::ok) {
             if line.starts_with(BACKEND_HANDOFF_PREFIX) {
                 let _ = handoff_sender.send(line);
             } else {
-                eprintln!(
-                    "[noofy-backend] {}",
-                    redact_backend_log_line(&line, &stdout_api_token)
-                );
+                let redacted = redact_backend_log_line(&line, &stdout_api_token);
+                stdout_startup_log.push(format!("stdout: {redacted}"));
+                eprintln!("[noofy-backend] {}", redacted);
             }
         }
     });
 
     let stderr_api_token = api_token.clone();
+    let stderr_startup_log = startup_log.clone();
     thread::spawn(move || {
         let reader = BufReader::new(stderr);
         for line in reader.lines().map_while(Result::ok) {
-            eprintln!(
-                "[noofy-backend] {}",
-                redact_backend_log_line(&line, &stderr_api_token)
-            );
+            let redacted = redact_backend_log_line(&line, &stderr_api_token);
+            stderr_startup_log.push(format!("stderr: {redacted}"));
+            eprintln!("[noofy-backend] {}", redacted);
         }
     });
 
     let handoff = match handoff_receiver.recv_timeout(Duration::from_secs(20)) {
         Ok(line) => line,
         Err(error) => {
+            let status = process
+                .child_mut()
+                .ok()
+                .and_then(|child| child.try_wait().ok())
+                .flatten();
+            let recent_output = startup_log.snapshot();
+            let message = backend_handoff_failure_message(&error, status, &recent_output);
             process.shutdown();
-            return Err(Box::new(error));
+            let kind = match error {
+                mpsc::RecvTimeoutError::Timeout => io::ErrorKind::TimedOut,
+                mpsc::RecvTimeoutError::Disconnected => io::ErrorKind::BrokenPipe,
+            };
+            return Err(Box::new(io::Error::new(kind, message)));
         }
     };
     let api_base_url = handoff
@@ -1183,15 +1250,45 @@ fn generate_api_token() -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-fn runtime_config_script(
-    api_base_url: &str,
-    api_token: &str,
-) -> Result<String, Box<dyn std::error::Error>> {
+fn runtime_config_script(api_base_url: &str, api_token: &str) -> String {
     let config = serde_json::json!({
         "apiBaseUrl": api_base_url,
         "apiToken": api_token,
     });
-    Ok(format!("window.__NOOFY_RUNTIME_CONFIG__ = {config};"))
+    format!("window.__NOOFY_RUNTIME_CONFIG__ = {config};")
+}
+
+fn format_backend_startup_error(error: &(dyn std::error::Error + 'static)) -> String {
+    let detail = error.to_string();
+    if detail.trim().is_empty() {
+        "Noofy could not start its local backend service.".to_string()
+    } else {
+        format!("Noofy could not start its local backend service. {detail}")
+    }
+}
+
+fn backend_handoff_failure_message(
+    error: &mpsc::RecvTimeoutError,
+    status: Option<ExitStatus>,
+    recent_output: &[String],
+) -> String {
+    let mut lines = Vec::new();
+    match error {
+        mpsc::RecvTimeoutError::Timeout => {
+            lines.push("Backend did not report its local API URL within 20 seconds.".to_string());
+        }
+        mpsc::RecvTimeoutError::Disconnected => {
+            lines.push("Backend exited before reporting its local API URL.".to_string());
+        }
+    }
+    if let Some(status) = status {
+        lines.push(format!("Backend process status: {status}."));
+    }
+    if !recent_output.is_empty() {
+        lines.push("Recent backend output:".to_string());
+        lines.extend(recent_output.iter().cloned());
+    }
+    lines.join("\n")
 }
 
 fn redact_backend_log_line(line: &str, api_token: &str) -> String {
@@ -1199,6 +1296,15 @@ fn redact_backend_log_line(line: &str, api_token: &str) -> String {
         return line.to_string();
     }
     line.replace(api_token, "[redacted]")
+}
+
+fn truncate_backend_log_line(line: &str) -> String {
+    const MAX_LOG_LINE_CHARS: usize = 1_000;
+    let mut truncated = line.chars().take(MAX_LOG_LINE_CHARS).collect::<String>();
+    if truncated.len() < line.len() {
+        truncated.push_str("...");
+    }
+    truncated
 }
 
 #[cfg(unix)]
@@ -2086,6 +2192,24 @@ mod tests {
             ),
             "GET /api/jobs/job-1/events?token=[redacted] HTTP/1.1"
         );
+    }
+
+    #[test]
+    fn backend_handoff_failure_includes_recent_output() {
+        let recent_output = vec![
+            "stderr: ImportError: backend dependency is missing".to_string(),
+            "stderr: ModuleNotFoundError: No module named 'uvicorn'".to_string(),
+        ];
+
+        let message = backend_handoff_failure_message(
+            &mpsc::RecvTimeoutError::Disconnected,
+            None,
+            &recent_output,
+        );
+
+        assert!(message.contains("Backend exited before reporting its local API URL."));
+        assert!(message.contains("Recent backend output:"));
+        assert!(message.contains("ModuleNotFoundError"));
     }
 
     #[cfg(unix)]
