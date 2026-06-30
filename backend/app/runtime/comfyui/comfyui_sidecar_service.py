@@ -21,6 +21,8 @@ from app.runtime.manager import RuntimeManager
 class ComfyUISidecarService:
     """Owns ComfyUI sidecar lifecycle and runtime maintenance operations."""
 
+    _FIRST_BOOTSTRAP_START_RETRY_STATUSES = {"startup_timeout"}
+
     def __init__(
         self,
         *,
@@ -93,6 +95,7 @@ class ComfyUISidecarService:
 
     async def start(self):
         result = await self.runtime_manager.start()
+        bootstrapped_bundled_environment = False
         if self._should_bootstrap_bundled_environment(result):
             self._log(
                 "info",
@@ -101,6 +104,7 @@ class ComfyUISidecarService:
             )
             bootstrap = await self.runtime_manager.bootstrap_environment()
             if bootstrap.status in {"prepared", "already_prepared"}:
+                bootstrapped_bundled_environment = True
                 result = await self.runtime_manager.start()
             else:
                 self._log(
@@ -122,6 +126,19 @@ class ComfyUISidecarService:
                         update={"environment": bootstrap.environment}
                     ),
                 )
+        if (
+            bootstrapped_bundled_environment
+            and result.status in self._FIRST_BOOTSTRAP_START_RETRY_STATUSES
+        ):
+            self._log(
+                "warning",
+                "Retrying bundled ComfyUI start after first-launch timeout",
+                details={
+                    "status": result.status,
+                    "error": result.comfyui.error,
+                },
+            )
+            result = await self.runtime_manager.start()
         if (
             self.update_service is not None
             and result.status in {"environment_not_ready", "repo_missing", "startup_failed"}

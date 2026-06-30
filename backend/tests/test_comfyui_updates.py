@@ -184,6 +184,29 @@ class AutoBootstrapRuntimeManager:
         )
 
 
+class FirstLaunchTimeoutRuntimeManager(AutoBootstrapRuntimeManager):
+    def __init__(self, *, second_retry_starts: bool = True) -> None:
+        super().__init__()
+        self.second_retry_starts = second_retry_starts
+
+    async def start(self) -> ProcessActionResult:
+        self.start_calls += 1
+        if self.start_calls == 1:
+            return ProcessActionResult(
+                status="environment_not_ready",
+                comfyui=self._status(reachable=False, source_kind="bundled"),
+            )
+        if self.start_calls == 2 or not self.second_retry_starts:
+            return ProcessActionResult(
+                status="startup_timeout",
+                comfyui=self._status(reachable=False, source_kind="bundled"),
+            )
+        return ProcessActionResult(
+            status="started",
+            comfyui=self._status(reachable=True, source_kind="bundled"),
+        )
+
+
 class InstalledRuntimeManager(AutoBootstrapRuntimeManager):
     async def start(self) -> ProcessActionResult:
         self.start_calls += 1
@@ -219,6 +242,30 @@ async def test_bundled_first_start_bootstraps_environment_then_starts() -> None:
     assert result.status == "started"
     assert manager.bootstrap_calls == 1
     assert manager.start_calls == 2
+
+
+@pytest.mark.anyio
+async def test_bundled_first_launch_timeout_retries_once_after_bootstrap() -> None:
+    manager = FirstLaunchTimeoutRuntimeManager()
+    service = ComfyUISidecarService(runtime_manager=manager)  # type: ignore[arg-type]
+
+    result = await service.start()
+
+    assert result.status == "started"
+    assert manager.bootstrap_calls == 1
+    assert manager.start_calls == 3
+
+
+@pytest.mark.anyio
+async def test_bundled_first_launch_timeout_retry_does_not_loop_forever() -> None:
+    manager = FirstLaunchTimeoutRuntimeManager(second_retry_starts=False)
+    service = ComfyUISidecarService(runtime_manager=manager)  # type: ignore[arg-type]
+
+    result = await service.start()
+
+    assert result.status == "startup_timeout"
+    assert manager.bootstrap_calls == 1
+    assert manager.start_calls == 3
 
 
 @pytest.mark.anyio
