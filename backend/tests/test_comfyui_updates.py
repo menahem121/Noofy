@@ -19,7 +19,14 @@ from app.runtime.comfyui.comfyui_updates import (
 )
 from app.runtime.runners.runtime_activation import ComfyUIActivationError
 from app.runtime.environment import CommandResult
-from app.engine.models import ComfyUIRuntimeStatus, ProcessActionResult, RuntimeHardwareProfile
+from app.engine.models import (
+    ComfyUIRuntimeStatus,
+    ComfyUIVersionMetadata,
+    ProcessActionResult,
+    RuntimeBootstrapResult,
+    RuntimeHardwareProfile,
+)
+from app.runtime.comfyui.comfyui_sidecar_service import ComfyUISidecarService
 from app.runtime.manager import RuntimeManager
 from app.runtime.profiles import (
     RuntimeSourceOriginKind,
@@ -138,6 +145,97 @@ class FakeRepairManager:
         self.python_executable = python_executable
         self.environment = environment
         self.reconfigured = True
+
+
+class AutoBootstrapRuntimeManager:
+    mode = "managed"
+
+    def __init__(self) -> None:
+        self.start_calls = 0
+        self.bootstrap_calls = 0
+
+    async def start(self) -> ProcessActionResult:
+        self.start_calls += 1
+        if self.start_calls == 1:
+            return ProcessActionResult(
+                status="environment_not_ready",
+                comfyui=self._status(reachable=False, source_kind="bundled"),
+            )
+        return ProcessActionResult(
+            status="started",
+            comfyui=self._status(reachable=True, source_kind="bundled"),
+        )
+
+    async def bootstrap_environment(self) -> RuntimeBootstrapResult:
+        self.bootstrap_calls += 1
+        return RuntimeBootstrapResult(status="prepared", environment=None)
+
+    async def status(self) -> ComfyUIRuntimeStatus:
+        return self._status(reachable=False, source_kind="bundled")
+
+    def _status(self, *, reachable: bool, source_kind: str) -> ComfyUIRuntimeStatus:
+        return ComfyUIRuntimeStatus(
+            mode="managed",
+            reachable=reachable,
+            base_url="http://127.0.0.1:9000",
+            repo_dir="/Applications/Noofy.app/Contents/Resources/noofy-runtime/comfyui",
+            managed_process_running=reachable,
+            version=ComfyUIVersionMetadata(source_kind=source_kind),
+        )
+
+
+class InstalledRuntimeManager(AutoBootstrapRuntimeManager):
+    async def start(self) -> ProcessActionResult:
+        self.start_calls += 1
+        return ProcessActionResult(
+            status="environment_not_ready",
+            comfyui=self._status(reachable=False, source_kind="installed"),
+        )
+
+
+class RepairService:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def repair_after_start_failure(
+        self,
+        result: ProcessActionResult,
+        *,
+        repair_reason: str,
+    ) -> ProcessActionResult:
+        self.calls += 1
+        return ProcessActionResult(
+            status="repair_completed_started", comfyui=result.comfyui
+        )
+
+
+@pytest.mark.anyio
+async def test_bundled_first_start_bootstraps_environment_then_starts() -> None:
+    manager = AutoBootstrapRuntimeManager()
+    service = ComfyUISidecarService(runtime_manager=manager)  # type: ignore[arg-type]
+
+    result = await service.start()
+
+    assert result.status == "started"
+    assert manager.bootstrap_calls == 1
+    assert manager.start_calls == 2
+
+
+@pytest.mark.anyio
+async def test_installed_environment_not_ready_uses_repair_path() -> None:
+    manager = InstalledRuntimeManager()
+    repair = RepairService()
+    service = ComfyUISidecarService(
+        runtime_manager=manager,  # type: ignore[arg-type]
+        update_service=repair,  # type: ignore[arg-type]
+    )
+
+    result = await service.start()
+
+    assert result.status == "repair_completed_started"
+    assert manager.bootstrap_calls == 0
+    assert manager.start_calls == 1
+    assert repair.calls == 1
 
 
 class RunningActivationManager(FakeRepairManager):

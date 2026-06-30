@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from app.engine.models import RuntimeBootstrapResult
+from app.engine.models import ProcessActionResult, RuntimeBootstrapResult
 from app.runtime.comfyui.comfyui_updates import (
     ComfyUIRebuildRequest,
     ComfyUIUpdateRequest,
@@ -93,6 +93,35 @@ class ComfyUISidecarService:
 
     async def start(self):
         result = await self.runtime_manager.start()
+        if self._should_bootstrap_bundled_environment(result):
+            self._log(
+                "info",
+                "Preparing bundled ComfyUI environment before first start",
+                details={"reason": result.comfyui.error or result.status},
+            )
+            bootstrap = await self.runtime_manager.bootstrap_environment()
+            if bootstrap.status in {"prepared", "already_prepared"}:
+                result = await self.runtime_manager.start()
+            else:
+                self._log(
+                    "error",
+                    "Bundled ComfyUI environment preparation failed",
+                    details={
+                        "status": bootstrap.status,
+                        "error": (
+                            bootstrap.environment.error
+                            if bootstrap.environment is not None
+                            else None
+                        ),
+                    },
+                )
+                status = await self.runtime_manager.status()
+                result = ProcessActionResult(
+                    status=bootstrap.status,
+                    comfyui=status.model_copy(
+                        update={"environment": bootstrap.environment}
+                    ),
+                )
         if (
             self.update_service is not None
             and result.status in {"environment_not_ready", "repo_missing", "startup_failed"}
@@ -107,6 +136,23 @@ class ComfyUISidecarService:
 
     async def start_comfyui(self):
         return await self.start()
+
+    def _should_bootstrap_bundled_environment(self, result) -> bool:
+        if result.status != "environment_not_ready":
+            return False
+        version = getattr(result.comfyui, "version", None)
+        return getattr(version, "source_kind", None) == "bundled"
+
+    def _log(
+        self,
+        level: str,
+        message: str,
+        *,
+        details: dict[str, object] | None = None,
+    ) -> None:
+        log_store = getattr(self.runtime_manager, "log_store", None)
+        if log_store is not None:
+            log_store.add(level, message, "runtime.comfyui_sidecar", details=details)
 
     async def stop(self):
         return await self.runtime_manager.stop()
