@@ -32,6 +32,7 @@ import {
   fetchNoofyRuntimeUpdateStatus,
   fetchRuntimeStatus,
   rebuildComfyUI,
+  removeLocalEngineFiles,
   startEngine,
   stageNoofyRuntimeUpdate,
   stopEngine,
@@ -52,6 +53,7 @@ import {
 } from "../../lib/api/noofyApi";
 import { openFolder, selectFolder } from "../../lib/folderDialogs";
 import { useAppPreferences } from "../../lib/useAppPreferences";
+import { formatBytes } from "../models/modelUi";
 import { AppLayout, type AppRouteId } from "../app/AppLayout";
 import { useRuntimeStatus } from "../app/RuntimeStatusProvider";
 
@@ -118,6 +120,7 @@ const ACTION_OK_STATUSES = new Set([
   "already_running",
   "stopped",
   "completed",
+  "engine_files_removed",
   "repair_completed_started",
 ]);
 const ACTION_RESULT_LABELS: Record<string, string> = {
@@ -164,6 +167,8 @@ const ACTION_RESULT_LABELS: Record<string, string> = {
     "The startup memory mode was saved and ComfyUI restarted.",
   updated_restart_failed:
     "The startup memory mode was saved, but ComfyUI could not restart.",
+  engine_files_removed:
+    "Local engine files were removed. Noofy will set up ComfyUI again the next time the engine starts.",
 };
 
 const VRAM_MODE_OPTIONS: Array<{
@@ -234,6 +239,9 @@ function actionResultMessage(result: { label: string; status: string }) {
       return "Repair Setup failed. No changes were applied.";
     if (result.status === "blocked")
       return "Repair Setup is not available right now.";
+  }
+  if (result.label === "remove-engine-files") {
+    return result.status;
   }
   return ACTION_RESULT_LABELS[result.status] ?? result.status;
 }
@@ -702,6 +710,42 @@ export function EngineSettingsPage({
     }
   }
 
+  async function removeEngineFiles() {
+    const confirmed = window.confirm(
+      "Remove local ComfyUI engine files from this computer? Noofy will keep your workflows, outputs, API keys, and model files. The engine will be set up again the next time it starts.",
+    );
+    if (!confirmed) return;
+    setState((current) => ({
+      ...current,
+      action: "remove-engine-files",
+      error: null,
+      actionResult: null,
+    }));
+    try {
+      const result = await removeLocalEngineFiles();
+      const deletedSize = formatBytes(result.bytes_deleted);
+      setState((current) => ({
+        ...current,
+        actionResult: {
+          label: "remove-engine-files",
+          status: `Removed ${deletedSize} of local engine files. Noofy will set up ComfyUI again the next time the engine starts.`,
+          ok: true,
+        },
+      }));
+      await refresh();
+    } catch (error) {
+      runtimeStatus.markActionFailure(error);
+      void runtimeStatus.refreshRuntime({ force: true, silent: false });
+      setState((current) => ({
+        ...current,
+        action: null,
+        error: error instanceof Error ? error.message : String(error),
+      }));
+    } finally {
+      setState((current) => ({ ...current, action: null }));
+    }
+  }
+
   async function saveApiKey(provider: ApiKeyProviderId) {
     const apiKey = state.apiDrafts[provider].trim();
     if (!apiKey) return;
@@ -1133,6 +1177,30 @@ export function EngineSettingsPage({
                   )}
                   {environmentPrepared ? "Repair Setup" : "Set Up ComfyUI"}
                 </button>
+              </div>
+              <div className="notice notice--warning" role="status">
+                <Trash2 size={18} aria-hidden="true" />
+                <div>
+                  <strong>Local engine files</strong>
+                  <span>
+                    Remove the regenerated ComfyUI runtime files before
+                    uninstalling Noofy. Workflows, outputs, API keys, and model
+                    files stay in place.
+                  </span>
+                  <button
+                    className="secondary-button secondary-button--danger"
+                    type="button"
+                    disabled={state.action !== null}
+                    onClick={() => void removeEngineFiles()}
+                  >
+                    {state.action === "remove-engine-files" ? (
+                      <Loader2 className="spin" size={16} aria-hidden="true" />
+                    ) : (
+                      <Trash2 size={16} aria-hidden="true" />
+                    )}
+                    Remove Local Engine Files
+                  </button>
+                </div>
               </div>
             </section>
 

@@ -3,6 +3,7 @@ from fastapi import APIRouter, HTTPException
 from app.api.deps import (
     ApiKeyServiceDep,
     EngineServiceDep,
+    LocalEngineFilesServiceDep,
     ModelFolderServiceDep,
     NoofyRuntimeUpdateServiceDep,
     OnboardingServiceDep,
@@ -69,6 +70,16 @@ async def activate_noofy_runtime_update(
     noofy_runtime_update_service: NoofyRuntimeUpdateServiceDep,
 ):
     return await noofy_runtime_update_service.activate_pending()
+
+
+@router.delete("/settings/local-engine-files")
+async def remove_local_engine_files(
+    local_engine_files_service: LocalEngineFilesServiceDep,
+):
+    try:
+        return await local_engine_files_service.remove()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.put("/settings/model-folders")

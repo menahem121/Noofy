@@ -15,6 +15,7 @@ from app.models.tags import ModelTagStore
 from app.runtime.comfyui.comfyui_sidecar_service import ComfyUISidecarService
 from app.runtime.noofy_runtime import NoofyRuntimeUpdateService
 from app.settings.api_keys import ApiKeySettingsService
+from app.settings.local_engine import LocalEngineFilesService
 from app.settings.onboarding import OnboardingSettingsService
 from app.models.folders import ModelFolderSettingsService
 from app.runs.job_service import RunJobService
@@ -106,6 +107,12 @@ def get_noofy_runtime_update_service(
     return services.noofy_runtime_update_service
 
 
+def get_local_engine_files_service(
+    services: Annotated[ApiServices, Depends(get_api_services)],
+) -> LocalEngineFilesService:
+    return services.local_engine_files_service
+
+
 def get_model_inventory_service(
     services: Annotated[ApiServices, Depends(get_api_services)],
 ) -> ModelInventoryService:
@@ -135,6 +142,10 @@ CivitaiLoraServiceDep = Annotated[CivitaiLoraBrowserService, Depends(get_civitai
 NoofyRuntimeUpdateServiceDep = Annotated[
     NoofyRuntimeUpdateService,
     Depends(get_noofy_runtime_update_service),
+]
+LocalEngineFilesServiceDep = Annotated[
+    LocalEngineFilesService,
+    Depends(get_local_engine_files_service),
 ]
 
 

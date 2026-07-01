@@ -291,6 +291,11 @@ describe("EngineSettingsPage", () => {
     ).toBeInTheDocument();
     expect(
       within(panel as HTMLElement).getByRole("button", {
+        name: "Remove Local Engine Files",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      within(panel as HTMLElement).getByRole("button", {
         name: /check updates/i,
       }),
     ).toBeInTheDocument();
@@ -394,6 +399,67 @@ describe("EngineSettingsPage", () => {
 
     expect(await screen.findByText("ComfyUI started.")).toBeInTheDocument();
     expect(actionUrls).toEqual(["start"]);
+  });
+
+  it("removes local engine files only after confirmation", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    fetchMock.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith("/api/runtime"))
+          return Promise.resolve(jsonResponse(stoppedRuntime));
+        if (url.endsWith("/api/engine/comfyui/versions"))
+          return Promise.resolve(jsonResponse(versions));
+        if (url.endsWith("/api/engine/comfyui/launch-settings"))
+          return Promise.resolve(jsonResponse(launchSettings));
+        if (url.endsWith("/api/settings/apis"))
+          return Promise.resolve(jsonResponse(apiSettings));
+        if (url.endsWith("/api/settings/model-folders"))
+          return Promise.resolve(jsonResponse(modelFolderSettings));
+        if (url.endsWith("/api/settings/noofy-runtime"))
+          return Promise.resolve(jsonResponse(noofyRuntimeSettings));
+        if (
+          url.endsWith("/api/settings/local-engine-files") &&
+          init?.method === "DELETE"
+        ) {
+          return Promise.resolve(
+            jsonResponse({
+              status: "removed",
+              bytes_deleted: 3_221_225_472,
+              deleted_paths: [
+                {
+                  path: "/Users/test/Library/Application Support/Noofy/runtime",
+                  bytes_deleted: 3_221_225_472,
+                },
+              ],
+              skipped_paths: [],
+              preserved_paths: {
+                models: "/Users/test/Documents/Noofy Models",
+                outputs: "/Users/test/Library/Application Support/Noofy/outputs",
+                workflows:
+                  "/Users/test/Library/Application Support/Noofy/workflow-store",
+              },
+            }),
+          );
+        }
+        return Promise.reject(new Error(`Unexpected request: ${url}`));
+      },
+    );
+
+    renderSettingsPage();
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Remove Local Engine Files",
+      }),
+    );
+
+    expect(confirm).toHaveBeenCalledWith(
+      expect.stringContaining("Noofy will keep your workflows"),
+    );
+    expect(
+      await screen.findByText(/Removed 3\.0 GB of local engine files/i),
+    ).toBeInTheDocument();
   });
 
   it("loads upstream ComfyUI release options only when explicitly requested", async () => {

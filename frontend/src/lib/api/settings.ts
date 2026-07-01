@@ -121,6 +121,18 @@ export interface NoofyRuntimeActivateResult {
   error: string | null;
 }
 
+export interface LocalEngineFilesRemoveResult {
+  status: string;
+  bytes_deleted: number;
+  deleted_paths: Array<{ path: string; bytes_deleted: number }>;
+  skipped_paths: string[];
+  preserved_paths: {
+    models: string;
+    outputs: string;
+    workflows: string;
+  };
+}
+
 export function fetchApiKeySettings() {
   return getJson<ApiKeySettingsResponse>("/settings/apis");
 }
@@ -159,6 +171,10 @@ export function activateNoofyRuntimeUpdate() {
   return postJson<NoofyRuntimeActivateResult>(
     "/settings/noofy-runtime/activate",
   );
+}
+
+export function removeLocalEngineFiles() {
+  return deleteJson<LocalEngineFilesRemoveResult>("/settings/local-engine-files");
 }
 
 export function updateExternalApiKey(

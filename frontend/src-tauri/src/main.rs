@@ -396,6 +396,9 @@ fn main() {
             RunEvent::ExitRequested { .. } => {
                 terminate_backend(&backend_for_exit);
             }
+            RunEvent::Exit => {
+                terminate_backend(&backend_for_exit);
+            }
             _ => {}
         }
     });
@@ -1397,14 +1400,9 @@ fn recover_stale_backend(path: &Path, launch: &BackendLaunchSpec) -> io::Result<
     ))
 }
 
-#[cfg(all(unix, test))]
-fn process_is_running(pid: u32) -> bool {
-    unsafe { libc::kill(pid as i32, 0) == 0 }
-}
-
 #[cfg(unix)]
 fn backend_process_tree_is_running(pid: u32) -> bool {
-    unsafe { libc::kill(-(pid as i32), 0) == 0 }
+    signal_probe_is_running(unsafe { libc::kill(-(pid as i32), 0) })
 }
 
 #[cfg(windows)]
@@ -1414,6 +1412,14 @@ fn backend_process_tree_is_running(_pid: u32) -> bool {
 
 #[cfg(unix)]
 fn stale_backend_matches(lease: &BackendProcessLease, launch: &BackendLaunchSpec) -> bool {
+    let current_identity = process_creation_identity(lease.pid);
+    if lease.process_identity.as_deref().is_none()
+        || lease.process_identity.as_deref() != current_identity.as_deref()
+        || unsafe { libc::getpgid(lease.pid as i32) } != lease.pid as i32
+    {
+        return false;
+    }
+
     let expected_program = PathBuf::from(&launch.program)
         .canonicalize()
         .unwrap_or_else(|_| PathBuf::from(&launch.program))
@@ -1423,18 +1429,17 @@ fn stale_backend_matches(lease: &BackendProcessLease, launch: &BackendLaunchSpec
         .current_dir
         .canonicalize()
         .unwrap_or_else(|_| launch.current_dir.clone());
-    if lease.process_identity.as_deref() != process_creation_identity(lease.pid).as_deref()
-        || lease.process_identity.is_none()
-        || lease.program != expected_program
-        || PathBuf::from(&lease.current_dir) != expected_cwd
-        || unsafe { libc::getpgid(lease.pid as i32) } != lease.pid as i32
-    {
-        return false;
-    }
     let command = unix_process_command(lease.pid);
     let cwd = unix_process_cwd(lease.pid);
-    command_matches_backend_launch(&command, &expected_program, launch)
-        && cwd.as_ref() == Some(&expected_cwd)
+    if lease.program == expected_program && PathBuf::from(&lease.current_dir) == expected_cwd {
+        if command_matches_backend_launch(&command, &expected_program, launch)
+            && cwd.as_ref() == Some(&expected_cwd)
+        {
+            return true;
+        }
+    }
+
+    moved_packaged_backend_matches(lease, launch, &command, cwd.as_ref())
 }
 
 #[cfg(unix)]
@@ -1444,6 +1449,10 @@ fn command_matches_backend_launch(
     launch: &BackendLaunchSpec,
 ) -> bool {
     if command.contains(expected_program) {
+        return true;
+    }
+    let launch_program = launch.program.to_string_lossy();
+    if !launch_program.is_empty() && command.contains(launch_program.as_ref()) {
         return true;
     }
 
@@ -1469,6 +1478,56 @@ fn command_contains_launch_args(command: &str, args: &[OsString]) -> bool {
         .collect::<Vec<_>>()
         .join(" ");
     !expected_args.is_empty() && command.contains(&expected_args)
+}
+
+#[cfg(unix)]
+fn moved_packaged_backend_matches(
+    lease: &BackendProcessLease,
+    launch: &BackendLaunchSpec,
+    command: &str,
+    cwd: Option<&PathBuf>,
+) -> bool {
+    let Some(cwd) = cwd else {
+        return false;
+    };
+    if !path_is_packaged_backend_workdir(Path::new(&lease.current_dir))
+        || !path_is_packaged_backend_workdir(&launch.current_dir)
+        || !path_is_packaged_backend_workdir(cwd)
+    {
+        return false;
+    }
+    command_contains_launch_args(command, &launch.args)
+        && (command.contains(NOOFY_RUNTIME_RESOURCE_DIR)
+            || command_matches_framework_python_backend(command, launch))
+}
+
+#[cfg(unix)]
+fn path_is_packaged_backend_workdir(path: &Path) -> bool {
+    let file_name = path.file_name().and_then(|name| name.to_str());
+    if file_name == Some(NOOFY_RUNTIME_RESOURCE_DIR) {
+        return true;
+    }
+    file_name == Some("backend")
+        && path
+            .parent()
+            .and_then(|parent| parent.file_name())
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name == NOOFY_RUNTIME_RESOURCE_DIR)
+}
+
+#[cfg(unix)]
+fn command_matches_framework_python_backend(command: &str, launch: &BackendLaunchSpec) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        command.contains("/Python.app/Contents/MacOS/Python")
+            && command_contains_launch_args(command, &launch.args)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = command;
+        let _ = launch;
+        false
+    }
 }
 
 #[cfg(unix)]
@@ -1589,6 +1648,19 @@ fn process_creation_identity(pid: u32) -> Option<String> {
 }
 
 #[cfg(unix)]
+fn process_is_running(pid: u32) -> bool {
+    signal_probe_is_running(unsafe { libc::kill(pid as i32, 0) })
+}
+
+#[cfg(unix)]
+fn signal_probe_is_running(result: i32) -> bool {
+    if result == 0 {
+        return true;
+    }
+    io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(unix)]
 fn unix_process_command(pid: u32) -> String {
     let proc_cmdline = PathBuf::from(format!("/proc/{pid}/cmdline"));
     if let Ok(bytes) = fs::read(proc_cmdline) {
@@ -1629,17 +1701,40 @@ fn stale_backend_matches(_lease: &BackendProcessLease, _launch: &BackendLaunchSp
 
 #[cfg(unix)]
 fn terminate_stale_backend(pid: u32) {
-    unsafe {
-        libc::kill(-(pid as i32), libc::SIGTERM);
+    signal_process(pid as i32, libc::SIGTERM);
+    let parent_deadline = Instant::now() + Duration::from_secs(8);
+    while process_is_running(pid) && Instant::now() < parent_deadline {
+        thread::sleep(Duration::from_millis(100));
     }
-    let deadline = Instant::now() + Duration::from_secs(8);
-    while backend_process_tree_is_running(pid) && Instant::now() < deadline {
+    terminate_remaining_process_group(pid);
+}
+
+#[cfg(unix)]
+fn terminate_remaining_process_group(pid: u32) {
+    if !backend_process_tree_is_running(pid) {
+        return;
+    }
+    signal_process_group(pid as i32, libc::SIGTERM);
+    let group_deadline = Instant::now() + Duration::from_secs(2);
+    while backend_process_tree_is_running(pid) && Instant::now() < group_deadline {
         thread::sleep(Duration::from_millis(100));
     }
     if backend_process_tree_is_running(pid) {
-        unsafe {
-            libc::kill(-(pid as i32), libc::SIGKILL);
-        }
+        signal_process_group(pid as i32, libc::SIGKILL);
+    }
+}
+
+#[cfg(unix)]
+fn signal_process(pid: i32, signal: i32) {
+    unsafe {
+        libc::kill(pid, signal);
+    }
+}
+
+#[cfg(unix)]
+fn signal_process_group(pid: i32, signal: i32) {
+    unsafe {
+        libc::kill(-pid, signal);
     }
 }
 
@@ -1649,20 +1744,38 @@ fn terminate_stale_backend(_pid: u32) {}
 #[cfg(unix)]
 fn terminate_child_tree(child: &mut Child) {
     let pid = child.id() as i32;
-    unsafe {
-        libc::kill(-pid, libc::SIGTERM);
+    signal_process(pid, libc::SIGTERM);
+    if wait_for_child_exit(child, Duration::from_secs(8)) {
+        terminate_remaining_process_group(pid as u32);
+        let _ = child.wait();
+        return;
     }
-    let deadline = Instant::now() + Duration::from_secs(8);
-    while backend_process_tree_is_running(pid as u32) && Instant::now() < deadline {
-        let _ = child.try_wait();
+
+    signal_process_group(pid, libc::SIGTERM);
+    if wait_for_child_exit(child, Duration::from_secs(2)) {
+        terminate_remaining_process_group(pid as u32);
+        let _ = child.wait();
+        return;
+    }
+
+    signal_process_group(pid, libc::SIGKILL);
+    let _ = child.wait();
+}
+
+#[cfg(unix)]
+fn wait_for_child_exit(child: &mut Child, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return true,
+            Ok(None) => {}
+            Err(_) => return true,
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
         thread::sleep(Duration::from_millis(100));
     }
-    if backend_process_tree_is_running(pid as u32) {
-        unsafe {
-            libc::kill(-pid, libc::SIGKILL);
-        }
-    }
-    let _ = child.wait();
 }
 
 #[cfg(windows)]
@@ -2244,6 +2357,54 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn backend_process_tree_shutdown_allows_parent_cleanup_before_group_signal() {
+        let root = temp_dir("process-tree-graceful");
+        let script_path = root.join("backend.sh");
+        let parent_marker = root.join("parent-cleanup");
+        let child_marker = root.join("child-saw-group-term");
+        let child_pid_file = root.join("child.pid");
+        fs::write(
+            &script_path,
+            r#"
+trap 'echo parent > "$1"; kill -KILL "$child" 2>/dev/null; wait "$child" 2>/dev/null; exit 0' TERM
+/bin/sh -c 'trap "echo child > \"$1\"; exit 0" TERM; while :; do sleep 1; done' child "$2" &
+child=$!
+echo "$child" > "$3"
+wait "$child"
+"#,
+        )
+        .expect("write graceful shutdown fixture");
+        let mut command = Command::new("/bin/sh");
+        command
+            .arg(&script_path)
+            .arg(&parent_marker)
+            .arg(&child_marker)
+            .arg(&child_pid_file)
+            .current_dir(&root)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        configure_backend_process_tree(&mut command);
+        let mut child = command.spawn().expect("spawn graceful process tree");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !child_pid_file.exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+        }
+        let descendant_pid: u32 = fs::read_to_string(&child_pid_file)
+            .expect("read descendant pid")
+            .trim()
+            .parse()
+            .expect("parse descendant pid");
+
+        terminate_child_tree(&mut child);
+
+        assert!(parent_marker.exists());
+        assert!(!child_marker.exists());
+        assert!(!process_is_running(child.id()));
+        assert!(!process_is_running(descendant_pid));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn stale_backend_identity_requires_expected_program_cwd_and_process_group() {
         let root = temp_dir("stale-backend");
         let lease_path = root.join("launcher").join("backend-process.json");
@@ -2286,6 +2447,70 @@ mod tests {
         assert!(!stale_backend_matches(&reused, &launch));
 
         terminate_child_tree(&mut child);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn moved_packaged_backend_match_accepts_app_bundle_moved_to_trash() {
+        let lease = BackendProcessLease {
+            schema_version: 2,
+            pid: 976,
+            process_identity: Some("same-process-start".to_string()),
+            program: "/Applications/Noofy.app/Contents/Resources/noofy-runtime/python/bin/python3"
+                .to_string(),
+            current_dir: "/Applications/Noofy.app/Contents/Resources/noofy-runtime/backend"
+                .to_string(),
+        };
+        let launch = BackendLaunchSpec {
+            program: OsString::from(
+                "/Applications/Noofy.app/Contents/Resources/noofy-runtime/python/bin/python3",
+            ),
+            args: python_backend_args(),
+            current_dir: PathBuf::from(
+                "/Applications/Noofy.app/Contents/Resources/noofy-runtime/backend",
+            ),
+            env: Vec::new(),
+            remove_env: Vec::new(),
+        };
+        let live_command = "/Users/test/.Trash/Noofy 01.13.55.app/Contents/Resources/noofy-runtime/python/bin/python3 -m app --port 0";
+        let live_cwd = PathBuf::from(
+            "/Users/test/.Trash/Noofy 01.13.55.app/Contents/Resources/noofy-runtime/backend",
+        );
+
+        assert!(moved_packaged_backend_matches(
+            &lease,
+            &launch,
+            live_command,
+            Some(&live_cwd),
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn moved_packaged_backend_match_rejects_source_backend_workdir() {
+        let lease = BackendProcessLease {
+            schema_version: 2,
+            pid: 976,
+            process_identity: Some("same-process-start".to_string()),
+            program: "/tmp/Noofy/backend/.venv/bin/python".to_string(),
+            current_dir: "/tmp/Noofy/backend".to_string(),
+        };
+        let launch = BackendLaunchSpec {
+            program: OsString::from("/tmp/Noofy/backend/.venv/bin/python"),
+            args: python_backend_args(),
+            current_dir: PathBuf::from("/tmp/Noofy/backend"),
+            env: Vec::new(),
+            remove_env: Vec::new(),
+        };
+        let live_command = "/tmp/Noofy/backend/.venv/bin/python -m app --port 0";
+        let live_cwd = PathBuf::from("/tmp/Noofy/backend");
+
+        assert!(!moved_packaged_backend_matches(
+            &lease,
+            &launch,
+            live_command,
+            Some(&live_cwd),
+        ));
     }
 
     #[cfg(target_os = "macos")]

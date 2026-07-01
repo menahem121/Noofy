@@ -18,6 +18,7 @@ from app.models.tags import ModelTagStore
 from app.runtime.comfyui.comfyui_sidecar_service import ComfyUISidecarService
 from app.runtime.noofy_runtime import NoofyRuntimeUpdateService
 from app.settings.api_keys import ApiKeyMetadataStore, ApiKeySettingsService, create_credential_store
+from app.settings.local_engine import LocalEngineFilesService
 from app.settings.onboarding import OnboardingSettingsService, OnboardingSettingsStore
 from app.models.folders import (
     ModelFolderSettingsService,
@@ -54,6 +55,7 @@ class ApiServices:
     model_inventory_service: ModelInventoryService
     model_download_service: ModelDownloadJobService
     noofy_runtime_update_service: NoofyRuntimeUpdateService
+    local_engine_files_service: LocalEngineFilesService
     workflow_library_service: WorkflowLibraryService | None
     dashboard_authoring_service: DashboardAuthoringService | None
     workflow_exporter: WorkflowExporter | None
@@ -88,6 +90,7 @@ def create_api_services(
     model_inventory_service: ModelInventoryService | None = None,
     model_download_service: ModelDownloadJobService | None = None,
     noofy_runtime_update_service: NoofyRuntimeUpdateService | None = None,
+    local_engine_files_service: LocalEngineFilesService | None = None,
     history_service: HistoryService | None = None,
     runtime_model_bundle_roots: list[Path] | None = None,
 ) -> ApiServices:
@@ -257,6 +260,27 @@ def create_api_services(
         ),
         log_store=noofy_runtime_log_store,
     )
+    sidecar = (
+        comfyui_sidecar_service
+        if comfyui_sidecar_service is not None
+        else getattr(engine_service, "comfyui_sidecar_service", None)
+    )
+    runner_coordinator = getattr(engine_service, "runner_process_coordinator", None)
+    local_engine_files = local_engine_files_service or LocalEngineFilesService(
+        paths=settings.paths,
+        stop_managed_runtime=(
+            sidecar.shutdown
+            if sidecar is not None and callable(getattr(sidecar, "shutdown", None))
+            else None
+        ),
+        stop_workflow_runners=(
+            runner_coordinator.stop_all_runners
+            if runner_coordinator is not None
+            and callable(getattr(runner_coordinator, "stop_all_runners", None))
+            else None
+        ),
+        log_store=getattr(engine_service, "log_store", None),
+    )
     civitai_lora_service = CivitaiLoraBrowserService(
         engine_service=engine_service,
         api_key_service=api_keys,
@@ -267,11 +291,7 @@ def create_api_services(
 
     return ApiServices(
         engine_service=engine_service,
-        comfyui_sidecar_service=(
-            comfyui_sidecar_service
-            if comfyui_sidecar_service is not None
-            else getattr(engine_service, "comfyui_sidecar_service", engine_service)
-        ),
+        comfyui_sidecar_service=sidecar or engine_service,
         user_state_service=user_state,
         asset_service=assets,
         gallery_store=gallery,
@@ -283,6 +303,7 @@ def create_api_services(
         model_inventory_service=inventory,
         model_download_service=downloads,
         noofy_runtime_update_service=noofy_runtime_updates,
+        local_engine_files_service=local_engine_files,
         workflow_library_service=workflow_library_service,
         dashboard_authoring_service=getattr(engine_service, "dashboard_authoring", None),
         workflow_exporter=getattr(engine_service, "workflow_exporter", None),
