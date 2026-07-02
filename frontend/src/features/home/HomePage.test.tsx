@@ -343,10 +343,16 @@ describe("HomePage", () => {
     );
   }
 
-  it("uses Reddit orange accents for the community action", () => {
+  it("uses Reddit orange accents for the community action", async () => {
     mockSearchableHome();
 
-    renderHomePage();
+    renderHomePage({ runtimeState: readyRuntimeState, skipInitialRefresh: true });
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith("/api/workflows"))).toBe(true);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
 
     const redditButton = screen.getByRole("button", { name: /open reddit/i });
     const redditCard = screen.getByRole("heading", { name: "Join the Reddit Community" }).closest(".action-card");

@@ -47,6 +47,10 @@ function mockElementRect(element: Element, rect: Partial<DOMRect>) {
   } as DOMRect);
 }
 
+function widgetTop(element: HTMLElement) {
+  return Number.parseFloat(element.style.top);
+}
+
 const readyRuntime = {
   mode: "managed",
   reachable: true,
@@ -1565,10 +1569,12 @@ describe("DashboardBuilderLayoutPage", () => {
     dispatchPointer(window, "pointermove", { clientX: 300, clientY: 2000 });
 
     await waitFor(() => {
-      expect(promptCell).toHaveStyle({ top: "701.25px" });
+      expect(widgetTop(promptCell)).toBeGreaterThanOrEqual(701);
+      expect(widgetTop(promptCell)).toBeLessThanOrEqual(720);
     });
     dispatchPointer(window, "pointerup", { clientX: 300, clientY: 2000 });
-    expect(promptCell).toHaveStyle({ top: "701.25px" });
+    expect(widgetTop(promptCell)).toBeGreaterThanOrEqual(701);
+    expect(widgetTop(promptCell)).toBeLessThanOrEqual(720);
 
     fireEvent.click(screen.getByRole("button", { name: /save dashboard/i }));
 

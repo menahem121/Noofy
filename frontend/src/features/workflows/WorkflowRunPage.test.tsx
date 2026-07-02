@@ -6865,6 +6865,9 @@ describe("WorkflowRunPage", () => {
       engine: "comfyui",
       status: "queued",
     }));
+    await waitFor(() => {
+      expect(window.sessionStorage.getItem("noofy.workflowRunHandles.v1")).toContain("job-fresh");
+    });
   });
 
   it("does not show an offline notice over active workflow preparation", async () => {
