@@ -4,10 +4,12 @@ from typing import Any, Literal
 
 from app.artifacts import ModelVerificationLevel
 from app.workflows.import_normalization import (
+    filter_stale_comfyui_property_models,
     filter_resolved_runtime_inputs,
     normalize_custom_nodes,
     repair_misclassified_multimodal_text_inputs,
     required_models_from_comfyui_workflow,
+    stale_property_model_targets_from_comfyui_workflow,
 )
 from app.workflows.package import (
     DashboardSchema,
@@ -232,6 +234,7 @@ class WorkflowPackageLoader:
         data_clean = {k: v for k, v in data.items() if k not in ("inputs", "outputs", "dashboard")}
         if "source_policy" in data_clean and not isinstance(data_clean.get("source_policy"), dict):
             data_clean.pop("source_policy", None)
+        _prune_stale_required_models_from_source_files(data_clean, package_dir)
         _enrich_required_models_from_capsule_lock(data_clean, package_dir / _CAPSULE_LOCK_FILENAME)
         _repair_required_model_source_urls_from_source_files(data_clean, package_dir)
         _repair_imported_custom_nodes_from_source_files(data_clean, package_dir)
@@ -286,6 +289,32 @@ def _read_adjacent_workflow_graph(package_dir: Path) -> dict[str, Any] | None:
     )
 
 
+def _read_adjacent_comfyui_workflow(package_dir: Path) -> dict[str, Any] | None:
+    return _read_optional_source_json(package_dir / "comfyui_workflow.json") or _read_optional_source_json(
+        package_dir / "source-files" / "comfyui_workflow.json"
+    )
+
+
+def _prune_stale_required_models_from_source_files(
+    package_data: dict[str, Any],
+    package_dir: Path,
+) -> None:
+    raw_models = package_data.get("required_models")
+    if not isinstance(raw_models, list):
+        return
+    source_workflow = _read_adjacent_comfyui_workflow(package_dir)
+    if source_workflow is None:
+        return
+    stale_targets = stale_property_model_targets_from_comfyui_workflow(source_workflow)
+    if not stale_targets:
+        return
+    package_data["required_models"] = [
+        model
+        for model in raw_models
+        if _raw_required_model_target(model) not in stale_targets
+    ]
+
+
 def _enrich_required_models_from_capsule_lock(package_data: dict[str, Any], capsule_path: Path) -> None:
     """Fill weak package model identities from an adjacent capsule lock.
 
@@ -333,25 +362,24 @@ def _repair_required_model_source_urls_from_source_files(
     raw_models = package_data.get("required_models")
     if not isinstance(raw_models, list):
         return
-    source_workflow_path = package_dir / "source-files" / "comfyui_workflow.json"
-    source_graph = _read_optional_source_json(
-        package_dir / "source-files" / "comfyui_graph.json"
-    )
-    source_workflow = _read_optional_source_json(source_workflow_path)
+    source_graph = _read_adjacent_workflow_graph(package_dir)
+    source_workflow = _read_adjacent_comfyui_workflow(package_dir)
     if source_workflow is None and source_graph is None:
         return
     workflow_models = required_models_from_comfyui_workflow(
         source_workflow or {},
         comfyui_graph=source_graph,
     )
+    workflow_models = filter_stale_comfyui_property_models(
+        workflow_models,
+        source_workflow,
+    )
     if not workflow_models:
         return
     existing_by_target = {
-        (model.get("folder") or model.get("comfyui_folder"), model.get("filename")): model
+        target: model
         for model in raw_models
-        if isinstance(model, dict)
-        and isinstance(model.get("folder") or model.get("comfyui_folder"), str)
-        and isinstance(model.get("filename"), str)
+        if (target := _raw_required_model_target(model)) is not None
     }
     for workflow_model in workflow_models:
         target = (workflow_model.folder, workflow_model.filename)
@@ -367,6 +395,16 @@ def _repair_required_model_source_urls_from_source_files(
             continue
         model["source_urls"] = list(workflow_model.source_urls)
         model["source_url"] = workflow_model.source_urls[0]
+
+
+def _raw_required_model_target(model: Any) -> tuple[str, str] | None:
+    if not isinstance(model, dict):
+        return None
+    folder = model.get("folder") or model.get("comfyui_folder")
+    filename = model.get("filename")
+    if isinstance(folder, str) and isinstance(filename, str):
+        return (folder, filename)
+    return None
 
 
 def _read_optional_source_json(path: Path) -> dict[str, Any] | None:

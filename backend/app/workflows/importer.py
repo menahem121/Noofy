@@ -104,6 +104,7 @@ from app.workflows.import_normalization import (
     comfyui_workflow_node_types,
     detect_unresolved_runtime_inputs,
     executable_comfyui_workflow_definition_node_types,
+    filter_stale_comfyui_property_models,
     filter_resolved_runtime_inputs,
     has_nonempty_launch_option,
     is_comfyui_ui_workflow,
@@ -3506,6 +3507,7 @@ def _with_comfyui_workflow_model_source_urls(
 ) -> list[RequiredModel]:
     if not isinstance(comfyui_workflow, dict) and not isinstance(comfyui_graph, dict):
         return models
+    models = filter_stale_comfyui_property_models(models, comfyui_workflow)
     workflow_models = required_models_from_comfyui_workflow(
         comfyui_workflow or {},
         comfyui_graph=comfyui_graph,

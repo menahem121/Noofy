@@ -50,30 +50,6 @@
       "size_bytes": 336213556,
       "source_urls": [],
       "verification_level": "sha256_size"
-    },
-    {
-      "bundled": false,
-      "checksum": "sha256:a9f5028c24a7a96f4f45beb883aad287d9bccc246227a6803edc898ddda42cf4",
-      "filename": "flux-2-klein-base-9b-fp8.safetensors",
-      "folder": "diffusion_models",
-      "size_bytes": 9567278472,
-      "source_url": "https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9b-fp8/resolve/main/flux-2-klein-base-9b-fp8.safetensors",
-      "source_urls": [
-        "https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9b-fp8/resolve/main/flux-2-klein-base-9b-fp8.safetensors"
-      ],
-      "verification_level": "sha256_size"
-    },
-    {
-      "bundled": false,
-      "checksum": "sha256:ea4273f02d1fafbf8e1d1c2cf6018ed8748652eb0bf34f2dd91171f16f15ab62",
-      "filename": "full_encoder_small_decoder.safetensors",
-      "folder": "vae",
-      "size_bytes": 249519092,
-      "source_url": "https://huggingface.co/black-forest-labs/FLUX.2-small-decoder/resolve/main/full_encoder_small_decoder.safetensors",
-      "source_urls": [
-        "https://huggingface.co/black-forest-labs/FLUX.2-small-decoder/resolve/main/full_encoder_small_decoder.safetensors"
-      ],
-      "verification_level": "sha256_size"
     }
   ],
   "schema_version": "0.1.0",

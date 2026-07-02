@@ -1442,6 +1442,65 @@ def test_noofy_importer_adds_graph_only_model_without_source_for_provider_fallba
     assert model.verification_level == "filename_only"
 
 
+def test_noofy_importer_prunes_stale_capsule_model_from_editable_workflow() -> None:
+    archive = _archive_bytes_with_comfyui_workflow_update(
+        {
+            "nodes": [
+                {
+                    "id": 70,
+                    "type": "UNETLoader",
+                    "widgets_values": ["active.safetensors", "default"],
+                    "properties": {
+                        "models": [
+                            {
+                                "directory": "diffusion_models",
+                                "name": "stale.safetensors",
+                                "url": "https://example.test/stale.safetensors",
+                            }
+                        ]
+                    },
+                }
+            ]
+        },
+        archive_bytes=_archive_bytes_with_graph_update(
+            {
+                "75:70": {
+                    "class_type": "UNETLoader",
+                    "inputs": {"unet_name": "active.safetensors"},
+                }
+            },
+            archive_bytes=_archive_bytes_with_capsule_update(
+                {
+                    "models": [
+                        {
+                            "comfyui_folder": "diffusion_models",
+                            "filename": "active.safetensors",
+                            "sha256": "a" * 64,
+                            "size_bytes": 123,
+                        },
+                        {
+                            "comfyui_folder": "diffusion_models",
+                            "filename": "stale.safetensors",
+                            "source_urls": [
+                                "https://example.test/stale.safetensors"
+                            ],
+                            "sha256": "b" * 64,
+                            "size_bytes": 456,
+                        },
+                    ]
+                },
+                archive_bytes=_small_archive_bytes(),
+            ),
+        ),
+    )
+
+    package = NoofyArchiveImporter(archive).normalize()
+
+    assert [(model.folder, model.filename) for model in package.required_models] == [
+        ("diffusion_models", "active.safetensors")
+    ]
+
+
 def test_noofy_importer_does_not_duplicate_cliploader_text_encoder_from_capsule() -> None:
     archive = _archive_bytes_with_graph_update(
         {

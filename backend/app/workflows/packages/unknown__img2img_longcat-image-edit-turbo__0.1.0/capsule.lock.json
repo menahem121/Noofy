@@ -44,16 +44,6 @@
       "source_urls": [
         "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/vae/ae.safetensors"
       ]
-    },
-    {
-      "comfyui_folder": "diffusion_models",
-      "filename": "longcat_image_edit_bf16.safetensors",
-      "id": "https://huggingface.co/TalmajM/LongCat-Image-Edit_ComfyUI_repackaged/resolve/main/split_files/diffusion_models/longcat_image_edit_bf16.safetensors",
-      "sha256": "sha256:8e65ba6ab2f6b323c1619347cd681e4ff78a017b608c82c7bf30f1d125925fab",
-      "size_bytes": 12541383144,
-      "source_urls": [
-        "https://huggingface.co/TalmajM/LongCat-Image-Edit_ComfyUI_repackaged/resolve/main/split_files/diffusion_models/longcat_image_edit_bf16.safetensors"
-      ]
     }
   ],
   "runtime": {

@@ -374,6 +374,59 @@ def model_source_urls_from_comfyui_workflow(
     }
 
 
+def stale_property_model_targets_from_comfyui_workflow(
+    comfyui_workflow: dict[str, Any],
+) -> set[tuple[str, str]]:
+    """Return model metadata targets contradicted by the node's active widget.
+
+    ComfyUI UI workflows can retain old ``properties.models`` entries after a
+    model selector widget changes. Those entries are useful as source metadata
+    only when they still describe the active widget value; otherwise they must
+    not become workflow requirements.
+    """
+    active_targets: set[tuple[str, str]] = set()
+    stale_targets: set[tuple[str, str]] = set()
+    for node in _iter_comfyui_workflow_nodes(comfyui_workflow):
+        active_widget_targets = _comfyui_workflow_node_widget_model_targets(node)
+        if not active_widget_targets:
+            continue
+        active_targets.update(active_widget_targets)
+        active_folders = {folder for folder, _filename in active_widget_targets}
+        properties = node.get("properties")
+        if not isinstance(properties, dict):
+            continue
+        model_entries = properties.get("models")
+        if not isinstance(model_entries, list):
+            continue
+        for entry in model_entries:
+            if not isinstance(entry, dict):
+                continue
+            folder = optional_string_field(entry, "directory")
+            filename = optional_string_field(entry, "name")
+            if not folder or not filename:
+                continue
+            target = (folder, filename)
+            if folder in active_folders and target not in active_widget_targets:
+                stale_targets.add(target)
+    return stale_targets - active_targets
+
+
+def filter_stale_comfyui_property_models(
+    models: list[RequiredModel],
+    comfyui_workflow: dict[str, Any] | None,
+) -> list[RequiredModel]:
+    if not isinstance(comfyui_workflow, dict) or not models:
+        return models
+    stale_targets = stale_property_model_targets_from_comfyui_workflow(comfyui_workflow)
+    if not stale_targets:
+        return models
+    return [
+        model
+        for model in models
+        if (model.folder, model.filename) not in stale_targets
+    ]
+
+
 def required_models_from_comfyui_workflow(
     comfyui_workflow: dict[str, Any],
     *,

@@ -297,6 +297,181 @@ def test_loader_adds_missing_required_model_from_source_graph_selector(
     assert model.source_urls == []
 
 
+def test_loader_prunes_stale_required_model_from_adjacent_workflow(
+    tmp_path: Path,
+) -> None:
+    package_dir = tmp_path / "packages" / "stale_property_model"
+    package_dir.mkdir(parents=True)
+    (package_dir / "package.json").write_text(
+        json.dumps(
+            {
+                "metadata": {
+                    "id": "stale_property_model",
+                    "name": "Stale Property Model",
+                    "version": "0.1.0",
+                },
+                "engine": "comfyui",
+                "required_models": [
+                    {
+                        "folder": "diffusion_models",
+                        "filename": "active.safetensors",
+                        "checksum": "sha256:" + ("a" * 64),
+                        "size_bytes": 123,
+                    },
+                    {
+                        "folder": "diffusion_models",
+                        "filename": "stale.safetensors",
+                        "checksum": "sha256:" + ("b" * 64),
+                        "size_bytes": 456,
+                        "source_url": "https://example.test/stale.safetensors",
+                    },
+                ],
+                "comfyui_graph": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (package_dir / "comfyui_workflow.json").write_text(
+        json.dumps(
+            {
+                "nodes": [
+                    {
+                        "id": 70,
+                        "type": "UNETLoader",
+                        "widgets_values": ["active.safetensors", "default"],
+                        "properties": {
+                            "models": [
+                                {
+                                    "directory": "diffusion_models",
+                                    "name": "stale.safetensors",
+                                    "url": "https://example.test/stale.safetensors",
+                                }
+                            ]
+                        },
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (package_dir / "comfyui_graph.json").write_text(
+        json.dumps(
+            {
+                "75:70": {
+                    "class_type": "UNETLoader",
+                    "inputs": {"unet_name": "active.safetensors"},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    package = WorkflowPackageLoader(tmp_path / "packages").get_package(
+        "stale_property_model"
+    )
+
+    assert [(model.folder, model.filename) for model in package.required_models] == [
+        ("diffusion_models", "active.safetensors")
+    ]
+
+
+def test_loader_preserves_model_stale_on_one_node_but_active_on_another(
+    tmp_path: Path,
+) -> None:
+    package_dir = tmp_path / "packages" / "shared_active_model"
+    package_dir.mkdir(parents=True)
+    shared_checksum = "sha256:" + ("b" * 64)
+    (package_dir / "package.json").write_text(
+        json.dumps(
+            {
+                "metadata": {
+                    "id": "shared_active_model",
+                    "name": "Shared Active Model",
+                    "version": "0.1.0",
+                },
+                "engine": "comfyui",
+                "required_models": [
+                    {
+                        "folder": "diffusion_models",
+                        "filename": "current.safetensors",
+                        "checksum": "sha256:" + ("a" * 64),
+                        "size_bytes": 123,
+                    },
+                    {
+                        "folder": "diffusion_models",
+                        "filename": "shared.safetensors",
+                        "checksum": shared_checksum,
+                        "size_bytes": 456,
+                    },
+                ],
+                "comfyui_graph": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (package_dir / "comfyui_workflow.json").write_text(
+        json.dumps(
+            {
+                "nodes": [
+                    {
+                        "id": 70,
+                        "type": "UNETLoader",
+                        "widgets_values": ["current.safetensors", "default"],
+                        "properties": {
+                            "models": [
+                                {
+                                    "directory": "diffusion_models",
+                                    "name": "shared.safetensors",
+                                    "url": "https://example.test/shared.safetensors",
+                                }
+                            ]
+                        },
+                    },
+                    {
+                        "id": 71,
+                        "type": "UNETLoader",
+                        "widgets_values": ["shared.safetensors", "default"],
+                        "properties": {
+                            "models": [
+                                {
+                                    "directory": "diffusion_models",
+                                    "name": "shared.safetensors",
+                                    "url": "https://example.test/shared.safetensors",
+                                }
+                            ]
+                        },
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (package_dir / "comfyui_graph.json").write_text(
+        json.dumps(
+            {
+                "75:70": {
+                    "class_type": "UNETLoader",
+                    "inputs": {"unet_name": "current.safetensors"},
+                },
+                "75:71": {
+                    "class_type": "UNETLoader",
+                    "inputs": {"unet_name": "shared.safetensors"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    package = WorkflowPackageLoader(tmp_path / "packages").get_package(
+        "shared_active_model"
+    )
+
+    by_filename = {model.filename: model for model in package.required_models}
+    assert set(by_filename) == {"current.safetensors", "shared.safetensors"}
+    assert by_filename["shared.safetensors"].checksum == shared_checksum
+    assert by_filename["shared.safetensors"].size_bytes == 456
+
+
 def test_loader_filters_unresolved_inputs_resolved_by_dashboard_override(tmp_path: Path) -> None:
     package_dir = tmp_path / "packages" / "image_workflow"
     package_dir.mkdir(parents=True)
