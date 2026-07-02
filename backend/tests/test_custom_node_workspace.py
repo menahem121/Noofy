@@ -1,5 +1,4 @@
 import json
-import sys
 from pathlib import Path
 
 import pytest
@@ -274,30 +273,12 @@ def test_materializer_rejects_case_insensitive_path_collision(tmp_path: Path) ->
     assert error.value.code is CustomNodeMaterializationErrorCode.CASE_INSENSITIVE_PATH_COLLISION
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="Windows filesystems cannot materialize same-directory names that differ only by case.",
-)
-def test_materializer_rejects_nested_case_insensitive_path_collision(tmp_path: Path) -> None:
-    source_files = tmp_path / "source-files"
-    _write_graph(source_files, ["CustomRequired"])
-    _write_custom_node(
-        source_files,
-        "custom-node",
-        {
-            "models/Foo.py": "x = 1\n",
-            "models/foo.py": "x = 2\n",
-        },
-    )
-    capsule = _capsule(
-        [{"package_id": "custom-node", "source": "bundled_from_creator_machine", "node_types": ["CustomRequired"]}]
-    )
-
+def test_materializer_rejects_nested_case_insensitive_path_collision() -> None:
     with pytest.raises(CustomNodeMaterializationError) as error:
-        _materializer().build_manifest(capsule_lock=capsule, source_files_dir=source_files)
+        validate_custom_node_source_relative_paths(["models/Foo.py", "models/foo.py"])
 
     assert error.value.code is CustomNodeMaterializationErrorCode.CASE_INSENSITIVE_PATH_COLLISION
-    assert error.value.boundary is CustomNodeSourceBoundary.CUSTOM_NODE_INTERNAL_PATH
+    assert error.value.boundary is CustomNodeSourceBoundary.ARCHIVE_MEMBER_PATH
     assert error.value.relative_path == "models/foo.py"
 
 

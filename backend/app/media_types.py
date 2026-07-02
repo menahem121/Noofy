@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import mimetypes
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,11 @@ IMAGE_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".webp", ".gif"})
 AUDIO_EXTENSIONS = frozenset({".wav", ".mp3", ".flac", ".ogg", ".m4a"})
 VIDEO_EXTENSIONS = frozenset({".mp4", ".mov", ".webm", ".mkv"})
 THREE_D_EXTENSIONS = frozenset({".glb", ".gltf", ".obj", ".stl", ".fbx", ".ply", ".usdz", ".dae", ".spz", ".splat", ".ksplat"})
+MEDIA_MIME_TYPES_BY_EXTENSION = {
+    ".glb": "model/gltf-binary",
+    ".gltf": "model/gltf+json",
+    ".usdz": "model/vnd.usdz+zip",
+}
 
 
 def classify_media_kind(
@@ -60,3 +66,15 @@ def classify_media_kind(
         "text": "file",
     }
     return weak_fallbacks.get(bucket_name, "file")
+
+
+def guess_media_mime_type(filename: str, *, kind: str | None = None) -> str | None:
+    suffix = Path(filename).suffix.lower()
+    if suffix in MEDIA_MIME_TYPES_BY_EXTENSION:
+        return MEDIA_MIME_TYPES_BY_EXTENSION[suffix]
+    guessed = mimetypes.guess_type(filename)[0]
+    if guessed:
+        return guessed
+    if kind == "audio":
+        return "audio/mpeg"
+    return None

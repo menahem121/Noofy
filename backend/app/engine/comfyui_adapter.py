@@ -2,7 +2,6 @@ import asyncio
 import base64
 import contextlib
 import json
-import mimetypes
 import os
 import re
 import shutil
@@ -24,6 +23,7 @@ from app.media_types import MEDIA_KINDS as _MEDIA_KINDS
 from app.media_types import MEDIA_OUTPUT_BUCKETS as _MEDIA_OUTPUT_BUCKETS
 from app.media_types import THREE_D_EXTENSIONS as _THREE_D_EXTENSIONS
 from app.media_types import classify_media_kind
+from app.media_types import guess_media_mime_type
 from app.engine.models import (
     EngineJob,
     EngineOutputStream,
@@ -1322,8 +1322,8 @@ class ComfyUIEngineAdapter:
             "view_url": view_url,
             "mime_type": item.get("mime_type")
             or item.get("content_type")
-            or mimetypes.guess_type(str(item.get("filename") or ""))[0]
-            or ("audio/mpeg" if kind == "audio" else "application/octet-stream"),
+            or guess_media_mime_type(str(item.get("filename") or ""), kind=kind)
+            or "application/octet-stream",
             "size": item.get("size"),
         }
         suffix = Path(str(item.get("filename") or "")).suffix.lower()
