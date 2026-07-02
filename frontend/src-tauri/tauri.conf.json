@@ -6,6 +6,7 @@
   "build": {
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build && npm run tauri:verify-runtime",
+    "beforeBundleCommand": "npm run tauri:sign-runtime",
     "devUrl": "http://127.0.0.1:5173",
     "frontendDist": "../dist"
   },

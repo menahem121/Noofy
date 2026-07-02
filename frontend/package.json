@@ -9,6 +9,7 @@
     "preview": "vite preview --host 127.0.0.1",
     "tauri:download-runtime": "node scripts/downloadPackagedRuntime.mjs",
     "tauri:prepare-runtime": "node scripts/preparePackagedRuntime.mjs",
+    "tauri:sign-runtime": "node scripts/signPackagedRuntime.mjs",
     "tauri:verify-runtime": "node scripts/verifyPackagedRuntime.mjs",
     "tauri:smoke-backend": "node scripts/smokePackagedBackend.mjs",
     "tauri": "tauri",
