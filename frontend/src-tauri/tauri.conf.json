@@ -38,6 +38,11 @@
         }
       }
     ],
+    "windows": {
+      "nsis": {
+        "installerHooks": "installer-hooks.nsh"
+      }
+    },
     "resources": {
       "resources/noofy-runtime": "noofy-runtime",
       "../../backend/app": "noofy-runtime/backend/app",
