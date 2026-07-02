@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import sys
 import zipfile
 from pathlib import Path
 
@@ -457,6 +458,8 @@ def test_source_cache_rejects_invalid_archive_path_shape(
     tmp_path: Path,
     archive_path: str,
 ) -> None:
+    if sys.platform == "win32" and "\\" in archive_path:
+        pytest.skip("zipfile normalizes backslash member names on Windows")
     archive_bytes = _zip_bytes({archive_path: "bad\n"})
     digest = hashlib.sha256(archive_bytes).hexdigest()
     cache = CustomNodeSourceCache(
@@ -587,4 +590,8 @@ def _zip_bytes(files: dict[str, str]) -> bytes:
     with zipfile.ZipFile(payload, "w") as archive:
         for path, contents in files.items():
             archive.writestr(path, contents)
-    return payload.getvalue()
+    data = payload.getvalue()
+    for path in files:
+        if "\\" in path:
+            data = data.replace(path.replace("\\", "/").encode("utf-8"), path.encode("utf-8"))
+    return data

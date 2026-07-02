@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 from app.composition import ApiServices
 from app.engine.models import ComfyUIRuntimeStatus, EngineOutputStream
 from app.main import create_app
+from tests.service_factory import make_api_services
 
 
 class FakeEngineService:
@@ -58,21 +59,8 @@ def _services(
     run_result_service=None,
     workflow_exporter=None,
 ) -> ApiServices:
-    placeholder = object()
-    return ApiServices(
+    return make_api_services(
         engine_service=engine_service or FakeEngineService(),
-        comfyui_sidecar_service=placeholder,
-        user_state_service=placeholder,
-        asset_service=placeholder,
-        gallery_store=placeholder,
-        api_key_service=placeholder,
-        onboarding_service=placeholder,
-        model_folder_service=placeholder,
-        model_tag_store=placeholder,
-        model_ownership_store=placeholder,
-        model_inventory_service=placeholder,
-        model_download_service=placeholder,
-        noofy_runtime_update_service=placeholder,
         workflow_library_service=None,
         dashboard_authoring_service=None,
         workflow_exporter=workflow_exporter,

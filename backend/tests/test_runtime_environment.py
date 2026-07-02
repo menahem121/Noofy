@@ -36,7 +36,20 @@ def create_python(tmp_path: Path, name: str = "python") -> Path:
     python = tmp_path / name
     python.write_text("", encoding="utf-8")
     python.chmod(0o755)
+    if os.name == "nt" and not python.name.lower().endswith(".exe"):
+        (python.parent / f"{python.name}.exe").write_text("", encoding="utf-8")
     return python
+
+
+def venv_python(runtime_dir: Path) -> Path:
+    venv_dir = runtime_dir / "comfyui-venv"
+    if os.name == "nt":
+        return venv_dir / "Scripts" / "python.exe"
+    return venv_dir / "bin" / "python"
+
+
+def command_name(command: str) -> str:
+    return Path(command).name
 
 
 def test_torch_custom_op_runtime_check_accepts_present_api() -> None:
@@ -245,11 +258,11 @@ async def test_bootstrap_prefers_profile_python_over_generic_python(
     async def command_runner(command: list[str], cwd: Path | None) -> CommandResult:
         command_calls.append(command)
         if "sys.version_info" in command[-1]:
-            if command[0] == "python3.13" or command[0] == str(runtime_dir / "comfyui-venv" / "bin" / "python"):
+            if command_name(command[0]) in {"python3.13", "python3.13.exe"} or command[0] == str(venv_python(runtime_dir)):
                 return CommandResult(returncode=0, stdout="3.13\n")
             return CommandResult(returncode=0, stdout="3.14\n")
         if command[1:3] == ["-m", "venv"]:
-            python = runtime_dir / "comfyui-venv" / "bin" / "python"
+            python = venv_python(runtime_dir)
             python.parent.mkdir(parents=True)
             python.write_text("", encoding="utf-8")
         return CommandResult(returncode=0)
@@ -268,7 +281,7 @@ async def test_bootstrap_prefers_profile_python_over_generic_python(
 
     assert result.status == "prepared"
     venv_command = next(command for command in command_calls if command[1:3] == ["-m", "venv"])
-    assert venv_command[0] == "python3.13"
+    assert command_name(venv_command[0]) in {"python3.13", "python3.13.exe"}
 
 
 @pytest.mark.anyio
@@ -412,7 +425,7 @@ async def test_bootstrap_rebuilds_existing_venv_with_wrong_profile_abi(
 ) -> None:
     repo_dir = create_repo(tmp_path)
     runtime_dir = tmp_path / "runtime"
-    runtime_python = runtime_dir / "comfyui-venv" / "bin" / "python"
+    runtime_python = venv_python(runtime_dir)
     runtime_python.parent.mkdir(parents=True)
     runtime_python.write_text("", encoding="utf-8")
     stale_marker = runtime_dir / "comfyui-venv" / "stale.txt"
@@ -461,7 +474,7 @@ async def test_bootstrap_installs_torch_before_comfyui_requirements(
     async def command_runner(command: list[str], cwd: Path | None) -> CommandResult:
         command_calls.append(command)
         if command[1:3] == ["-m", "venv"]:
-            python = runtime_dir / "comfyui-venv" / "bin" / "python"
+            python = venv_python(runtime_dir)
             python.parent.mkdir(parents=True)
             python.write_text("", encoding="utf-8")
         return CommandResult(returncode=0)

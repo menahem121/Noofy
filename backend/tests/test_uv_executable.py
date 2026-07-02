@@ -69,14 +69,16 @@ def test_venv_uv_path_windows(tmp_path: Path) -> None:
 
 
 def test_resolve_returns_absolute_path_when_uv_present(tmp_path: Path) -> None:
-    fake_uv = tmp_path / "bin" / "uv"
+    fake_python = (
+        tmp_path / "Scripts" / "python.exe"
+        if sys.platform == "win32"
+        else tmp_path / "bin" / "python"
+    )
+    fake_uv = _venv_uv_path(fake_python)
     fake_uv.parent.mkdir(parents=True)
     fake_uv.touch()
-    fake_python = tmp_path / "bin" / "python"
 
-    with patch("app.runtime.uv_executable.sys") as mock_sys, patch(
-        "app.runtime.uv_executable.os.name", "posix"
-    ):
+    with patch("app.runtime.uv_executable.sys") as mock_sys:
         mock_sys.executable = str(fake_python)
         result = resolve_noofy_uv_executable()
 
@@ -113,13 +115,15 @@ def test_resolve_rejects_missing_noofy_uv_executable_override(tmp_path: Path) ->
 
 
 def test_resolve_raises_file_not_found_when_uv_missing(tmp_path: Path) -> None:
-    fake_python = tmp_path / "bin" / "python"
+    fake_python = (
+        tmp_path / "Scripts" / "python.exe"
+        if sys.platform == "win32"
+        else tmp_path / "bin" / "python"
+    )
     fake_python.parent.mkdir(parents=True)
     # Do NOT create uv alongside it.
 
-    with patch("app.runtime.uv_executable.sys") as mock_sys, patch(
-        "app.runtime.uv_executable.os.name", "posix"
-    ):
+    with patch("app.runtime.uv_executable.sys") as mock_sys:
         mock_sys.executable = str(fake_python)
         with pytest.raises(FileNotFoundError) as exc_info:
             resolve_noofy_uv_executable()
@@ -130,27 +134,33 @@ def test_resolve_raises_file_not_found_when_uv_missing(tmp_path: Path) -> None:
 
 
 def test_resolve_error_message_names_expected_path(tmp_path: Path) -> None:
-    fake_python = tmp_path / "bin" / "python"
+    fake_python = (
+        tmp_path / "Scripts" / "python.exe"
+        if sys.platform == "win32"
+        else tmp_path / "bin" / "python"
+    )
     fake_python.parent.mkdir(parents=True)
 
-    with patch("app.runtime.uv_executable.sys") as mock_sys, patch(
-        "app.runtime.uv_executable.os.name", "posix"
-    ):
+    with patch("app.runtime.uv_executable.sys") as mock_sys:
         mock_sys.executable = str(fake_python)
         with pytest.raises(FileNotFoundError) as exc_info:
             resolve_noofy_uv_executable()
 
-    assert str(tmp_path / "bin" / "uv") in str(exc_info.value)
+    assert str(_venv_uv_path(fake_python)) in str(exc_info.value)
 
 
 def test_resolve_does_not_fall_back_to_global_path(tmp_path: Path) -> None:
     """Even if a global `uv` is on PATH, resolver must not use it."""
-    fake_python = tmp_path / "bin" / "python"
+    fake_python = (
+        tmp_path / "Scripts" / "python.exe"
+        if sys.platform == "win32"
+        else tmp_path / "bin" / "python"
+    )
     fake_python.parent.mkdir(parents=True)
     # No uv in the fake venv.
 
     # Put a fake `uv` on PATH that would succeed if shutil.which were used.
-    global_uv = tmp_path / "global_bin" / "uv"
+    global_uv = tmp_path / "global_bin" / ("uv.exe" if sys.platform == "win32" else "uv")
     global_uv.parent.mkdir()
     global_uv.touch()
     global_uv.chmod(0o755)
@@ -162,9 +172,7 @@ def test_resolve_does_not_fall_back_to_global_path(tmp_path: Path) -> None:
         str(global_uv.parent) + os.pathsep + env_with_global_uv.get("PATH", "")
     )
 
-    with patch("app.runtime.uv_executable.sys") as mock_sys, patch(
-        "app.runtime.uv_executable.os.name", "posix"
-    ), patch.dict("os.environ", env_with_global_uv):
+    with patch("app.runtime.uv_executable.sys") as mock_sys, patch.dict("os.environ", env_with_global_uv):
         mock_sys.executable = str(fake_python)
         # Must still fail — it should look in the venv, not on PATH.
         with pytest.raises(FileNotFoundError):

@@ -59,6 +59,7 @@ class CustomNodeMaterializationErrorCode(StrEnum):
     PATH_TRAVERSAL = "path_traversal"
     PROTECTED_PATH_SHADOWING = "protected_path_shadowing"
     SYMLINK_ESCAPE = "symlink_escape"
+    STAGING_FAILED = "staging_failed"
     UNSUPPORTED_FILE_TYPE = "unsupported_file_type"
     UNSUPPORTED_SOURCE_KIND = "unsupported_source_kind"
     WORKSPACE_PROMOTION_FAILED = "workspace_promotion_failed"
@@ -270,14 +271,11 @@ class CustomNodeWorkspaceMaterializer:
     ) -> None:
         custom_nodes_target = runner_workspace_dir / "custom_nodes"
         _validate_runner_custom_nodes_root(runner_workspace_dir, custom_nodes_target)
-        custom_nodes_target.mkdir(parents=True, exist_ok=True)
-        transaction_dir = (
-            custom_nodes_target / f".noofy-materialize-{uuid4().hex}"
-        )
-        transaction_dir.mkdir(mode=0o700)
+        _mkdir(custom_nodes_target, parents=True, exist_ok=True)
+        transaction_dir = _create_materialization_transaction_dir(custom_nodes_target)
         staged_packages: list[_StagedCustomNodePackage] = []
         try:
-            for entry in manifest.entries:
+            for package_index, entry in enumerate(manifest.entries):
                 if (
                     entry.source_kind is CustomNodeSourceKind.BUNDLED_ARCHIVE
                     and source_files_dir is None
@@ -295,7 +293,7 @@ class CustomNodeWorkspaceMaterializer:
                     runner_workspace_dir,
                     entry.materialized_relative_path,
                 )
-                staging_dir = transaction_dir / "packages" / target_dir.name
+                staging_dir = transaction_dir / "p" / str(package_index)
                 source_content_hash, _ = _stage_validated_source_tree(
                     source_dir,
                     staging_dir,
@@ -322,15 +320,13 @@ class CustomNodeWorkspaceMaterializer:
                     _StagedCustomNodePackage(
                         target_dir=target_dir,
                         staging_dir=staging_dir,
-                        backup_dir=transaction_dir / "backups" / target_dir.name,
+                        backup_dir=transaction_dir / "b" / str(package_index),
                     )
                 )
 
-            staged_manifest_path = transaction_dir / CUSTOM_NODE_WORKSPACE_MANIFEST_FILENAME
-            staged_manifest_path.write_text(
-                manifest.model_dump_json(indent=2),
-                encoding="utf-8",
-            )
+            staged_manifest_path = transaction_dir / "m.json"
+            with open(_fs_path(staged_manifest_path), "w", encoding="utf-8") as file:
+                file.write(manifest.model_dump_json(indent=2))
             _promote_staged_custom_node_workspace(
                 staged_packages,
                 staged_manifest_path=staged_manifest_path,
@@ -474,7 +470,7 @@ def _stage_validated_source_tree(
             reason="staging_destination_exists",
             user_message="Noofy could not prepare one workflow extension safely.",
         )
-    staging_dir.mkdir(parents=True)
+    _mkdir(staging_dir, parents=True)
     return _process_source_tree(
         source_dir,
         destination_dir=staging_dir,
@@ -557,7 +553,7 @@ def _process_source_tree(
             )
             if is_directory:
                 if destination is not None:
-                    destination.mkdir()
+                    _mkdir(destination)
                 process_directory(source_path, relative)
                 continue
             if stat.S_ISLNK(source_stat.st_mode):
@@ -624,7 +620,7 @@ def _validate_source_root(source_dir: Path) -> None:
 
 def _safe_lstat(path: Path, *, relative_path: str) -> os.stat_result:
     try:
-        return path.lstat()
+        return os.lstat(_fs_path(path))
     except OSError as exc:
         _raise_source_changed(relative_path, exc)
 
@@ -655,7 +651,7 @@ def _hash_and_optionally_copy_source_file(
     copied_bytes = 0
     destination_file = None
     try:
-        source_file = source_path.open("rb")
+        source_file = open(_fs_path(source_path), "rb")
     except OSError as exc:
         _raise_source_changed(relative_path, exc)
     try:
@@ -669,7 +665,7 @@ def _hash_and_optionally_copy_source_file(
             if not stat.S_ISREG(opened_stat.st_mode):
                 _raise_unsupported_source_type(relative_path)
             if destination is not None:
-                destination_file = destination.open("xb")
+                destination_file = open(_fs_path(destination), "xb")
             while True:
                 chunk = source_file.read(1024 * 1024)
                 if not chunk:
@@ -703,13 +699,84 @@ def _hash_and_optionally_copy_source_file(
         if destination_file is not None:
             destination_file.close()
     if destination is not None:
-        destination.chmod(stat.S_IMODE(source_stat.st_mode))
-        os.utime(
+        os.chmod(_fs_path(destination), stat.S_IMODE(source_stat.st_mode))
+        _preserve_file_timestamps(
             destination,
-            ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns),
-            follow_symlinks=False,
+            atime_ns=source_stat.st_atime_ns,
+            mtime_ns=source_stat.st_mtime_ns,
         )
     return "sha256:" + digest.hexdigest(), copied_bytes
+
+
+def _preserve_file_timestamps(path: Path, *, atime_ns: int, mtime_ns: int) -> None:
+    if os.utime in os.supports_follow_symlinks:
+        os.utime(_fs_path(path), ns=(atime_ns, mtime_ns), follow_symlinks=False)
+        return
+    if path.is_symlink():
+        raise CustomNodeMaterializationError(
+            CustomNodeMaterializationErrorCode.UNSUPPORTED_FILE_TYPE,
+            "Bundled custom-node source materialized to an unsupported symlink.",
+            boundary=CustomNodeSourceBoundary.CUSTOM_NODE_INTERNAL_PATH,
+            relative_path=path.name,
+            reason="symlink",
+            user_message="Noofy could not prepare one workflow extension safely.",
+        )
+    os.utime(_fs_path(path), ns=(atime_ns, mtime_ns))
+
+
+def _create_materialization_transaction_dir(custom_nodes_target: Path) -> Path:
+    for _ in range(100):
+        transaction_dir = custom_nodes_target / f".n{uuid4().hex[:8]}"
+        try:
+            _mkdir(transaction_dir, mode=0o700)
+            return transaction_dir
+        except FileExistsError:
+            continue
+    raise CustomNodeMaterializationError(
+        CustomNodeMaterializationErrorCode.STAGING_FAILED,
+        "Could not create a custom-node materialization staging directory.",
+        user_message="Noofy could not prepare one workflow extension safely.",
+    )
+
+
+def _mkdir(
+    path: Path,
+    mode: int = 0o777,
+    *,
+    parents: bool = False,
+    exist_ok: bool = False,
+) -> None:
+    if not parents:
+        os.mkdir(_fs_path(path), mode)
+        return
+    existed = os.path.isdir(_fs_path(path))
+    current = Path(path.anchor) if path.is_absolute() else Path()
+    for part in path.parts[1:] if path.is_absolute() else path.parts:
+        current = current / part
+        try:
+            os.mkdir(_fs_path(current), mode)
+        except FileExistsError:
+            if not os.path.isdir(_fs_path(current)):
+                raise
+    if existed and not exist_ok:
+        raise FileExistsError(path)
+
+
+def _replace(source: Path, target: Path) -> None:
+    if os.name == "nt" and (len(str(source)) >= 240 or len(str(target)) >= 240):
+        os.replace(_fs_path(source), _fs_path(target))
+        return
+    source.replace(target)
+
+
+def _fs_path(path: Path) -> str:
+    value = str(path)
+    if os.name != "nt" or value.startswith("\\\\?\\"):
+        return value
+    absolute = os.path.abspath(value)
+    if absolute.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + absolute[2:]
+    return "\\\\?\\" + absolute
 
 
 def _raise_unsupported_source_type(
@@ -761,11 +828,11 @@ def _promote_staged_custom_node_workspace(
     try:
         for package in staged_packages:
             _validate_existing_package_destination(package.target_dir)
-            package.backup_dir.parent.mkdir(parents=True, exist_ok=True)
+            _mkdir(package.backup_dir.parent, parents=True, exist_ok=True)
             if package.target_dir.exists():
-                package.target_dir.replace(package.backup_dir)
+                _replace(package.target_dir, package.backup_dir)
             promoted.append(package)
-            package.staging_dir.replace(package.target_dir)
+            _replace(package.staging_dir, package.target_dir)
 
         if manifest_path.is_symlink() or (
             manifest_path.exists() and not manifest_path.is_file()
@@ -778,21 +845,21 @@ def _promote_staged_custom_node_workspace(
                 reason="manifest_destination_unsafe",
                 user_message="Noofy could not prepare one workflow extension safely.",
             )
-        manifest_backup.parent.mkdir(parents=True, exist_ok=True)
+        _mkdir(manifest_backup.parent, parents=True, exist_ok=True)
         if manifest_path.exists():
-            manifest_path.replace(manifest_backup)
-        staged_manifest_path.replace(manifest_path)
+            _replace(manifest_path, manifest_backup)
+        _replace(staged_manifest_path, manifest_path)
         manifest_promoted = True
     except Exception as exc:
         if manifest_promoted and manifest_path.exists():
             manifest_path.unlink()
         if manifest_backup.exists():
-            manifest_backup.replace(manifest_path)
+            _replace(manifest_backup, manifest_path)
         for package in reversed(promoted):
             if package.target_dir.exists():
                 shutil.rmtree(package.target_dir)
             if package.backup_dir.exists():
-                package.backup_dir.replace(package.target_dir)
+                _replace(package.backup_dir, package.target_dir)
         if isinstance(exc, CustomNodeMaterializationError):
             raise
         raise CustomNodeMaterializationError(

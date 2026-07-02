@@ -1097,7 +1097,7 @@ class ModelStore:
         return self.owned_model_root.joinpath(*folder_parts, *filename_parts)
 
     def _materialize_link_or_copy(self, blob_path: Path, target: Path) -> str:
-        tmp_target = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
+        tmp_target = target.with_name(f".{target.name}.{uuid.uuid4().hex[:8]}.tmp")
         try:
             _validate_materialized_target_path(target)
             target.parent.mkdir(parents=True, exist_ok=True)

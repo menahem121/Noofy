@@ -1,4 +1,5 @@
 import asyncio
+import os
 import socket
 import sys
 from pathlib import Path
@@ -722,13 +723,18 @@ async def test_status_reports_environment_bootstrap_progress(
     bootstrap_python = tmp_path / "bootstrap-python"
     bootstrap_python.write_text("", encoding="utf-8")
     bootstrap_python.chmod(0o755)
-    venv_python = tmp_path / "runtime" / "comfyui-venv" / "bin" / "python"
+    venv_dir = tmp_path / "runtime" / "comfyui-venv"
+    venv_python = (
+        venv_dir / "Scripts" / "python.exe"
+        if os.name == "nt"
+        else venv_dir / "bin" / "python"
+    )
     command_started = asyncio.Event()
     release_command = asyncio.Event()
 
     async def command_runner(command: list[str], cwd: Path | None):
         del cwd
-        if command == [str(bootstrap_python), "-m", "venv", str(venv_python.parent.parent)]:
+        if command == [str(bootstrap_python), "-m", "venv", str(venv_dir)]:
             command_started.set()
             await release_command.wait()
             venv_python.parent.mkdir(parents=True, exist_ok=True)

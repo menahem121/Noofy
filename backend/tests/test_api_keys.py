@@ -319,7 +319,7 @@ def test_encrypted_vault_fails_closed_for_bad_passphrase_configuration(tmp_path:
     passphrase_file.chmod(0o644)
     status = store.status()
     assert status.available is False
-    assert "passphrase" in (status.error or "")
+    assert "passphrase" in ((status.error or "") + " " + (status.guidance or ""))
     assert "wrong passphrase" not in status.model_dump_json()
 
 

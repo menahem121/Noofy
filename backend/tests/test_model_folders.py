@@ -156,8 +156,8 @@ def test_extra_model_paths_config_includes_noofy_and_external_roots(tmp_path: Pa
     )
 
     text = config_path.read_text(encoding="utf-8")
-    assert str(noofy_models) in text
-    assert str(external_models) in text
+    assert json.dumps(str(noofy_models)) in text
+    assert json.dumps(str(external_models)) in text
     assert "is_default: true" in text
     for category in EXPECTED_MODEL_CATEGORIES:
         category_line = f"  {category}: {json.dumps(category)}"

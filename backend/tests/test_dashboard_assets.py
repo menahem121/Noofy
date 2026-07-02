@@ -176,11 +176,12 @@ def test_creates_asset_dir(tmp_path: Path) -> None:
 def test_metadata_returns_original_filename(tmp_path: Path) -> None:
     svc = DashboardAssetService(tmp_path / "assets")
     result = svc.store(PNG_BYTES, "image/png", "portrait.png")
-    assert svc.metadata(result["asset_id"]) == {
+    metadata = svc.metadata(result["asset_id"])
+    assert metadata.items() >= {
         "asset_id": result["asset_id"],
         "original_filename": "portrait.png",
         "content_type": "image/png",
-    }
+    }.items()
 
 
 def test_store_masked_image_inverts_alpha_and_preserves_rgb(tmp_path: Path) -> None:

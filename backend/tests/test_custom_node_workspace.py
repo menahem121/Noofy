@@ -1,4 +1,5 @@
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -273,6 +274,10 @@ def test_materializer_rejects_case_insensitive_path_collision(tmp_path: Path) ->
     assert error.value.code is CustomNodeMaterializationErrorCode.CASE_INSENSITIVE_PATH_COLLISION
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Windows filesystems cannot materialize same-directory names that differ only by case.",
+)
 def test_materializer_rejects_nested_case_insensitive_path_collision(tmp_path: Path) -> None:
     source_files = tmp_path / "source-files"
     _write_graph(source_files, ["CustomRequired"])
@@ -633,7 +638,7 @@ def test_failed_atomic_promotion_restores_existing_materialized_package(
     original_replace = Path.replace
 
     def fail_staged_package_promotion(path: Path, target: Path) -> Path:
-        if path.parent.name == "packages" and path.name == "custom-node":
+        if path.parent.name == "p" and path.name == "0":
             raise OSError("injected promotion failure")
         return original_replace(path, target)
 
@@ -651,7 +656,7 @@ def test_failed_atomic_promotion_restores_existing_materialized_package(
         is CustomNodeMaterializationErrorCode.WORKSPACE_PROMOTION_FAILED
     )
     assert (ready_package / "node.py").read_text(encoding="utf-8") == "ready\n"
-    assert not list((workspace / "custom_nodes").glob(".noofy-materialize-*"))
+    assert not list((workspace / "custom_nodes").glob(".n*"))
 
 
 def test_failed_manifest_promotion_restores_package_and_previous_manifest(
@@ -675,10 +680,7 @@ def test_failed_manifest_promotion_restores_package_and_previous_manifest(
     original_replace = Path.replace
 
     def fail_staged_manifest_promotion(path: Path, target: Path) -> Path:
-        if (
-            path.name == CUSTOM_NODE_WORKSPACE_MANIFEST_FILENAME
-            and path.parent.name.startswith(".noofy-materialize-")
-        ):
+        if path.name == "m.json" and path.parent.name.startswith(".n"):
             raise OSError("injected manifest promotion failure")
         return original_replace(path, target)
 
@@ -697,7 +699,7 @@ def test_failed_manifest_promotion_restores_package_and_previous_manifest(
     )
     assert (ready_package / "node.py").read_text(encoding="utf-8") == "ready\n"
     assert manifest_path.read_text(encoding="utf-8") == "previous manifest\n"
-    assert not list((workspace / "custom_nodes").glob(".noofy-materialize-*"))
+    assert not list((workspace / "custom_nodes").glob(".n*"))
 
 
 def test_nested_source_content_hash_changes_when_nested_file_changes(tmp_path: Path) -> None:

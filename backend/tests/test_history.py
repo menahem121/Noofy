@@ -7,7 +7,6 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from app.composition import ApiServices
 from app.engine.models import JobResult
 from app.gallery import GalleryInputSnapshot, RunSubmissionSnapshot
 from app.history import ActivityEventCreate, ActivityLogStore, HistoryQuery, HistoryService
@@ -15,6 +14,7 @@ from app.main import create_app
 from app.runs.result_service import RunResultService
 from app.workflows.library import WorkflowLibraryStore
 from app.workflows.loader import WorkflowPackageLoader
+from tests.service_factory import make_api_services
 
 
 class FakeEngineService:
@@ -157,7 +157,7 @@ def test_history_api_splits_summary_and_detail_payloads(tmp_path: Path) -> None:
             source_event_id="run:job-1",
         )
     )
-    services = ApiServices(
+    services = make_api_services(
         engine_service=FakeEngineService(),
         comfyui_sidecar_service=None,
         user_state_service=None,

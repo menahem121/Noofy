@@ -8,7 +8,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import main as main_module
-from app.composition import ApiServices
 from app.diagnostics import LogStore
 from app.engine.models import (
     ImportModelDownloadProgressItem,
@@ -39,6 +38,7 @@ from app.workflows.package import (
     WorkflowPackage,
 )
 from app.workflows.validator import WorkflowPackageValidator
+from tests.service_factory import make_api_services
 
 
 class StubRuntimeManager:
@@ -420,23 +420,11 @@ class FakeComfyUISidecarService:
 
 
 def _import_test_app(engine_service):
-    placeholder = object()
     sidecar_service = FakeComfyUISidecarService()
     return create_app(
-        services=ApiServices(
+        services=make_api_services(
             engine_service=engine_service,
             comfyui_sidecar_service=sidecar_service,
-            user_state_service=placeholder,
-            asset_service=placeholder,
-            gallery_store=placeholder,
-            api_key_service=placeholder,
-            onboarding_service=placeholder,
-            model_folder_service=placeholder,
-            model_tag_store=placeholder,
-            model_ownership_store=placeholder,
-            model_inventory_service=placeholder,
-            model_download_service=placeholder,
-            noofy_runtime_update_service=placeholder,
             workflow_library_service=getattr(
                 engine_service,
                 "workflow_library_service",

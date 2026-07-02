@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import stat
+import sys
 import zipfile
 
 import pytest
@@ -25,7 +26,11 @@ def _zip_bytes(entries: dict[str, str]) -> bytes:
     with zipfile.ZipFile(payload, "w") as archive:
         for name, content in entries.items():
             archive.writestr(name, content)
-    return payload.getvalue()
+    data = payload.getvalue()
+    for name in entries:
+        if "\\" in name:
+            data = data.replace(name.replace("\\", "/").encode("utf-8"), name.encode("utf-8"))
+    return data
 
 
 def test_validate_archive_members_strips_single_wrapper_root() -> None:
@@ -81,6 +86,8 @@ def test_validate_archive_members_rejects_traversal() -> None:
 def test_validate_archive_members_rejects_invalid_path_shape(
     archive_path: str,
 ) -> None:
+    if sys.platform == "win32" and "\\" in archive_path:
+        pytest.skip("zipfile normalizes backslash member names on Windows")
     data = _zip_bytes({archive_path: "{}"})
 
     with zipfile.ZipFile(io.BytesIO(data)) as archive:

@@ -13,6 +13,7 @@ from app.engine.models import BackendHealthReport, ComfyUIRuntimeStatus, EngineO
 from app import main as main_module
 from app.main import create_app, _sanitized_request_validation_exception_handler
 from app.runtime.comfyui.launch_settings import comfyui_launch_response
+from tests.service_factory import make_api_services
 
 
 class FakeEngineService:
@@ -101,21 +102,8 @@ class FakeRunJobService:
 
 
 def _services(engine_service=None, *, run_job_service=None) -> ApiServices:
-    placeholder = object()
-    return ApiServices(
+    return make_api_services(
         engine_service=engine_service or FakeEngineService(),
-        comfyui_sidecar_service=placeholder,
-        user_state_service=placeholder,
-        asset_service=placeholder,
-        gallery_store=placeholder,
-        api_key_service=placeholder,
-        onboarding_service=placeholder,
-        model_folder_service=placeholder,
-        model_tag_store=placeholder,
-        model_ownership_store=placeholder,
-        model_inventory_service=placeholder,
-        model_download_service=placeholder,
-        noofy_runtime_update_service=placeholder,
         workflow_library_service=None,
         dashboard_authoring_service=None,
         workflow_exporter=None,

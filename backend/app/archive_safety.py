@@ -94,6 +94,8 @@ def path_is_within(root: Path, candidate: Path) -> bool:
 
 
 def contained_destination(root: Path, relative_path: str) -> Path:
+    if "\\" in relative_path:
+        raise PathSafetyError("backslash", relative_path)
     destination = root.joinpath(*PurePosixPath(relative_path).parts)
     resolved_root = root.resolve(strict=False)
     resolved_destination = destination.resolve(strict=False)

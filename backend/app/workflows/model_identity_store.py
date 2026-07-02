@@ -247,10 +247,14 @@ class LocalModelIdentityStore:
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=5, isolation_level=None)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=5000")
-        return conn
+        try:
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=5000")
+            return conn
+        except sqlite3.DatabaseError:
+            conn.close()
+            raise
 
     def _quarantine_database_files(self) -> Path:
         suffix = safe_store_segment(datetime.now(UTC).isoformat())
@@ -437,12 +441,20 @@ def _stat_mtime_ns(stat: object) -> int:
 
 def _stat_device_id(stat: object) -> int | None:
     value = getattr(stat, "st_dev", None)
-    return int(value) if isinstance(value, int) else None
+    return _sqlite_int_or_none(value)
 
 
 def _stat_inode(stat: object) -> int | None:
     value = getattr(stat, "st_ino", None)
-    return int(value) if isinstance(value, int) else None
+    return _sqlite_int_or_none(value)
+
+
+def _sqlite_int_or_none(value: object) -> int | None:
+    if not isinstance(value, int):
+        return None
+    if -(2**63) <= value <= 2**63 - 1:
+        return value
+    return None
 
 
 def _normalize_sha256(value: str) -> str | None:

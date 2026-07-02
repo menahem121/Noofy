@@ -234,7 +234,19 @@ async def test_real_staged_comfyui_runner_smoke_executes_when_enabled(
     assert report.workflow_execution.status is SmokeStageStatus.PASSED
     assert (
         report.workflow_execution.details.get("output_node_count", 0) >= minimum_outputs
-    )
+)
+
+
+def _venv_python(venv_dir: Path) -> Path:
+    if os.name == "nt":
+        return venv_dir / "Scripts" / "python.exe"
+    return venv_dir / "bin" / "python"
+
+
+def _site_packages(venv_dir: Path) -> Path:
+    if os.name == "nt":
+        return venv_dir / "Lib" / "site-packages"
+    return venv_dir / "lib" / "python3.13" / "site-packages"
 
 
 @pytest.mark.anyio
@@ -1083,7 +1095,7 @@ async def test_dependency_import_smoke_runs_declared_non_core_wheels(
     tmp_path: Path,
 ) -> None:
     prepared = _prepared_workspace(tmp_path)
-    python_path = prepared.dependency_env_path / "venv" / "bin" / "python"
+    python_path = _venv_python(prepared.dependency_env_path / "venv")
     python_path.parent.mkdir(parents=True)
     python_path.write_text("# fake python\n", encoding="utf-8")
     (prepared.dependency_env_path / "noofy-dependency-lock.json").write_text(
@@ -1129,9 +1141,7 @@ async def test_dependency_import_smoke_uses_runtime_python_with_dependency_overl
     runtime_python = tmp_path / "runtime" / "bin" / "python"
     runtime_python.parent.mkdir(parents=True)
     runtime_python.write_text("# fake runtime python\n", encoding="utf-8")
-    site_packages = (
-        prepared.dependency_env_path / "venv" / "lib" / "python3.13" / "site-packages"
-    )
+    site_packages = _site_packages(prepared.dependency_env_path / "venv")
     site_packages.mkdir(parents=True)
     (prepared.dependency_env_path / "noofy-dependency-lock.json").write_text(
         json.dumps(
@@ -1161,14 +1171,14 @@ async def test_dependency_import_smoke_uses_runtime_python_with_dependency_overl
 
     assert result.status is SmokeStageStatus.PASSED
     assert commands[0][0] == str(runtime_python)
-    assert str(site_packages) in commands[0][2]
+    assert repr(str(site_packages))[1:-1] in commands[0][2]
     assert "sys.path.append(path)" in commands[0][2]
 
 
 @pytest.mark.anyio
 async def test_dependency_import_smoke_reports_import_failure(tmp_path: Path) -> None:
     prepared = _prepared_workspace(tmp_path)
-    python_path = prepared.dependency_env_path / "venv" / "bin" / "python"
+    python_path = _venv_python(prepared.dependency_env_path / "venv")
     python_path.parent.mkdir(parents=True)
     python_path.write_text("# fake python\n", encoding="utf-8")
     (prepared.dependency_env_path / "noofy-dependency-lock.json").write_text(
@@ -1206,7 +1216,7 @@ async def test_dependency_import_smoke_reports_unsupported_accelerator_friendly(
     tmp_path: Path,
 ) -> None:
     prepared = _prepared_workspace(tmp_path)
-    python_path = prepared.dependency_env_path / "venv" / "bin" / "python"
+    python_path = _venv_python(prepared.dependency_env_path / "venv")
     python_path.parent.mkdir(parents=True)
     python_path.write_text("# fake python\n", encoding="utf-8")
     (prepared.dependency_env_path / "noofy-dependency-lock.json").write_text(

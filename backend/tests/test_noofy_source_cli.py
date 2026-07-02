@@ -216,7 +216,12 @@ def test_signal_process_tree_targets_posix_process_group(monkeypatch) -> None:
         pid = 1234
 
     monkeypatch.setattr(cli.os, "name", "posix")
-    monkeypatch.setattr(cli.os, "killpg", lambda pid, sig: calls.append((pid, sig)))
+    monkeypatch.setattr(
+        cli.os,
+        "killpg",
+        lambda pid, sig: calls.append((pid, sig)),
+        raising=False,
+    )
 
     cli.signal_process_tree(Process(), signal.SIGTERM)
 
@@ -431,6 +436,7 @@ def test_run_waits_for_backend_listener_before_frontend_start(
     )
     monkeypatch.setattr(cli, "require_node", lambda: ("node", "npm"))
     monkeypatch.setattr(cli.subprocess, "Popen", Process)
+    monkeypatch.setattr(cli, "create_windows_kill_on_close_job", lambda process: 99)
     monkeypatch.setattr(cli, "write_process_lease", lambda *args: None)
     monkeypatch.setattr(cli, "supervise_processes", supervise)
     monkeypatch.setattr(
@@ -497,6 +503,10 @@ def test_supervise_processes_installs_handlers_before_prepare_and_start(monkeypa
     ]
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Validates POSIX process-group recovery using ps/procfs and os.killpg.",
+)
 def test_recover_stale_processes_only_signals_validated_checkout_children(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -527,6 +537,10 @@ def test_recover_stale_processes_only_signals_validated_checkout_children(
     assert not lease.exists()
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Validates POSIX process-group recovery using ps/procfs and os.killpg.",
+)
 def test_recover_stale_processes_refuses_to_signal_unverified_live_process(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -555,6 +569,10 @@ def test_recover_stale_processes_refuses_to_signal_unverified_live_process(
     assert lease.exists()
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Validates POSIX process-group recovery using ps/procfs and os.killpg.",
+)
 def test_recover_stale_processes_refuses_pid_reuse(tmp_path: Path, monkeypatch) -> None:
     cli = load_noofy_cli()
     data_dir = tmp_path / "data"

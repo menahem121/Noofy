@@ -84,7 +84,7 @@ class InstallTransactionStore:
         self._thread_locks_guard = threading.Lock()
 
     def open(self, *, workflow_id: str, capsule_fingerprint: str) -> InstallTransaction:
-        transaction_id = f"install-{uuid4().hex}"
+        transaction_id = f"install-{uuid4().hex[:16]}"
         transaction = InstallTransaction(
             transaction_id=transaction_id,
             root_dir=self.root_dir / transaction_id,

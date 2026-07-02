@@ -453,10 +453,8 @@ def test_export_accepts_bundled_package_root_custom_node_sources(tmp_path: Path)
     exported, _ = exporter.export_archive("root_custom_node_workflow")
 
     with zipfile.ZipFile(io.BytesIO(exported)) as zf:
-        assert (
-            zf.read("custom_nodes/RootBundledNode/__init__.py")
-            == b"NODE_CLASS_MAPPINGS = {}\n"
-        )
+        init_py = zf.read("custom_nodes/RootBundledNode/__init__.py")
+        assert init_py.replace(b"\r\n", b"\n") == b"NODE_CLASS_MAPPINGS = {}\n"
         assert zf.read("custom_nodes/RootBundledNode/requirements.txt") == b""
 
 

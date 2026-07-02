@@ -1,3 +1,4 @@
+import os
 import zipfile
 from pathlib import Path
 
@@ -80,6 +81,12 @@ def _manager(tmp_path: Path) -> RuntimeManager:
     )
 
 
+def _venv_python(venv: Path) -> Path:
+    if os.name == "nt":
+        return venv / "Scripts" / "python.exe"
+    return venv / "bin" / "python"
+
+
 async def _async_health() -> tuple[bool, str | None]:
     return False, "not reachable"
 
@@ -87,7 +94,7 @@ async def _async_health() -> tuple[bool, str | None]:
 async def _fake_command(command: list[str], cwd: Path | None) -> CommandResult:
     if command[1:3] == ["-m", "venv"]:
         venv = Path(command[3])
-        python = venv / "bin" / "python"
+        python = _venv_python(venv)
         python.parent.mkdir(parents=True, exist_ok=True)
         python.write_text("#!/usr/bin/env python\n", encoding="utf-8")
         return CommandResult(returncode=0)
@@ -97,7 +104,7 @@ async def _fake_command(command: list[str], cwd: Path | None) -> CommandResult:
 async def _failing_pip_command(command: list[str], cwd: Path | None) -> CommandResult:
     if command[1:3] == ["-m", "venv"]:
         venv = Path(command[3])
-        python = venv / "bin" / "python"
+        python = _venv_python(venv)
         python.parent.mkdir(parents=True, exist_ok=True)
         python.write_text("#!/usr/bin/env python\n", encoding="utf-8")
         return CommandResult(returncode=0)
@@ -602,7 +609,7 @@ async def test_activation_failure_after_prepare_invokes_abort_hook(
     source.mkdir()
     (source / "main.py").write_text("", encoding="utf-8")
     env = tmp_path / "env"
-    python = env / "bin" / "python"
+    python = _venv_python(env)
     python.parent.mkdir(parents=True)
     python.write_text("", encoding="utf-8")
 
@@ -655,7 +662,7 @@ async def test_activation_reconfigure_failure_keeps_previous_active_metadata(
     source.mkdir()
     (source / "main.py").write_text("", encoding="utf-8")
     env = tmp_path / "env"
-    python = env / "bin" / "python"
+    python = _venv_python(env)
     python.parent.mkdir(parents=True)
     python.write_text("", encoding="utf-8")
     paths = resolve_paths(env={"NOOFY_DATA_DIR": str(tmp_path / "data")})
@@ -707,7 +714,7 @@ async def test_rebuild_activation_block_keeps_validated_runtime_for_retry(
     source.mkdir()
     (source / "main.py").write_text("", encoding="utf-8")
     env = tmp_path / "env"
-    python = env / "bin" / "python"
+    python = _venv_python(env)
     python.parent.mkdir(parents=True)
     python.write_text("", encoding="utf-8")
     paths = resolve_paths(env={"NOOFY_DATA_DIR": str(tmp_path / "data")})
@@ -821,7 +828,7 @@ async def test_default_smoke_test_prepares_isolated_runtime_directories(
         "", encoding="utf-8"
     )
     env = tmp_path / "env"
-    python = env / "bin" / "python"
+    python = _venv_python(env)
     python.parent.mkdir(parents=True)
     python.write_text("", encoding="utf-8")
     prepared_dirs: list[set[str]] = []
@@ -992,7 +999,7 @@ async def test_missing_required_import_triggers_staged_env_rebuild(
     (source / "main.py").write_text("print('comfy')\n", encoding="utf-8")
     (source / "requirements.txt").write_text("aiohttp\n", encoding="utf-8")
     broken_env = paths.core_envs_dir / "broken" / "venv"
-    broken_python = broken_env / "bin" / "python"
+    broken_python = _venv_python(broken_env)
     broken_python.parent.mkdir(parents=True)
     broken_python.write_text("", encoding="utf-8")
     _write_active(
@@ -1011,7 +1018,7 @@ async def test_missing_required_import_triggers_staged_env_rebuild(
     async def command(command: list[str], cwd: Path | None) -> CommandResult:
         if command[1:3] == ["-m", "venv"]:
             venv = Path(command[3])
-            python = venv / "bin" / "python"
+            python = _venv_python(venv)
             python.parent.mkdir(parents=True, exist_ok=True)
             python.write_text("", encoding="utf-8")
             return CommandResult(returncode=0)
@@ -1315,7 +1322,7 @@ async def test_repair_failure_uses_bundled_fallback_when_previous_unavailable(
     bundled_source = tmp_path / "bundled-comfyui"
     bundled_source.mkdir()
     (bundled_source / "main.py").write_text("", encoding="utf-8")
-    bundled_python = paths.core_envs_dir / "bundled-comfyui" / "bin" / "python"
+    bundled_python = _venv_python(paths.core_envs_dir / "bundled-comfyui")
     bundled_python.parent.mkdir(parents=True)
     bundled_python.write_text("", encoding="utf-8")
     _write_active(
@@ -1479,7 +1486,7 @@ async def test_repair_failure_uses_previous_active_fallback(tmp_path: Path) -> N
     previous_source.mkdir(parents=True)
     (previous_source / "main.py").write_text("", encoding="utf-8")
     previous_env = paths.core_envs_dir / "previous" / "venv"
-    previous_python = previous_env / "bin" / "python"
+    previous_python = _venv_python(previous_env)
     previous_python.parent.mkdir(parents=True)
     previous_python.write_text("", encoding="utf-8")
     active = LocalComfyUIVersionRecord(
@@ -1535,7 +1542,7 @@ async def test_manual_rebuild_resets_repair_block_and_uses_fresh_env_path(
     (source / "main.py").write_text("", encoding="utf-8")
     (source / "requirements.txt").write_text("aiohttp\n", encoding="utf-8")
     env = paths.core_envs_dir / "comfyui-core-v0.20.1-test" / "venv"
-    python = env / "bin" / "python"
+    python = _venv_python(env)
     python.parent.mkdir(parents=True)
     python.write_text("", encoding="utf-8")
     _write_active(
@@ -1687,7 +1694,7 @@ def test_resolve_active_runtime_selection_uses_installed_metadata(
     env = paths.core_envs_dir / "comfyui-core-v0.20.1-hash" / "venv"
     source.mkdir(parents=True)
     (source / "main.py").write_text("", encoding="utf-8")
-    python = env / "bin" / "python"
+    python = _venv_python(env)
     python.parent.mkdir(parents=True)
     python.write_text("", encoding="utf-8")
     active = {

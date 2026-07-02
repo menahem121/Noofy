@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import re
 import urllib.error
 import urllib.parse
@@ -1781,7 +1782,7 @@ class NoofyArchiveImporter:
         )
 
     def extract_source_files(self, target_dir: Path) -> None:
-        target_dir.mkdir(parents=True, exist_ok=True)
+        _mkdir(target_dir, parents=True, exist_ok=True)
         extracted_bytes = 0
         for name, info in self.members.items():
             if info.is_dir():
@@ -1792,11 +1793,11 @@ class NoofyArchiveImporter:
                 raise NoofyImportError(
                     "Workflow package contains an unsafe path."
                 ) from exc
-            target.parent.mkdir(parents=True, exist_ok=True)
+            _mkdir(target.parent, parents=True, exist_ok=True)
             try:
                 with (
                     self.archive.open(info, "r") as source,
-                    target.open("xb") as dest,
+                    open(_fs_path(target), "xb") as dest,
                 ):
                     copied_bytes = copy_stream_limited(
                         source,
@@ -1804,13 +1805,13 @@ class NoofyArchiveImporter:
                         max_bytes=MAX_TOTAL_UNCOMPRESSED_BYTES - extracted_bytes,
                     )
             except StreamLimitError as exc:
-                target.unlink(missing_ok=True)
+                _unlink_missing_ok(target)
                 raise NoofyImportError(
                     "Workflow package expands to too much data."
                 ) from exc
             extracted_bytes += copied_bytes
             if copied_bytes != info.file_size:
-                target.unlink(missing_ok=True)
+                _unlink_missing_ok(target)
                 raise NoofyImportError(
                     "Workflow package member size could not be verified."
                 )
@@ -3650,6 +3651,46 @@ def _has_nonempty_launch_option(data: dict[str, Any], key: str) -> bool:
 
 def _current_os_name() -> str:
     return current_os_name()
+
+
+def _mkdir(
+    path: Path,
+    mode: int = 0o777,
+    *,
+    parents: bool = False,
+    exist_ok: bool = False,
+) -> None:
+    if not parents:
+        os.mkdir(_fs_path(path), mode)
+        return
+    existed = os.path.isdir(_fs_path(path))
+    current = Path(path.anchor) if path.is_absolute() else Path()
+    for part in path.parts[1:] if path.is_absolute() else path.parts:
+        current = current / part
+        try:
+            os.mkdir(_fs_path(current), mode)
+        except FileExistsError:
+            if not os.path.isdir(_fs_path(current)):
+                raise
+    if existed and not exist_ok:
+        raise FileExistsError(path)
+
+
+def _unlink_missing_ok(path: Path) -> None:
+    try:
+        os.unlink(_fs_path(path))
+    except FileNotFoundError:
+        return
+
+
+def _fs_path(path: Path) -> str:
+    value = str(path)
+    if os.name != "nt" or value.startswith("\\\\?\\"):
+        return value
+    absolute = os.path.abspath(value)
+    if absolute.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + absolute[2:]
+    return "\\\\?\\" + absolute
 
 
 def _current_architecture() -> str:

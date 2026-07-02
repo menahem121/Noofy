@@ -26,7 +26,7 @@ def write_imported_package_transaction(
     dashboard_assets_dir: Path | None = None,
     replace_existing: bool = False,
 ) -> None:
-    transaction_dir = root_dir / "_transactions" / f"import-{uuid.uuid4().hex}"
+    transaction_dir = root_dir / "_transactions" / f"import-{uuid.uuid4().hex[:16]}"
     assert_path_within(root_dir, transaction_dir, purpose="write import transaction")
     assert_path_within(root_dir, target_dir, purpose="write imported package")
     try:

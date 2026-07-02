@@ -144,7 +144,7 @@ def test_result_from_history_adds_view_urls(tmp_path: Path) -> None:
     assert audio["kind"] == "audio"
     assert audio["type"] == "audio"
     assert audio["output_type"] == "output"
-    assert audio["mime_type"] == "audio/x-wav"
+    assert audio["mime_type"] in {"audio/wav", "audio/x-wav"}
     assert audio["url"].startswith("/api/jobs/job-1/outputs/view?")
 
 

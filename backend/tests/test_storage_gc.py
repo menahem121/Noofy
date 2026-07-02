@@ -154,10 +154,17 @@ def _model_ref(blob_path: Path, materialized_path: Path) -> InstalledModelRefere
 
 def _old(path: Path, *, days: int = 30) -> None:
     timestamp = (datetime.now(UTC) - timedelta(days=days)).timestamp()
-    os.utime(path, (timestamp, timestamp), follow_symlinks=False)
+    _utime_no_follow(path, timestamp)
     if path.is_dir():
         for child in path.rglob("*"):
-            os.utime(child, (timestamp, timestamp), follow_symlinks=False)
+            _utime_no_follow(child, timestamp)
+
+
+def _utime_no_follow(path: Path, timestamp: float) -> None:
+    if os.utime in os.supports_follow_symlinks:
+        os.utime(path, (timestamp, timestamp), follow_symlinks=False)
+    else:
+        os.utime(path, (timestamp, timestamp))
 
 
 def test_reference_index_keeps_shared_artifacts_after_one_workflow_is_removed(

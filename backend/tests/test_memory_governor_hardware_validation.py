@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
+
+import pytest
 
 from app.runtime.profiles import (
     DEFAULT_RUNTIME_PROFILE_CATALOG_PATH,
@@ -16,6 +19,7 @@ from tools.validation.memory_governor_hardware_validation import (
 )
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="Validation fixture targets the Linux CUDA runtime profile.")
 def test_validation_workflow_uses_current_linux_cuda_profile(tmp_path: Path) -> None:
     _write_validation_workflow(tmp_path)
 
