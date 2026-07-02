@@ -13,6 +13,7 @@ from app.runtime.environment import RuntimeEnvironment
 from app.runtime.manager import (
     RuntimeManager,
     _managed_runtime_compatibility_args,
+    _managed_subprocess_cwd,
     select_free_port,
 )
 
@@ -99,6 +100,93 @@ def test_windows_wddm_keeps_dynamic_vram_auto(monkeypatch: pytest.MonkeyPatch) -
 
     assert args == []
     assert details["reason"] == "windows_nvidia_tcc_not_detected"
+
+
+def test_managed_subprocess_cwd_strips_windows_extended_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("app.runtime.manager.os.name", "nt")
+
+    assert (
+        _managed_subprocess_cwd(Path(r"\\?\C:\Noofy\noofy-runtime\comfyui"))
+        == r"C:\Noofy\noofy-runtime\comfyui"
+    )
+    assert (
+        _managed_subprocess_cwd(Path(r"\\?\UNC\server\share\noofy-runtime\comfyui"))
+        == r"\\server\share\noofy-runtime\comfyui"
+    )
+
+
+@pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="Windows extended-length cwd semantics are required for this regression.",
+)
+def test_windows_extended_cwd_breaks_comfyui_filename_relpath(
+    tmp_path: Path,
+) -> None:
+    repo_dir = tmp_path / "ComfyUI"
+    repo_dir.mkdir()
+    extended_repo_dir = Path("\\\\?\\" + str(repo_dir))
+    previous_cwd = Path.cwd()
+    filename = "qwen_image_vae.safetensors"
+
+    try:
+        os.chdir(extended_repo_dir)
+        with pytest.raises(ValueError, match="path is on mount"):
+            os.path.relpath(os.path.join("/", filename), "/")
+
+        os.chdir(_managed_subprocess_cwd(extended_repo_dir))
+        assert os.path.relpath(os.path.join("/", filename), "/") == filename
+    finally:
+        os.chdir(previous_cwd)
+
+
+@pytest.mark.anyio
+@pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="Windows extended-length cwd semantics are required for this regression.",
+)
+async def test_managed_start_strips_extended_length_cwd_for_comfyui(
+    tmp_path: Path,
+) -> None:
+    repo_dir = tmp_path / "ComfyUI"
+    repo_dir.mkdir()
+    (repo_dir / "main.py").write_text("", encoding="utf-8")
+    extended_repo_dir = Path("\\\\?\\" + str(repo_dir))
+    captured_cwd: str | None = None
+    process_started = False
+
+    async def create_process(command, **kwargs):
+        nonlocal captured_cwd, process_started
+        process_started = True
+        captured_cwd = kwargs["cwd"]
+        return FakeProcess()
+
+    async def health_check(_: str) -> tuple[bool, str | None]:
+        return process_started, None if process_started else "not reachable"
+
+    log_store = LogStore()
+    manager = RuntimeManager(
+        mode="managed",
+        external_base_url="http://127.0.0.1:8188",
+        repo_dir=extended_repo_dir,
+        python_executable="python3",
+        process_factory=create_process,
+        health_check=health_check,
+        log_store=log_store,
+    )
+
+    result = await manager.start()
+    start_event = next(
+        event
+        for event in log_store.list_events().events
+        if event.message == "Managed ComfyUI process started"
+    )
+
+    assert result.status == "started"
+    assert captured_cwd == str(repo_dir)
+    assert start_event.details["cwd"] == str(repo_dir)
+    assert start_event.details["repo_dir"] == str(extended_repo_dir)
 
 
 @pytest.mark.anyio

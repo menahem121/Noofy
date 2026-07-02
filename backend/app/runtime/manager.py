@@ -476,9 +476,10 @@ class RuntimeManager:
         command.extend(compatibility_args)
         command.extend(self.managed_extra_args)
         process_env = self._managed_process_env()
+        process_cwd = _managed_subprocess_cwd(self.repo_dir)
         self._process = await self._process_factory(
             command,
-            cwd=self.repo_dir,
+            cwd=process_cwd,
             env=process_env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
@@ -492,6 +493,8 @@ class RuntimeManager:
                 "pid": self._process.pid,
                 "host": self.managed_host,
                 "port": self.managed_port,
+                "cwd": process_cwd,
+                "repo_dir": str(self.repo_dir),
                 "compatibility_args": compatibility_args,
                 "compatibility": compatibility_details,
             },
@@ -946,3 +949,19 @@ def _windows_nvidia_driver_model_probe() -> dict[str, object]:
             gpus.append({"name": name, "driver_model": driver_model})
 
     return {"status": "ok", "gpus": gpus}
+
+
+def _managed_subprocess_cwd(path: Path) -> str:
+    """Return a Windows cwd form that keeps subprocess path semantics conventional."""
+    value = str(path)
+    if os.name != "nt":
+        return value
+    return _strip_windows_extended_length_prefix(value)
+
+
+def _strip_windows_extended_length_prefix(value: str) -> str:
+    if value.startswith("\\\\?\\UNC\\"):
+        return "\\\\" + value[8:]
+    if value.startswith("\\\\?\\"):
+        return value[4:]
+    return value
