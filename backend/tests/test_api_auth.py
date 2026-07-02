@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 from app.composition import ApiServices
 from app.engine.models import ComfyUIRuntimeStatus, EngineOutputStream
 from app.main import create_app
-from tests.service_factory import make_api_services
+from conftest import make_api_services
 
 
 class FakeEngineService:

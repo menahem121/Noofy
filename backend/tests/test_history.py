@@ -14,7 +14,7 @@ from app.main import create_app
 from app.runs.result_service import RunResultService
 from app.workflows.library import WorkflowLibraryStore
 from app.workflows.loader import WorkflowPackageLoader
-from tests.service_factory import make_api_services
+from conftest import make_api_services
 
 
 class FakeEngineService:

@@ -1,8 +1,38 @@
 import os
 from pathlib import Path
 import sys
+from dataclasses import fields
+from typing import Any
 
 import pytest
+
+from app.composition import ApiServices
+
+
+_API_SERVICE_PLACEHOLDER = object()
+
+
+def make_api_services(**overrides: Any) -> ApiServices:
+    defaults = {
+        field.name: None
+        if field.name
+        in {
+            "workflow_library_service",
+            "dashboard_authoring_service",
+            "workflow_exporter",
+            "workflow_import_orchestrator",
+            "workflow_runner_lifecycle_service",
+            "run_job_service",
+            "run_orchestrator",
+            "run_result_service",
+            "history_service",
+            "civitai_lora_service",
+        }
+        else _API_SERVICE_PLACEHOLDER
+        for field in fields(ApiServices)
+    }
+    defaults.update(overrides)
+    return ApiServices(**defaults)
 
 
 def pytest_configure(config: pytest.Config) -> None:

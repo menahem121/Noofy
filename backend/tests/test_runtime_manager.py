@@ -64,7 +64,7 @@ def test_managed_runtime_selects_free_port_when_unconfigured(tmp_path: Path) -> 
     assert parsed.port is not None
 
 
-def test_windows_tcc_disables_dynamic_vram(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_windows_tcc_disables_cuda_malloc(monkeypatch: pytest.MonkeyPatch) -> None:
     class Result:
         returncode = 0
         stdout = "NVIDIA L4, TCC\n"
@@ -78,11 +78,8 @@ def test_windows_tcc_disables_dynamic_vram(monkeypatch: pytest.MonkeyPatch) -> N
 
     args, details = _managed_runtime_compatibility_args()
 
-    assert args == ["--disable-dynamic-vram", "--disable-cuda-malloc"]
-    assert (
-        details["reason"]
-        == "windows_nvidia_tcc_disables_dynamic_vram_and_cuda_malloc"
-    )
+    assert args == ["--disable-cuda-malloc"]
+    assert details["reason"] == "windows_nvidia_tcc_disables_cuda_malloc"
     assert details["gpus"] == [{"name": "NVIDIA L4", "driver_model": "TCC"}]
 
 
@@ -391,7 +388,7 @@ async def test_managed_start_command_omits_vram_flag_for_normal_mode(
 
 
 @pytest.mark.anyio
-async def test_managed_start_command_adds_windows_tcc_dynamic_vram_guard(
+async def test_managed_start_command_adds_windows_tcc_cuda_malloc_guard(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -436,18 +433,15 @@ async def test_managed_start_command_adds_windows_tcc_dynamic_vram_guard(
     events = log_store.list_events().events
 
     assert result.status == "started"
-    assert "--disable-dynamic-vram" in captured_command
+    assert "--disable-dynamic-vram" not in captured_command
     assert "--disable-cuda-malloc" in captured_command
     start_event = next(
         event for event in events if event.message == "Managed ComfyUI process started"
     )
-    assert start_event.details["compatibility_args"] == [
-        "--disable-dynamic-vram",
-        "--disable-cuda-malloc",
-    ]
+    assert start_event.details["compatibility_args"] == ["--disable-cuda-malloc"]
     assert (
         start_event.details["compatibility"]["reason"]
-        == "windows_nvidia_tcc_disables_dynamic_vram_and_cuda_malloc"
+        == "windows_nvidia_tcc_disables_cuda_malloc"
     )
 
 

@@ -13,7 +13,7 @@ from app.engine.models import BackendHealthReport, ComfyUIRuntimeStatus, EngineO
 from app import main as main_module
 from app.main import create_app, _sanitized_request_validation_exception_handler
 from app.runtime.comfyui.launch_settings import comfyui_launch_response
-from tests.service_factory import make_api_services
+from conftest import make_api_services
 
 
 class FakeEngineService:

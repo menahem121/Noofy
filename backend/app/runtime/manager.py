@@ -46,7 +46,7 @@ _TRANSIENT_HEALTH_FAILURE_MARKERS = frozenset(
         "readtimeout",
     }
 )
-_WINDOWS_TCC_RUNTIME_ARGS = ["--disable-dynamic-vram", "--disable-cuda-malloc"]
+_WINDOWS_TCC_RUNTIME_ARGS = ["--disable-cuda-malloc"]
 
 
 def select_free_port(host: str = "127.0.0.1") -> int:
@@ -906,7 +906,7 @@ def _managed_runtime_compatibility_args() -> tuple[list[str], dict[str, object]]
         return list(_WINDOWS_TCC_RUNTIME_ARGS), {
             **probe,
             "windows": True,
-            "reason": "windows_nvidia_tcc_disables_dynamic_vram_and_cuda_malloc",
+            "reason": "windows_nvidia_tcc_disables_cuda_malloc",
         }
 
     return [], {

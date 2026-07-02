@@ -38,7 +38,7 @@ from app.workflows.package import (
     WorkflowPackage,
 )
 from app.workflows.validator import WorkflowPackageValidator
-from tests.service_factory import make_api_services
+from conftest import make_api_services
 
 
 class StubRuntimeManager:
