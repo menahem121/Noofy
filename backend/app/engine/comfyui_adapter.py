@@ -35,6 +35,7 @@ from app.engine.models import (
 )
 from app.engine.adapter import EngineMemoryCleanupCapabilities, EngineMemoryCleanupMode
 from app.runs.credentials import plan_from_options
+from app.runtime.fingerprints import sha256_fingerprint
 from app.workflows.package import WorkflowPackage
 from app.workflows.run_input_validation import map_comfyui_submission_validation_error
 
@@ -51,6 +52,22 @@ _PREVIEW_MIME_BY_TYPE = {
     2: "image/png",
 }
 _SUPPORTED_PREVIEW_MIME_TYPES = frozenset(_PREVIEW_MIME_BY_TYPE.values())
+_MODEL_SELECTOR_INPUT_NAMES = frozenset(
+    {
+        "ckpt_name",
+        "clip_name",
+        "clip_name1",
+        "clip_name2",
+        "clip_name3",
+        "control_net_name",
+        "diffusion_model_name",
+        "lora_name",
+        "model_name",
+        "style_model_name",
+        "unet_name",
+        "vae_name",
+    }
+)
 
 
 class ComfyUIEngineAdapter:
@@ -199,6 +216,16 @@ class ComfyUIEngineAdapter:
             "client_id": client_id,
             "extra_data": extra_data,
         }
+        selector_diagnostics = _prompt_model_selector_diagnostics(workflow_package, graph)
+        selector_diagnostics["model_roots"] = [str(root) for root in self.model_roots]
+        self.log_store.add(
+            "info",
+            "ComfyUI prompt model selector snapshot",
+            "comfyui.adapter",
+            job_id=job_id,
+            workflow_id=workflow_package.metadata.id,
+            details=selector_diagnostics,
+        )
 
         prompt_submit_started_at = time.monotonic()
         try:
@@ -1427,6 +1454,88 @@ def _stage_asset_file(source: Path, target: Path) -> None:
         os.link(source, target)
     except OSError:
         shutil.copy2(source, target)
+
+
+def _prompt_model_selector_diagnostics(
+    workflow_package: WorkflowPackage,
+    graph: dict[str, Any],
+) -> dict[str, Any]:
+    selectors: list[dict[str, Any]] = []
+    rooted_selectors: list[dict[str, Any]] = []
+    required_by_target: dict[tuple[str, str], Any] = {}
+    required_models_without_binding: list[dict[str, str]] = []
+    for model in workflow_package.required_models:
+        if model.node_id and model.input_name:
+            required_by_target[(model.node_id, model.input_name)] = model
+            continue
+        required_models_without_binding.append(
+            {
+                "folder": model.folder,
+                "filename": model.filename,
+                "node_type": model.node_type or "",
+                "input_name": model.input_name or "",
+            }
+        )
+
+    for raw_node_id, node in graph.items():
+        node_id = str(raw_node_id)
+        if not isinstance(node, dict):
+            continue
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        node_type = str(node.get("class_type") or "")
+        for input_name, value in inputs.items():
+            input_name = str(input_name)
+            required_model = required_by_target.get((node_id, input_name))
+            if required_model is None and not _looks_like_model_selector_input(node_type, input_name):
+                continue
+            if not isinstance(value, str):
+                continue
+            selector = {
+                "node_id": node_id,
+                "node_type": node_type,
+                "input_name": input_name,
+                "value": value,
+                "root_style": _rooted_selector_style(value),
+            }
+            if required_model is not None:
+                selector["required_model"] = {
+                    "folder": required_model.folder,
+                    "filename": required_model.filename,
+                }
+            selectors.append(selector)
+            if selector["root_style"]:
+                rooted_selectors.append(selector)
+
+    return {
+        "prompt_graph_hash": sha256_fingerprint(graph),
+        "selector_count": len(selectors),
+        "rooted_selector_count": len(rooted_selectors),
+        "selectors": selectors,
+        "rooted_selectors": rooted_selectors,
+        "required_model_count": len(workflow_package.required_models),
+        "required_model_binding_count": len(required_by_target),
+        "required_models_without_binding": required_models_without_binding,
+    }
+
+
+def _looks_like_model_selector_input(node_type: str, input_name: str) -> bool:
+    lowered_input = input_name.casefold()
+    if lowered_input in _MODEL_SELECTOR_INPUT_NAMES:
+        return True
+    return lowered_input.endswith("_name") and "loader" in node_type.casefold()
+
+
+def _rooted_selector_style(value: str) -> str | None:
+    raw = value.strip()
+    if not raw:
+        return None
+    if raw.startswith(("//", "\\\\")):
+        return "unc_or_double_root"
+    if raw.startswith(("/", "\\")):
+        return "rooted"
+    return None
 
 
 def _unambiguous_output_kinds_by_node(workflow_package: WorkflowPackage) -> dict[str, str]:

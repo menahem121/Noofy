@@ -2996,6 +2996,89 @@ describe("WorkflowRunPage", () => {
     expect(within(dialog).getByRole("button", { name: "Download Missing Models" })).toBeDisabled();
   });
 
+  it("refreshes model summary after an in-page download completes without an embedded summary", async () => {
+    let downloaded = false;
+    let runRequests = 0;
+    mockConfiguredDashboardFetch(fetchMock, readyRuntime, configuredPackageData, (init?: RequestInit) => {
+      runRequests += 1;
+      if (runRequests === 1) {
+        return {
+          workflow_id: "text_to_image_v0",
+          valid: false,
+          missing_models: [
+            {
+              folder: "checkpoints",
+              filename: "v1-5-pruned-emaonly-fp16.safetensors",
+              source_url: null,
+              checksum: null,
+            },
+          ],
+          errors: [],
+        };
+      }
+      expect(init?.method).toBe("POST");
+      return {
+        job_id: "job-after-model-download",
+        workflow_id: "text_to_image_v0",
+        engine: "comfyui",
+        status: "queued",
+      };
+    }, (url, init) => {
+      if (url.endsWith("/api/workflows/text_to_image_v0/model-summary")) {
+        return jsonResponse(downloaded ? downloadedModelSummary : missingModelSummary);
+      }
+      if (url.endsWith("/api/models/downloads") && init?.method === "POST") {
+        return jsonResponse({ job_id: "model-download-1", status: "queued", user_facing_message: "Downloading required models..." });
+      }
+      if (url.endsWith("/api/models/downloads/model-download-1")) {
+        downloaded = true;
+        return jsonResponse({
+          job_id: "model-download-1",
+          status: "completed",
+          user_facing_message: "Model download check finished.",
+          current_model_filename: "v1-5-pruned-emaonly-fp16.safetensors",
+          current_model_index: 1,
+          total_models: 1,
+          bytes_downloaded: 1024,
+          total_bytes: 1024,
+          percent: 100,
+          speed_bytes_per_second: null,
+          models: [],
+          model_summary: null,
+        });
+      }
+      if (url.endsWith("/api/jobs/job-after-model-download/progress")) {
+        return jsonResponse({
+          job_id: "job-after-model-download",
+          status: "running",
+          value: 1,
+          max: 10,
+          current_node: null,
+          message: "Running workflow...",
+        });
+      }
+      return undefined;
+    });
+
+    renderRunPage();
+
+    const runButton = await screen.findByRole("button", { name: /run workflow/i });
+    await waitFor(() => expect(runButton).toBeEnabled());
+    fireEvent.click(runButton);
+
+    const dialog = await screen.findByRole("dialog", { name: "Missing Models" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Download Missing Models" }));
+
+    expect(await within(dialog).findByText("Text to Image has all required model files available.")).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+
+    await waitFor(() => expect(runButton).toBeEnabled());
+    fireEvent.click(runButton);
+
+    await waitFor(() => expect(runRequests).toBe(2));
+    expect(screen.queryByRole("dialog", { name: "Missing Models" })).not.toBeInTheDocument();
+  });
+
   it("allows Run while required models are checking, then opens Missing Models if backend validation fails", async () => {
     const checkingModelSummary = {
       ...missingModelSummary,

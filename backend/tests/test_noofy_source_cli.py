@@ -31,12 +31,31 @@ def test_frontend_install_command_prefers_ci_when_lockfile_exists(tmp_path: Path
     (tmp_path / "package-lock.json").write_text("{}", encoding="utf-8")
 
     assert cli.frontend_install_command(tmp_path) == ["npm", "ci"]
+    assert cli.frontend_install_command(tmp_path, npm="npm.cmd") == ["npm.cmd", "ci"]
 
 
 def test_frontend_install_command_uses_install_without_lockfile(tmp_path: Path) -> None:
     cli = load_noofy_cli()
 
     assert cli.frontend_install_command(tmp_path) == ["npm", "install"]
+
+
+def test_node_command_prefers_cmd_shim_on_windows(monkeypatch) -> None:
+    cli = load_noofy_cli()
+    calls = []
+
+    def which(command: str) -> str | None:
+        calls.append(command)
+        if command == "npm.cmd":
+            return r"C:\Program Files\nodejs\npm.cmd"
+        if command == "npm":
+            return r"C:\Program Files\nodejs\npm"
+        return None
+
+    monkeypatch.setattr(cli.shutil, "which", which)
+
+    assert cli.node_command("npm", os_name="nt") == r"C:\Program Files\nodejs\npm.cmd"
+    assert calls == ["npm.cmd"]
 
 
 def test_source_checkout_env_sets_managed_runtime_and_frontend_proxy_port(tmp_path: Path) -> None:
@@ -224,6 +243,20 @@ def test_signal_process_tree_targets_owned_windows_process_tree(monkeypatch) -> 
     assert calls == [(1234, False), (1234, True)]
 
 
+def test_process_exists_uses_windows_process_identity(monkeypatch) -> None:
+    cli = load_noofy_cli()
+
+    def fail_if_called(pid: int, signal_number: int) -> None:
+        raise AssertionError("os.kill should not be used as a Windows process probe")
+
+    monkeypatch.setattr(cli.os, "name", "nt")
+    monkeypatch.setattr(cli.os, "kill", fail_if_called)
+    monkeypatch.setattr(cli, "windows_process_identity", lambda pid: "created" if pid == 123 else None)
+
+    assert cli.process_exists(123) is True
+    assert cli.process_exists(456) is False
+
+
 def test_own_process_attaches_windows_kill_on_close_job(monkeypatch, tmp_path: Path) -> None:
     cli = load_noofy_cli()
     process = object()
@@ -396,7 +429,7 @@ def test_run_waits_for_backend_listener_before_frontend_start(
         "NOOFY_API_KEY_VAULT_PASSPHRASE_FILE",
         str(tmp_path / "secrets" / "vault.passphrase"),
     )
-    monkeypatch.setattr(cli, "require_node", lambda: None)
+    monkeypatch.setattr(cli, "require_node", lambda: ("node", "npm"))
     monkeypatch.setattr(cli.subprocess, "Popen", Process)
     monkeypatch.setattr(cli, "write_process_lease", lambda *args: None)
     monkeypatch.setattr(cli, "supervise_processes", supervise)

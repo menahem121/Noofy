@@ -590,6 +590,13 @@
   color: var(--text-primary);
 }
 
+.civitai-lora-filters option,
+.civitai-lora-detection option {
+  color: #1f1b24;
+  background: #ffffff;
+  font-weight: 600;
+}
+
 .civitai-lora-modal__body {
   display: grid;
   align-content: start;
@@ -1066,6 +1073,12 @@
 .filter-select:focus {
   border-color: rgba(139, 92, 246, 0.75);
   box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.18);
+}
+
+.filter-select option {
+  color: #1f1b24;
+  background: #ffffff;
+  font-weight: 600;
 }
 
 .tag-create-form {

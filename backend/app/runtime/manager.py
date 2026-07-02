@@ -3,6 +3,7 @@ import contextlib
 import os
 import signal
 import socket
+import subprocess
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -45,6 +46,7 @@ _TRANSIENT_HEALTH_FAILURE_MARKERS = frozenset(
         "readtimeout",
     }
 )
+_WINDOWS_TCC_RUNTIME_ARGS = ["--disable-dynamic-vram", "--disable-cuda-malloc"]
 
 
 def select_free_port(host: str = "127.0.0.1") -> int:
@@ -260,6 +262,9 @@ class RuntimeManager:
             return await self._start_locked()
 
     async def _start_locked(self) -> ProcessActionResult:
+        if self.mode == "managed" and not self._is_managed_process_running():
+            self._cleanup_stale_pid()
+
         current = await self.status()
         if self.mode == "external":
             if current.reachable:
@@ -320,9 +325,6 @@ class RuntimeManager:
                         update={"environment": environment_status}
                     ),
                 )
-
-        # Clean up any orphan from a previous backend crash.
-        self._cleanup_stale_pid()
 
         self._stopping = False
         self._restart_attempt = 0
@@ -470,6 +472,8 @@ class RuntimeManager:
         command.extend(self._managed_vram_args())
         command.extend(self._managed_preview_args())
         command.extend(self._managed_path_args())
+        compatibility_args, compatibility_details = _managed_runtime_compatibility_args()
+        command.extend(compatibility_args)
         command.extend(self.managed_extra_args)
         process_env = self._managed_process_env()
         self._process = await self._process_factory(
@@ -488,6 +492,8 @@ class RuntimeManager:
                 "pid": self._process.pid,
                 "host": self.managed_host,
                 "port": self.managed_port,
+                "compatibility_args": compatibility_args,
+                "compatibility": compatibility_details,
             },
         )
         self._write_pid_file(self._process.pid)
@@ -709,12 +715,16 @@ class RuntimeManager:
 
     @staticmethod
     def _is_pid_alive(pid: int) -> bool:
+        if pid <= 0:
+            return False
         try:
             os.kill(pid, 0)
         except ProcessLookupError:
             return False
         except PermissionError:
             return True  # Process exists but we can't signal it.
+        except OSError:
+            return False
         return True
 
     # ------------------------------------------------------------------
@@ -875,3 +885,64 @@ def _is_transient_health_failure(error: str | None) -> bool:
         marker.replace(" ", "") in normalized
         for marker in _TRANSIENT_HEALTH_FAILURE_MARKERS
     )
+
+
+def _managed_runtime_compatibility_args() -> tuple[list[str], dict[str, object]]:
+    """Return quality-neutral launch guards for known host/runtime mismatches."""
+    if os.name != "nt":
+        return [], {"windows": False, "reason": "not_windows"}
+
+    probe = _windows_nvidia_driver_model_probe()
+    gpus = probe.get("gpus", [])
+    if not isinstance(gpus, list):
+        gpus = []
+    driver_models = [
+        str(row.get("driver_model", "")).strip().upper()
+        for row in gpus
+        if isinstance(row, dict)
+        if str(row.get("driver_model", "")).strip()
+    ]
+    if any(model == "TCC" for model in driver_models):
+        return list(_WINDOWS_TCC_RUNTIME_ARGS), {
+            **probe,
+            "windows": True,
+            "reason": "windows_nvidia_tcc_disables_dynamic_vram_and_cuda_malloc",
+        }
+
+    return [], {
+        **probe,
+        "windows": True,
+        "reason": "windows_nvidia_tcc_not_detected",
+    }
+
+
+def _windows_nvidia_driver_model_probe() -> dict[str, object]:
+    try:
+        result = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=name,driver_model.current",
+                "--format=csv,noheader",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {"status": "unavailable", "error": exc.__class__.__name__, "gpus": []}
+
+    if result.returncode != 0:
+        error = (result.stderr or result.stdout or "nvidia-smi failed").strip()
+        return {"status": "failed", "error": error[:500], "gpus": []}
+
+    gpus: list[dict[str, str]] = []
+    for line in result.stdout.splitlines():
+        parts = [part.strip() for part in line.split(",", 1)]
+        if len(parts) != 2:
+            continue
+        name, driver_model = parts
+        if name or driver_model:
+            gpus.append({"name": name, "driver_model": driver_model})
+
+    return {"status": "ok", "gpus": gpus}

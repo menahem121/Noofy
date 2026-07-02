@@ -98,6 +98,12 @@
   max-width: 150px;
 }
 
+.three-d-viewer__settings option {
+  color: #1f1b24;
+  background: #ffffff;
+  font-weight: 600;
+}
+
 .widget-output-three-d {
   display: grid;
   gap: 10px;
@@ -932,6 +938,12 @@
   cursor: default;
 }
 
+.workflow-variant-select__control option {
+  color: #1f1b24;
+  background: #ffffff;
+  font-weight: 600;
+}
+
 .workflow-variant-select__control svg {
   position: absolute;
   right: 12px;
@@ -1646,6 +1658,14 @@
 
 .engine-status-card__version-select select:focus {
   border-color: var(--accent);
+}
+
+.engine-status-card__version-select option,
+.settings-option--select option,
+.field-group option {
+  color: #1f1b24;
+  background: #ffffff;
+  font-weight: 600;
 }
 
 .engine-status-card__update-strip {

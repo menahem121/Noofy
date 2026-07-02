@@ -1429,6 +1429,12 @@
   outline: none;
 }
 
+.canvas-widget-select option {
+  color: #1f1b24;
+  background: #ffffff;
+  font-weight: 600;
+}
+
 /* seed widget: compact single-button "after each run" behaviour toggle */
 
 .seed-mode-toggle {

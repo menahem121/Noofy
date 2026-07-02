@@ -132,6 +132,13 @@
   outline: 0;
 }
 
+.workflow-edit-field option,
+.workflow-export-modal__field option {
+  color: #1f1b24;
+  background: #ffffff;
+  font-weight: 600;
+}
+
 .workflow-export-modal__field input:focus {
   border-color: rgba(139, 92, 246, 0.62);
   box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.16);

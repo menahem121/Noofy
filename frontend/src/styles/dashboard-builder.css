@@ -795,6 +795,12 @@
   box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.16);
 }
 
+.builder-input option {
+  color: #1f1b24;
+  background: #ffffff;
+  font-weight: 600;
+}
+
 .builder-input[aria-invalid="true"] {
   border-color: rgba(248, 113, 113, 0.72);
 }

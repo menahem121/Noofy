@@ -499,9 +499,14 @@ export function WorkflowRunPage({
     workflowId,
     activeModelSummary,
     requiredModelsModalOpen,
-    loadRequirements,
+    loadRequirements: refreshWorkflowReadinessAfterModelAction,
     onModelSummary: (modelSummary) => {
-      setState((current) => ({ ...current, modelSummary }));
+      setState((current) => ({
+        ...current,
+        modelSummary,
+        modelSummaryLoading: false,
+        validation: shouldClearMissingModelValidation(current.validation, modelSummary) ? null : current.validation,
+      }));
     },
   });
   const activeModelDownloadJob = useMemo(() => {
@@ -836,6 +841,19 @@ export function WorkflowRunPage({
       return modelSummary;
     } catch {
       return null;
+    }
+  }
+
+  async function refreshWorkflowReadinessAfterModelAction() {
+    const [modelSummary] = await Promise.all([
+      refreshWorkflowModelSummaryAfterRun(),
+      loadRequirements(),
+    ]);
+    if (modelSummary) {
+      setState((current) => ({
+        ...current,
+        validation: shouldClearMissingModelValidation(current.validation, modelSummary) ? null : current.validation,
+      }));
     }
   }
 
@@ -2567,6 +2585,19 @@ function resetRunPageStateAfterBackendSessionRecovery(current: RunPageState): Ru
     packageLoadError: null,
     packageLoadErrorStatus: null,
   };
+}
+
+function shouldClearMissingModelValidation(
+  validation: WorkflowValidationResult | null,
+  modelSummary: RequiredModelSummary,
+) {
+  return Boolean(
+    validation &&
+      !validation.valid &&
+      validation.missing_models.length > 0 &&
+      validation.errors.length === 0 &&
+      modelSummary.ready_to_run,
+  );
 }
 
 type WorkflowCustomNodeResolution = NonNullable<WorkflowImportResponse["custom_node_resolution"]>;

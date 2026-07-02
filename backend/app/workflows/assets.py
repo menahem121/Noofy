@@ -104,30 +104,31 @@ class DashboardAssetService:
                 continue
         return removed
 
-    def store(self, data: bytes, content_type: str, original_filename: str) -> dict[str, str]:
-        if len(data) > MAX_ASSET_BYTES:
-            raise AssetUploadError("File exceeds the 25 MB size limit.")
-
-        if content_type not in ALLOWED_MIME_TYPES:
-            raise AssetUploadError(f"File type '{content_type}' is not allowed.")
-
-        detected = _detect_image_content_type(data)
-        if detected is None:
-            raise AssetUploadError("File does not appear to be a valid image.")
-        if detected != content_type:
-            raise AssetUploadError(f"File content does not match '{content_type}'.")
-
-        ext = _safe_ext(content_type)
+    def store(self, data: bytes, content_type: str, original_filename: str) -> dict[str, Any]:
+        original_filename = _safe_original_filename(original_filename)
+        normalized_content_type = _normalized_image_content_type(content_type, original_filename)
+        metadata = self._validated_image_metadata(data, normalized_content_type)
+        ext = _safe_ext(metadata["content_type"])
         asset_id = f"{uuid.uuid4()}{ext}"
 
         self._dir.mkdir(parents=True, exist_ok=True)
         asset_path = self._dir / asset_id
         meta_path = self._dir / f"{asset_id}.meta.json"
+        record = {
+            "asset_id": asset_id,
+            "kind": "image",
+            "original_filename": original_filename,
+            "content_type": metadata["content_type"],
+            "size": len(data),
+            "format": ext.removeprefix("."),
+            "width": metadata["width"],
+            "height": metadata["height"],
+        }
 
         _atomic_write_bytes(asset_path, data)
-        _atomic_write_json(meta_path, {"asset_id": asset_id, "original_filename": original_filename})
+        _atomic_write_json(meta_path, record)
 
-        return {"asset_id": asset_id, "original_filename": original_filename}
+        return record
 
     def store_image_from_file(
         self,

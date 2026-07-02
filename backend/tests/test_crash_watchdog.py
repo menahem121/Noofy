@@ -436,6 +436,25 @@ async def test_stale_pid_file_cleaned_on_startup(tmp_path: Path) -> None:
     assert not pid_file.exists()
 
 
+def test_stale_pid_cleanup_handles_windows_invalid_pid_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pid_dir = tmp_path / "runtime"
+    pid_dir.mkdir()
+    pid_file = pid_dir / "comfyui.pid"
+    pid_file.write_text("99999999", encoding="utf-8")
+
+    def invalid_pid(*args) -> None:
+        raise OSError(87, "The parameter is incorrect")
+
+    monkeypatch.setattr("app.runtime.manager.os.kill", invalid_pid)
+    manager = _base_manager(tmp_path, pid_dir=pid_dir)
+
+    manager._cleanup_stale_pid()
+
+    assert not pid_file.exists()
+
+
 # -----------------------------------------------------------------------
 # Backoff timing
 # -----------------------------------------------------------------------

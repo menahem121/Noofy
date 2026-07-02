@@ -56,14 +56,7 @@ export function useWorkflowModelActions({
     const interval = window.setInterval(() => {
       fetchModelDownloadStatus(modelDownloadJob.job_id)
         .then((job) => {
-          setModelDownloadJob(job);
-          setModelDownloadError(null);
-          if (job.model_summary) {
-            onModelSummaryRef.current(job.model_summary);
-          }
-          if (!isModelDownloadActive(job.status)) {
-            void loadRequirementsRef.current();
-          }
+          handleModelDownloadStatus(job);
         })
         .catch((error) => {
           setModelDownloadError(error instanceof Error ? error.message : "Could not check model download progress.");
@@ -113,10 +106,7 @@ export function useWorkflowModelActions({
     try {
       const started = await startModelDownload(selections);
       const status = await fetchModelDownloadStatus(started.job_id);
-      setModelDownloadJob(status);
-      if (status.model_summary) {
-        onModelSummaryRef.current(status.model_summary);
-      }
+      handleModelDownloadStatus(status);
     } catch (error) {
       setModelDownloadError(error instanceof Error ? error.message : "Could not start the model download.");
     } finally {
@@ -130,6 +120,17 @@ export function useWorkflowModelActions({
       setModelDownloadJob(await cancelModelDownload(modelDownloadJob.job_id));
     } catch (error) {
       setModelDownloadError(error instanceof Error ? error.message : "Could not cancel the model download.");
+    }
+  }
+
+  function handleModelDownloadStatus(job: ModelDownloadJobStatus) {
+    setModelDownloadJob(job);
+    setModelDownloadError(null);
+    if (job.model_summary) {
+      onModelSummaryRef.current(job.model_summary);
+    }
+    if (!isModelDownloadActive(job.status)) {
+      void loadRequirementsRef.current();
     }
   }
 

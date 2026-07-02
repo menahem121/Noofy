@@ -601,12 +601,16 @@ def _safe_runner_id(runner_id: str) -> str:
 
 
 def _is_pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
     except PermissionError:
         return True
+    except OSError:
+        return False
     return True
 
 

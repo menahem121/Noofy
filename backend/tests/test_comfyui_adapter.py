@@ -655,6 +655,174 @@ async def test_run_workflow_does_not_hardcode_prompt_preview_method(
 
 
 @pytest.mark.anyio
+async def test_run_workflow_logs_model_selector_snapshot_before_submit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        assert request.url.path == "/prompt"
+        return httpx.Response(200, json={"prompt_id": "job"})
+
+    transport = httpx.MockTransport(handler)
+    original_client = httpx.AsyncClient
+
+    def mock_client(*args, **kwargs):
+        kwargs["transport"] = transport
+        return original_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", mock_client)
+    log_store = LogStore()
+    package = WorkflowPackage.model_validate(
+        {
+            "metadata": {"id": "model_wf", "name": "Model Workflow", "version": "1.0.0"},
+            "engine": "comfyui",
+            "required_models": [
+                {
+                    "folder": "vae",
+                    "filename": "qwen_image_vae.safetensors",
+                    "node_id": "60:15",
+                    "node_type": "VAELoader",
+                    "input_name": "vae_name",
+                }
+            ],
+            "custom_nodes": [],
+            "comfyui_graph": {
+                "60:15": {
+                    "class_type": "VAELoader",
+                    "inputs": {"vae_name": "qwen_image_vae.safetensors"},
+                },
+                "1": {
+                    "class_type": "TextNode",
+                    "inputs": {"text": "qwen_image_vae.safetensors"},
+                },
+            },
+            "dashboard": {
+                "version": "0.1.0",
+                "status": "configured",
+                "sections": [],
+            },
+        }
+    )
+    adapter = ComfyUIEngineAdapter("http://comfyui.test", tmp_path, log_store=log_store)
+
+    await adapter.run_workflow(
+        package,
+        package.comfyui_graph,
+        {},
+        {"listen_for_events": False, "job_id": "job"},
+    )
+
+    payload = json_payload(requests[0])
+    assert payload["prompt"]["60:15"]["inputs"]["vae_name"] == "qwen_image_vae.safetensors"
+    snapshot = next(
+        event
+        for event in log_store.list_events(job_id="job").events
+        if event.message == "ComfyUI prompt model selector snapshot"
+    )
+    assert snapshot.details["prompt_graph_hash"].startswith("sha256:")
+    assert snapshot.details["selector_count"] == 1
+    assert snapshot.details["rooted_selector_count"] == 0
+    assert snapshot.details["required_model_binding_count"] == 1
+    assert snapshot.details["selectors"] == [
+        {
+            "node_id": "60:15",
+            "node_type": "VAELoader",
+            "input_name": "vae_name",
+            "value": "qwen_image_vae.safetensors",
+            "root_style": None,
+            "required_model": {
+                "folder": "vae",
+                "filename": "qwen_image_vae.safetensors",
+            },
+        }
+    ]
+
+
+@pytest.mark.anyio
+async def test_run_workflow_logs_rooted_model_selector_without_rewriting_prompt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        assert request.url.path == "/prompt"
+        return httpx.Response(200, json={"prompt_id": "job"})
+
+    transport = httpx.MockTransport(handler)
+    original_client = httpx.AsyncClient
+
+    def mock_client(*args, **kwargs):
+        kwargs["transport"] = transport
+        return original_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", mock_client)
+    log_store = LogStore()
+    package = WorkflowPackage.model_validate(
+        {
+            "metadata": {"id": "model_wf", "name": "Model Workflow", "version": "1.0.0"},
+            "engine": "comfyui",
+            "required_models": [
+                {
+                    "folder": "vae",
+                    "filename": "qwen_image_vae.safetensors",
+                }
+            ],
+            "custom_nodes": [],
+            "comfyui_graph": {
+                "60:15": {
+                    "class_type": "VAELoader",
+                    "inputs": {"vae_name": "\\\\qwen_image_vae.safetensors"},
+                },
+                "1": {
+                    "class_type": "TextNode",
+                    "inputs": {"text": "\\\\qwen_image_vae.safetensors"},
+                },
+            },
+            "dashboard": {
+                "version": "0.1.0",
+                "status": "configured",
+                "sections": [],
+            },
+        }
+    )
+    adapter = ComfyUIEngineAdapter("http://comfyui.test", tmp_path, log_store=log_store)
+
+    await adapter.run_workflow(
+        package,
+        package.comfyui_graph,
+        {},
+        {"listen_for_events": False, "job_id": "job"},
+    )
+
+    payload = json_payload(requests[0])
+    assert payload["prompt"]["60:15"]["inputs"]["vae_name"] == "\\\\qwen_image_vae.safetensors"
+    assert payload["prompt"]["1"]["inputs"]["text"] == "\\\\qwen_image_vae.safetensors"
+    snapshot = next(
+        event
+        for event in log_store.list_events(job_id="job").events
+        if event.message == "ComfyUI prompt model selector snapshot"
+    )
+    assert snapshot.details["selector_count"] == 1
+    assert snapshot.details["rooted_selector_count"] == 1
+    assert snapshot.details["required_model_binding_count"] == 0
+    assert snapshot.details["rooted_selectors"][0]["node_id"] == "60:15"
+    assert snapshot.details["rooted_selectors"][0]["input_name"] == "vae_name"
+    assert snapshot.details["rooted_selectors"][0]["value"] == "\\\\qwen_image_vae.safetensors"
+    assert snapshot.details["rooted_selectors"][0]["root_style"] == "unc_or_double_root"
+    assert snapshot.details["required_models_without_binding"] == [
+        {
+            "folder": "vae",
+            "filename": "qwen_image_vae.safetensors",
+            "node_type": "",
+            "input_name": "",
+        }
+    ]
+
+
+@pytest.mark.anyio
 async def test_run_workflow_logs_prompt_submission_duration(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

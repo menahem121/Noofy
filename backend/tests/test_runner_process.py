@@ -7,7 +7,7 @@ import sys
 import pytest
 
 from app.diagnostics import LogStore
-from app.runtime.runners import runner_memory_probe
+from app.runtime.runners import runner_memory_probe, runner_process
 from app.runtime.runners.runner_process import RunnerLaunchSpec, RunnerProcessSupervisor
 from app.runtime.runners.supervisor import RunnerKind, RunnerMemoryClass, RunnerStatus
 
@@ -155,6 +155,17 @@ def test_runner_startup_sweep_removes_stale_pid_file(
     assert cleaned == 1
     assert killed == [4321]
     assert not (pid_dir / "runner-old.pid").exists()
+
+
+def test_runner_pid_liveness_handles_windows_invalid_pid_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def invalid_pid(*args) -> None:
+        raise OSError(87, "The parameter is incorrect")
+
+    monkeypatch.setattr(runner_process.os, "kill", invalid_pid)
+
+    assert not runner_process._is_pid_alive(99999999)
 
 
 @pytest.mark.anyio

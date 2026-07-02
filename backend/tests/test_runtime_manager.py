@@ -9,7 +9,11 @@ import pytest
 from app.diagnostics import LogStore
 from app.engine.models import RuntimeHardwareProfile
 from app.runtime.environment import RuntimeEnvironment
-from app.runtime.manager import RuntimeManager, select_free_port
+from app.runtime.manager import (
+    RuntimeManager,
+    _managed_runtime_compatibility_args,
+    select_free_port,
+)
 
 
 class FakeProcess:
@@ -57,6 +61,46 @@ def test_managed_runtime_selects_free_port_when_unconfigured(tmp_path: Path) -> 
     parsed = urlparse(manager.base_url)
     assert parsed.hostname == "127.0.0.1"
     assert parsed.port is not None
+
+
+def test_windows_tcc_disables_dynamic_vram(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Result:
+        returncode = 0
+        stdout = "NVIDIA L4, TCC\n"
+        stderr = ""
+
+    monkeypatch.setattr("app.runtime.manager.os.name", "nt")
+    monkeypatch.setattr(
+        "app.runtime.manager.subprocess.run",
+        lambda *args, **kwargs: Result(),
+    )
+
+    args, details = _managed_runtime_compatibility_args()
+
+    assert args == ["--disable-dynamic-vram", "--disable-cuda-malloc"]
+    assert (
+        details["reason"]
+        == "windows_nvidia_tcc_disables_dynamic_vram_and_cuda_malloc"
+    )
+    assert details["gpus"] == [{"name": "NVIDIA L4", "driver_model": "TCC"}]
+
+
+def test_windows_wddm_keeps_dynamic_vram_auto(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Result:
+        returncode = 0
+        stdout = "NVIDIA RTX 4090, WDDM\n"
+        stderr = ""
+
+    monkeypatch.setattr("app.runtime.manager.os.name", "nt")
+    monkeypatch.setattr(
+        "app.runtime.manager.subprocess.run",
+        lambda *args, **kwargs: Result(),
+    )
+
+    args, details = _managed_runtime_compatibility_args()
+
+    assert args == []
+    assert details["reason"] == "windows_nvidia_tcc_not_detected"
 
 
 @pytest.mark.anyio
@@ -346,6 +390,119 @@ async def test_managed_start_command_omits_vram_flag_for_normal_mode(
 
 
 @pytest.mark.anyio
+async def test_managed_start_command_adds_windows_tcc_dynamic_vram_guard(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Result:
+        returncode = 0
+        stdout = "NVIDIA L4, TCC\n"
+        stderr = ""
+
+    monkeypatch.setattr("app.runtime.manager.os.name", "nt")
+    monkeypatch.setattr(
+        "app.runtime.manager.subprocess.run",
+        lambda *args, **kwargs: Result(),
+    )
+    repo_dir = tmp_path / "ComfyUI"
+    repo_dir.mkdir()
+    (repo_dir / "main.py").write_text("", encoding="utf-8")
+    captured_command: list[str] = []
+    process_started = False
+
+    async def create_process(command, **kwargs):
+        nonlocal captured_command, process_started
+        process_started = True
+        captured_command = list(command)
+        return FakeProcess()
+
+    async def health_check(_: str) -> tuple[bool, str | None]:
+        return process_started, None if process_started else "not reachable"
+
+    log_store = LogStore()
+    manager = RuntimeManager(
+        mode="managed",
+        external_base_url="http://127.0.0.1:8188",
+        repo_dir=repo_dir,
+        python_executable="python3",
+        process_factory=create_process,
+        health_check=health_check,
+        managed_vram_mode="normal",
+        log_store=log_store,
+    )
+
+    result = await manager.start()
+    events = log_store.list_events().events
+
+    assert result.status == "started"
+    assert "--disable-dynamic-vram" in captured_command
+    assert "--disable-cuda-malloc" in captured_command
+    start_event = next(
+        event for event in events if event.message == "Managed ComfyUI process started"
+    )
+    assert start_event.details["compatibility_args"] == [
+        "--disable-dynamic-vram",
+        "--disable-cuda-malloc",
+    ]
+    assert (
+        start_event.details["compatibility"]["reason"]
+        == "windows_nvidia_tcc_disables_dynamic_vram_and_cuda_malloc"
+    )
+
+
+@pytest.mark.anyio
+async def test_managed_start_replaces_reachable_orphan_from_pid_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_dir = tmp_path / "ComfyUI"
+    repo_dir.mkdir()
+    (repo_dir / "main.py").write_text("", encoding="utf-8")
+    pid_dir = tmp_path / "pids"
+    pid_dir.mkdir()
+    (pid_dir / "comfyui.pid").write_text("9876", encoding="utf-8")
+    spawned = False
+    killed_orphan = False
+
+    def fake_kill(pid: int, sig: int) -> None:
+        nonlocal killed_orphan
+        assert pid == 9876
+        if sig != 0:
+            killed_orphan = True
+
+    async def create_process(*args, **kwargs):
+        nonlocal spawned
+        spawned = True
+        return FakeProcess()
+
+    async def health_check(_: str) -> tuple[bool, str | None]:
+        if spawned:
+            return True, None
+        if not killed_orphan:
+            return True, None
+        return False, "not reachable"
+
+    monkeypatch.setattr("app.runtime.manager.os.kill", fake_kill)
+    manager = RuntimeManager(
+        mode="managed",
+        external_base_url="http://127.0.0.1:8188",
+        repo_dir=repo_dir,
+        python_executable="python3",
+        process_factory=create_process,
+        health_check=health_check,
+        log_store=LogStore(),
+        pid_dir=pid_dir,
+    )
+
+    result = await manager.start()
+
+    assert result.status == "started"
+    assert killed_orphan
+    assert spawned
+    assert (pid_dir / "comfyui.pid").read_text(encoding="utf-8") == "4321"
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize(
     ("mode", "flag"),
     [
@@ -460,6 +617,8 @@ parser.add_argument("--listen", default="127.0.0.1")
 parser.add_argument("--port", type=int, required=True)
 parser.add_argument("--disable-auto-launch", action="store_true")
 parser.add_argument("--dont-print-server", action="store_true")
+parser.add_argument("--disable-dynamic-vram", action="store_true")
+parser.add_argument("--disable-cuda-malloc", action="store_true")
 parser.add_argument("--preview-method", default="none")
 parser.add_argument("--preview-size", type=int, default=512)
 args = parser.parse_args()

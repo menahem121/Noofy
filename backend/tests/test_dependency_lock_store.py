@@ -104,6 +104,16 @@ def test_dependency_lock_store_keeps_runtime_variants_for_same_dependency_hash(t
     ) == linux_lock
 
 
+def test_dependency_lock_store_variant_path_stays_below_windows_path_limit() -> None:
+    root = Path(
+        r"C:\Users\Administrator\AppData\Roaming\Noofy\runtime-store\dependency-locks"
+    )
+    store = ResolvedDependencyLockStore(root)
+    lock = _lock_with_hash("sha256:" + ("2" * 64), "linux-x64-cuda130")
+
+    assert len(str(store.path_for_lock(lock).with_suffix(".json.tmp"))) < 260
+
+
 def test_dependency_lock_store_keeps_same_runtime_identity_policy_variants(tmp_path: Path) -> None:
     store = ResolvedDependencyLockStore(tmp_path)
     lock_hash = "sha256:" + ("3" * 64)

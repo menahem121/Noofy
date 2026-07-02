@@ -106,6 +106,15 @@ def test_store_png_returns_asset_id(tmp_path: Path) -> None:
     assert result["original_filename"] == "test.png"
 
 
+def test_store_png_accepts_octet_stream_when_filename_matches(tmp_path: Path) -> None:
+    svc = DashboardAssetService(tmp_path / "assets")
+    result = svc.store(PNG_BYTES, "application/octet-stream", r"C:\Users\Ada\Pictures\test.png")
+
+    assert result["asset_id"].endswith(".png")
+    assert result["original_filename"] == "test.png"
+    assert result["content_type"] == "image/png"
+
+
 def test_stored_file_exists(tmp_path: Path) -> None:
     svc = DashboardAssetService(tmp_path / "assets")
     result = svc.store(PNG_BYTES, "image/png", "img.png")
@@ -647,6 +656,23 @@ def test_upload_dashboard_asset_route_uses_workflow_path_param(tmp_path: Path) -
     body = response.json()
     assert body["asset_id"].endswith(".png")
     assert (tmp_path / "assets" / body["asset_id"]).exists()
+
+
+def test_upload_dashboard_asset_route_accepts_octet_stream_image(tmp_path: Path) -> None:
+    asset_service = DashboardAssetService(tmp_path / "assets")
+    with TestClient(
+        create_app(engine_service=FakeEngineService(), asset_service=asset_service)
+    ) as client:
+        response = client.post(
+            "/api/workflows/wf-1/assets/image",
+            files={"image": (r"C:\Users\Ada\Pictures\img.png", PNG_BYTES, "application/octet-stream")},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["asset_id"].endswith(".png")
+    assert body["original_filename"] == "img.png"
+    assert body["content_type"] == "image/png"
 
 
 def test_workflow_default_asset_route_serves_packaged_media(tmp_path: Path) -> None:

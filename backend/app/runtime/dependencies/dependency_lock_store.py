@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from hashlib import sha256
 from pathlib import Path
 
 from app.runtime.dependencies.dependency_lock import (
@@ -22,21 +23,24 @@ class ResolvedDependencyLockStore:
 
     def path_for_lock(self, lock: ResolvedDependencyLock) -> Path:
         lock_hash = lock.lock_hash or resolved_dependency_lock_hash(lock)
-        runtime_identity = _safe_fingerprint(
-            "__".join(
-                (
-                    lock.runtime_profile_id,
-                    lock.runtime_profile_variant_id,
-                    lock.runtime_profile_manifest_hash,
-                    lock.install_policy_version,
-                )
-            )
+        runtime_identity = _identity_digest(
+            "runtime",
+            (
+                lock.runtime_profile_id,
+                lock.runtime_profile_variant_id,
+                lock.runtime_profile_manifest_hash,
+                lock.install_policy_version,
+            ),
         )
-        return self.root_dir / _safe_fingerprint(lock_hash) / f"dependency-lock.{runtime_identity}.json"
+        return (
+            self.root_dir
+            / _safe_fingerprint(lock_hash)
+            / f"dependency-lock.{runtime_identity}.json"
+        )
 
     def disambiguated_path_for_lock(self, lock: ResolvedDependencyLock) -> Path:
         base_path = self.path_for_lock(lock)
-        lock_identity = _safe_fingerprint(resolved_dependency_lock_hash(lock))
+        lock_identity = _identity_digest("lock", (resolved_dependency_lock_hash(lock),))
         return base_path.with_name(f"{base_path.stem}.{lock_identity}.json")
 
     def exists(self, lock_hash: str) -> bool:
@@ -128,3 +132,8 @@ class ResolvedDependencyLockStore:
 
 def _safe_fingerprint(fingerprint: str) -> str:
     return fingerprint.replace("sha256:", "").replace("/", "_").replace("\\", "_").replace(":", "_")
+
+
+def _identity_digest(prefix: str, parts: tuple[str, ...]) -> str:
+    digest = sha256("\0".join(parts).encode("utf-8")).hexdigest()[:32]
+    return f"{prefix}-{digest}"

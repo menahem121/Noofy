@@ -159,10 +159,22 @@ def parse_uv_version_output(output: str) -> str | None:
     return None
 
 
-def frontend_install_command(frontend_dir: Path = FRONTEND_DIR) -> list[str]:
+def node_command(name: str, *, os_name: str | None = None) -> str | None:
+    """Return a subprocess-launchable Node tool command."""
+    selected_os = os.name if os_name is None else os_name
+    if selected_os == "nt":
+        for candidate in (f"{name}.cmd", f"{name}.exe", name):
+            path = shutil.which(candidate)
+            if path is not None:
+                return path
+        return None
+    return shutil.which(name)
+
+
+def frontend_install_command(frontend_dir: Path = FRONTEND_DIR, *, npm: str = "npm") -> list[str]:
     if (frontend_dir / "package-lock.json").exists():
-        return ["npm", "ci"]
-    return ["npm", "install"]
+        return [npm, "ci"]
+    return [npm, "install"]
 
 
 def source_checkout_env(
@@ -477,7 +489,8 @@ class NoofyCheckout:
             print("Workflow execution that requires managed ComfyUI will be unavailable.")
         if runtime_ready is None:
             print("Managed ComfyUI runtime preparation was skipped.")
-        print("Run it with: make run")
+        run_command = r".\scripts\run.ps1" if os.name == "nt" else "make run"
+        print(f"Run it with: {run_command}")
 
     def ensure_backend_venv(self) -> None:
         if self.backend_python.exists():
@@ -571,8 +584,8 @@ class NoofyCheckout:
                 ) from None
 
     def install_frontend_dependencies(self) -> None:
-        require_node()
-        command = frontend_install_command(self.frontend_dir)
+        node, npm = require_node()
+        command = frontend_install_command(self.frontend_dir, npm=npm)
         print(f"Installing frontend dependencies with {' '.join(command)}")
         self.command_runner(command, self.frontend_dir, None, False)
 
@@ -689,7 +702,7 @@ class NoofyCheckout:
         if not self.backend_python.exists():
             print("Backend venv is missing. Run: make install", file=sys.stderr)
             return 1
-        require_node()
+        _node, npm = require_node()
         if not (self.frontend_dir / "node_modules").exists():
             print("Frontend dependencies are missing. Run: make install", file=sys.stderr)
             return 1
@@ -708,7 +721,7 @@ class NoofyCheckout:
         frontend_url = "http://127.0.0.1:5173"
 
         backend_command = [str(self.backend_python), "-m", "app", "--host", host, "--port", str(backend_port)]
-        frontend_command = ["npm", "run", "dev"]
+        frontend_command = [npm, "run", "dev"]
 
         processes: list[OwnedProcess] = []
 
@@ -769,16 +782,18 @@ def require_command(command: str, message: str) -> None:
 _MIN_NODE_MAJOR = 18
 
 
-def require_node() -> None:
+def require_node() -> tuple[str, str]:
     """Check that node and npm are present and meet the minimum version."""
-    node = shutil.which("node")
-    npm = shutil.which("npm")
+    node = node_command("node")
+    npm = node_command("npm")
     missing = [tool for tool, found in (("node", node), ("npm", npm)) if not found]
     if missing:
         _fail_missing_node(missing)
+    assert node is not None
+    assert npm is not None
 
     result = subprocess.run(
-        ["node", "--version"], capture_output=True, text=True
+        [node, "--version"], capture_output=True, text=True
     )
     raw = result.stdout.strip().lstrip("v")
     try:
@@ -788,8 +803,9 @@ def require_node() -> None:
     if major < _MIN_NODE_MAJOR:
         _fail_old_node(raw)
 
-    npm_result = subprocess.run(["npm", "--version"], capture_output=True, text=True)
+    npm_result = subprocess.run([npm, "--version"], capture_output=True, text=True)
     print(f"node {result.stdout.strip()}  npm {npm_result.stdout.strip()}")
+    return node, npm
 
 
 def _fail_missing_node(missing: list[str]) -> None:
@@ -964,17 +980,20 @@ def release_source_launcher_lock(lock_file: BinaryIO) -> None:
     if lock_file.closed:
         return
     try:
-        lock_file.seek(0)
-        lock_file.truncate()
         if os.name == "nt":
             import msvcrt
 
-            lock_file.write(b"\0")
             lock_file.seek(0)
-            msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+            with contextlib.suppress(OSError):
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+            lock_file.seek(0)
+            lock_file.truncate()
+            lock_file.write(b"\0")
         else:
             import fcntl
 
+            lock_file.seek(0)
+            lock_file.truncate()
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
     finally:
         lock_file.close()
@@ -1069,12 +1088,16 @@ def recover_stale_processes(data_dir: Path, checkout_root: Path) -> None:
 
 
 def process_exists(pid: int) -> bool:
+    if os.name == "nt":
+        return windows_process_identity(pid) is not None
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
     except PermissionError:
         return True
+    except OSError:
+        return False
     return True
 
 
