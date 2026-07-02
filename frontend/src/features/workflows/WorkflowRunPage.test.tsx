@@ -7949,17 +7949,22 @@ describe("WorkflowRunPage", () => {
       height: 935,
       toJSON: () => ({}),
     } as DOMRect);
+    const expectedRowHeight = 935 / 24;
+    fireEvent(window, new Event("resize"));
+    await waitFor(() => {
+      expect(canvasSurface).toHaveStyle({ "--layout-row-height": `${expectedRowHeight}px` });
+    });
 
     const promptCell = screen.getByRole("textbox").closest("article")!;
     dispatchPointer(promptCell, "pointerdown", { clientX: 300, clientY: 96 });
     dispatchPointer(window, "pointermove", { clientX: 300, clientY: 2000 });
 
     await waitFor(() => {
-      expect(promptCell).toHaveStyle({ top: "720px" });
+      expect(promptCell).toHaveStyle({ top: `${18 * expectedRowHeight}px` });
     });
     dispatchPointer(window, "pointerup", { clientX: 300, clientY: 2000 });
 
-    expect(promptCell).toHaveStyle({ top: "720px" });
+    expect(promptCell).toHaveStyle({ top: `${18 * expectedRowHeight}px` });
     fireEvent.click(screen.getByRole("button", { name: /save dashboard/i }));
 
     await waitFor(() => {

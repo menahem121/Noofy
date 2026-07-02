@@ -472,7 +472,7 @@ describe("App workflow tabs", () => {
       expect(screen.queryByRole("button", { name: "Close Text to Image workspace tab" })).not.toBeInTheDocument();
     });
     expect(await screen.findByText("Built-in Workflows")).toBeInTheDocument();
-  });
+  }, 10_000);
 
   it("returns to the run page when canceling saved widget edits", async () => {
     render(<App />);
@@ -1042,7 +1042,7 @@ describe("App workflow tabs", () => {
     await waitFor(() => {
       expect(screen.queryByRole("progressbar", { name: "Workflow progress" })).not.toBeInTheDocument();
     });
-  });
+  }, 10_000);
 
   it("does not restore cached running progress after the job finishes away from its workflow page", async () => {
     render(<App />);

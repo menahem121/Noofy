@@ -8,7 +8,6 @@ import process from "node:process";
 
 import {
   backendArtifactMetadata,
-  currentRuntimeTarget,
   runtimeTargetFor,
   runtimeManifestName,
   sha256File,
@@ -16,11 +15,13 @@ import {
   verifyPackagedRuntime,
 } from "./packagedRuntime.mjs";
 
+const testRuntimeTarget = "linux-x64";
+
 test("verifyPackagedRuntime rejects a missing manifest", () => {
   const runtimeRoot = tempDir("missing-manifest");
 
   assert.throws(
-    () => verifyPackagedRuntime({ runtimeRoot, target: currentRuntimeTarget(), requireBuiltFrontend: false }),
+    () => verifyPackagedRuntime({ runtimeRoot, target: testRuntimeTarget, requireBuiltFrontend: false }),
     /Packaged runtime manifest is missing/,
   );
 });
@@ -48,7 +49,7 @@ test("verifyPackagedRuntime accepts a manifest with matching executable checksum
 
   const result = verifyPackagedRuntime({
     runtimeRoot,
-    target: currentRuntimeTarget(),
+    target: testRuntimeTarget,
     requireBuiltFrontend: false,
   });
 
@@ -68,7 +69,7 @@ test("verifyPackagedRuntime rejects checksum drift", { skip: process.platform ==
   writeFileSync(python, `${fakeExecutableSource("Python 3.13.7")}\n// changed\n`);
 
   assert.throws(
-    () => verifyPackagedRuntime({ runtimeRoot, target: currentRuntimeTarget(), requireBuiltFrontend: false }),
+    () => verifyPackagedRuntime({ runtimeRoot, target: testRuntimeTarget, requireBuiltFrontend: false }),
     /checksum mismatch/,
   );
 });
@@ -91,6 +92,8 @@ test("preparePackagedRuntime copies an explicit source artifact and writes a man
       sourceRoot,
       "--output",
       outputRoot,
+      "--target",
+      testRuntimeTarget,
       "--python-build-id",
       "cpython-3.13-noofy-test",
     ],
@@ -106,7 +109,7 @@ test("preparePackagedRuntime copies an explicit source artifact and writes a man
   assert.doesNotThrow(() =>
     verifyPackagedRuntime({
       runtimeRoot: outputRoot,
-      target: currentRuntimeTarget(),
+      target: testRuntimeTarget,
       requireBuiltFrontend: false,
     }),
   );
@@ -165,7 +168,7 @@ function writeManifest(runtimeRoot, python, uv) {
       {
         schemaVersion: 1,
         layoutVersion: 1,
-        target: currentRuntimeTarget(),
+        target: testRuntimeTarget,
         python: {
           implementation: "CPython",
           version: "3.13.7",

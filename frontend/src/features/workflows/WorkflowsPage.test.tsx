@@ -395,7 +395,7 @@ describe("WorkflowsPage", () => {
     renderPage();
 
     expect(await screen.findByRole("heading", { name: "Workflows" })).toBeInTheDocument();
-    expect(screen.getByText("Native Text")).toBeInTheDocument();
+    expect(await screen.findByText("Native Text")).toBeInTheDocument();
     expect(screen.getByText("Cleanup Flow")).toBeInTheDocument();
 
     fireEvent.change(screen.getByPlaceholderText("Search workflows..."), { target: { value: "cleanup" } });
