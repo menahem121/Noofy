@@ -47,6 +47,13 @@ a developer setup issue. In packaged Noofy, the bundled runtime is the fix; end
 users should reinstall or update Noofy if the bundled Python is missing or has
 the wrong ABI.
 
+On macOS, the packaged Python executable is Developer ID signed with Hardened
+Runtime plus `com.apple.security.cs.disable-library-validation`. Managed ComfyUI
+and workflow dependency environments install wheel native extensions later under
+app data, so those extensions cannot be pre-signed with Noofy's Team ID inside
+the app bundle. Without this entitlement, macOS library validation rejects
+imports such as `blake3` before ComfyUI can finish startup.
+
 ## Supported Targets
 
 The current verifier accepts these release targets:
