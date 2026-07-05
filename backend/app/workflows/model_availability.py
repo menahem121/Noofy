@@ -1435,6 +1435,11 @@ class ModelAvailabilityService:
         )
         return sha256
 
+    def resolve_local_model_path(self, model: RequiredModel) -> Path | None:
+        """First local file matching this requirement, or None when missing."""
+        candidates = self._local_candidates(model, deep_search=True)
+        return candidates[0][0] if candidates else None
+
     def _local_candidates(
         self,
         model: RequiredModel,

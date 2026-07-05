@@ -128,7 +128,16 @@ import {
   shouldClearMissingModelValidation,
   WorkflowRequiredModelsModal,
 } from "./workflowModelRequirements";
-import { subscribeToWorkflowModelSummaryUpdates } from "./workflowModelReadinessSync";
+import {
+  publishWorkflowModelSummaryUpdate,
+  subscribeToWorkflowModelSummaryUpdates,
+} from "./workflowModelReadinessSync";
+import { Fp8CompatibilityModal } from "./Fp8CompatibilityModal";
+import {
+  fp8ModelsFromValidation,
+  isFp8IncompatibleValidation,
+  type Fp8IncompatibleModel,
+} from "../../lib/api/fp8Compatibility";
 import {
   clampBatchCount,
   isBlockingMemoryState,
@@ -283,6 +292,7 @@ export function WorkflowRunPage({
   const [loraBrowserDialog, setLoraBrowserDialog] = useState<LoraBrowserDialogState | null>(null);
   const [exportDialog, setExportDialog] = useState<{ extension: ".noofy" | ".json"; url: string } | null>(null);
   const [requiredModelsModalOpen, setRequiredModelsModalOpen] = useState(false);
+  const [fp8CompatibilityModels, setFp8CompatibilityModels] = useState<Fp8IncompatibleModel[] | null>(null);
   const [downloadedLoraOptions, setDownloadedLoraOptions] = useState<Record<string, string[]>>({});
   const [draftLayoutOverrides, setDraftLayoutOverrides] = useState<Record<string, GridItemLayout> | null>(null);
   const [draftActionBarPosition, setDraftActionBarPosition] = useState<CanvasActionBarPosition | null>(null);
@@ -902,13 +912,20 @@ export function WorkflowRunPage({
     const userError = firstRunUserFixableError(response);
     const message = workflowValidationErrorMessage(response);
     const preparationFailure = response.error_category === "workflow_preparation";
+    const fp8Incompatible = isFp8IncompatibleValidation(response);
     setState((current) => ({
       ...current,
-      validation: userError || preparationFailure ? current.validation : response,
+      validation: userError || preparationFailure || fp8Incompatible ? current.validation : response,
       progress: null,
-      error: response.valid || userError || preparationFailure || response.missing_models.length > 0 ? null : message,
+      error:
+        response.valid || userError || preparationFailure || fp8Incompatible || response.missing_models.length > 0
+          ? null
+          : message,
     }));
-    if (!response.valid && userError) {
+    if (!response.valid && fp8Incompatible) {
+      setRunPreparationDialog(null);
+      setFp8CompatibilityModels(fp8ModelsFromValidation(response));
+    } else if (!response.valid && userError) {
       setRunPreparationDialog(null);
       void refreshWorkflowStatusAfterRun();
       openInputErrorDialog(userError);
@@ -2303,6 +2320,20 @@ export function WorkflowRunPage({
       onRefresh={runtimeStatus.refreshPage}
     />
   ) : null;
+  const fp8CompatibilityModalElement =
+    fp8CompatibilityModels && fp8CompatibilityModels.length > 0 ? (
+      <Fp8CompatibilityModal
+        workflowId={workflowId}
+        models={fp8CompatibilityModels}
+        onResolved={(summary) => {
+          setFp8CompatibilityModels(null);
+          if (summary) {
+            publishWorkflowModelSummaryUpdate({ workflowId, summary });
+          }
+        }}
+        onClose={() => setFp8CompatibilityModels(null)}
+      />
+    ) : null;
 
   if (workflowMissing) {
     return (
@@ -2423,6 +2454,7 @@ export function WorkflowRunPage({
         {loraBrowserElement}
         {exportDialogElement}
         {requiredModelsModalElement}
+        {fp8CompatibilityModalElement}
       </AppLayout>
     );
   }
@@ -2588,6 +2620,7 @@ export function WorkflowRunPage({
       {loraBrowserElement}
       {exportDialogElement}
       {requiredModelsModalElement}
+      {fp8CompatibilityModalElement}
       {workflowRefreshDialogElement}
     </AppLayout>
   );

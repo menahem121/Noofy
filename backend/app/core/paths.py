@@ -182,6 +182,10 @@ class NoofyPaths:
         return self.workflow_store_dir / "dashboard-overrides"
 
     @property
+    def workflow_model_overrides_dir(self) -> Path:
+        return self.workflow_store_dir / "model-overrides"
+
+    @property
     def custom_node_cache_dir(self) -> Path:
         return self.data_dir / "custom-node-cache"
 
@@ -204,6 +208,10 @@ class NoofyPaths:
     @property
     def model_materialized_dir(self) -> Path:
         return self.model_store_dir / "materialized"
+
+    @property
+    def converted_models_registry_file(self) -> Path:
+        return self.model_store_dir / "converted-models.json"
 
     @property
     def trust_dir(self) -> Path:

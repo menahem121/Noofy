@@ -54,6 +54,7 @@ MODEL_ASSET_SUFFIXES = {
     ".pt",
     ".pth",
     ".safetensors",
+    ".sft",
     ".tflite",
 }
 ENGINE_VISIBLE_MODELS_TIMEOUT_SECONDS = 1.5
@@ -461,7 +462,18 @@ class ModelInventoryService:
         availability_service = getattr(self.engine_service, "model_availability_service", None)
         if workflow_loader is None or availability_service is None:
             return
+        # Requirements reflect local model overrides (e.g. fp8 checkpoints
+        # converted for Apple Silicon) so a removed original is not reported
+        # as a missing requirement and the replacement gets the attribution.
+        apply_overrides = getattr(
+            self.engine_service, "package_with_local_model_overrides", None
+        )
         for package in _global_inventory_relevant_workflow_packages(workflow_loader):
+            if callable(apply_overrides):
+                try:
+                    package = apply_overrides(package)
+                except Exception:
+                    pass
             try:
                 summary = availability_service.summarize(
                     package,

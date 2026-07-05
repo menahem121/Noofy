@@ -23,6 +23,7 @@ from app.runs.orchestrator import RunOrchestrator
 from app.runs.result_service import RunResultService
 from app.runtime.runners.lifecycle_service import WorkflowRunnerLifecycleService
 from app.workflows.assets import DashboardAssetService
+from app.workflows.fp8_conversion import Fp8ConversionService
 from app.workflows.authoring import DashboardAuthoringService
 from app.workflows.exporter import WorkflowExporter
 from app.workflows.import_orchestrator import WorkflowImportOrchestrator
@@ -127,6 +128,14 @@ def get_civitai_lora_service(
     return services.civitai_lora_service
 
 
+def get_fp8_conversion_service(
+    services: Annotated[ApiServices, Depends(get_api_services)],
+) -> Fp8ConversionService:
+    if services.fp8_conversion_service is None:
+        raise RuntimeError("Fp8ConversionService is not configured.")
+    return services.fp8_conversion_service
+
+
 EngineServiceDep = Annotated[EngineService, Depends(get_engine_service)]
 ComfyUISidecarServiceDep = Annotated[ComfyUISidecarService, Depends(get_comfyui_sidecar_service)]
 UserStateServiceDep = Annotated[UserStateService, Depends(get_user_state_service)]
@@ -139,6 +148,7 @@ ModelTagStoreDep = Annotated[ModelTagStore, Depends(get_model_tag_store)]
 ModelDownloadServiceDep = Annotated[ModelDownloadJobService, Depends(get_model_download_service)]
 ModelInventoryServiceDep = Annotated[ModelInventoryService, Depends(get_model_inventory_service)]
 CivitaiLoraServiceDep = Annotated[CivitaiLoraBrowserService, Depends(get_civitai_lora_service)]
+Fp8ConversionServiceDep = Annotated[Fp8ConversionService, Depends(get_fp8_conversion_service)]
 NoofyRuntimeUpdateServiceDep = Annotated[
     NoofyRuntimeUpdateService,
     Depends(get_noofy_runtime_update_service),

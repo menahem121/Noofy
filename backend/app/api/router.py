@@ -6,6 +6,7 @@ from app.api.routes import (
     assets,
     comfyui,
     diagnostics,
+    fp8_compatibility,
     gallery,
     history,
     health,
@@ -29,6 +30,7 @@ router.include_router(runtime.router)
 router.include_router(comfyui.router)
 router.include_router(runners.router)
 router.include_router(workflows.router)
+router.include_router(fp8_compatibility.router)
 router.include_router(runs.router)
 router.include_router(models.router)
 router.include_router(model_sources.router)

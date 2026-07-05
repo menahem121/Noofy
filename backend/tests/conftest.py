@@ -27,6 +27,7 @@ def make_api_services(**overrides: Any) -> ApiServices:
             "run_result_service",
             "history_service",
             "civitai_lora_service",
+            "fp8_conversion_service",
         }
         else _API_SERVICE_PLACEHOLDER
         for field in fields(ApiServices)

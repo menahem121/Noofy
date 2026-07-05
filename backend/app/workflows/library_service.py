@@ -4,6 +4,7 @@ import json
 import shutil
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -110,6 +111,15 @@ class WorkflowLibraryService:
         self.memory_learning_store = memory_learning_store
         self._model_verification_jobs: dict[str, _WorkflowModelVerificationJob] = {}
         self._active_model_verification_by_workflow: dict[str, str] = {}
+        # Local-state hook: swaps required models for their per-install
+        # overrides (e.g. fp8 checkpoints converted for Apple Silicon).
+        # Availability/verification reads use it; export paths never do.
+        self.apply_local_model_overrides: Callable[[WorkflowPackage], WorkflowPackage] | None = None
+
+    def _package_for_model_reads(self, package: WorkflowPackage) -> WorkflowPackage:
+        if self.apply_local_model_overrides is None:
+            return package
+        return self.apply_local_model_overrides(package)
 
     def list_workflows(self) -> list[dict[str, object]]:
         hardware_warning_snapshot, hardware_warning_snapshot_loaded = self._hardware_warning_snapshot()
@@ -412,11 +422,11 @@ class WorkflowLibraryService:
 
     def model_availability_summary(self, workflow_id: str) -> RequiredModelSummary:
         return self.model_availability_service.summarize(
-            self.workflow_loader.get_package(workflow_id)
+            self._package_for_model_reads(self.workflow_loader.get_package(workflow_id))
         )
 
     def start_model_verification(self, workflow_id: str) -> WorkflowModelVerificationJobStatus:
-        package = self.workflow_loader.get_package(workflow_id)
+        package = self._package_for_model_reads(self.workflow_loader.get_package(workflow_id))
         active_job_id = self._active_model_verification_by_workflow.get(workflow_id)
         if active_job_id:
             active_job = self._model_verification_jobs.get(active_job_id)
@@ -705,6 +715,7 @@ class WorkflowLibraryService:
         verify_hashes: bool = False,
         metrics: VerifyHashMetrics | None = None,
     ) -> RequiredModelSummary:
+        package = self._package_for_model_reads(package)
         summarize = self.model_availability_service.summarize
         if not fast:
             return summarize(package)
@@ -721,7 +732,7 @@ class WorkflowLibraryService:
 
     async def _run_model_verification_job(self, job_id: str) -> None:
         job = self._model_verification_jobs[job_id]
-        package = self.workflow_loader.get_package(job.workflow_id)
+        package = self._package_for_model_reads(self.workflow_loader.get_package(job.workflow_id))
         self._begin_model_verification_job(job)
         metrics = VerifyHashMetrics()
         # Verify each unique physical file once even when several nodes reference it.
@@ -764,7 +775,7 @@ class WorkflowLibraryService:
 
     def _run_model_verification_job_sync(self, job_id: str) -> None:
         job = self._model_verification_jobs[job_id]
-        package = self.workflow_loader.get_package(job.workflow_id)
+        package = self._package_for_model_reads(self.workflow_loader.get_package(job.workflow_id))
         self._begin_model_verification_job(job)
         try:
             groups = group_required_models(package.required_models)

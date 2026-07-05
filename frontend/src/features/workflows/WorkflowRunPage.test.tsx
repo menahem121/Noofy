@@ -1746,6 +1746,52 @@ describe("WorkflowRunPage", () => {
     });
   });
 
+  it("opens the Apple Silicon FP8 compatibility popup when the run is blocked", async () => {
+    mockConfiguredDashboardFetch(
+      fetchMock,
+      readyRuntime,
+      configuredPackageData,
+      {
+        workflow_id: "text_to_image_v0",
+        valid: false,
+        missing_models: [],
+        errors: ["This workflow uses an FP8 model that is not supported on Apple Silicon."],
+        error_category: "platform_compatibility",
+        error_code: "fp8_incompatible_mps",
+        developer_details: {
+          accelerator: "apple_mps",
+          fp8_models: [
+            { folder: "diffusion_models", filename: "model-fp8.safetensors", fp8_dtypes: ["F8_E4M3"] },
+          ],
+        },
+      },
+      (url) => {
+        if (url.endsWith("/api/workflows/text_to_image_v0/fp8-compatibility/dismiss")) {
+          return jsonResponse({ status: "dismissed" });
+        }
+        return undefined;
+      },
+    );
+
+    renderRunPage();
+    await waitFor(() => expect(screen.getByRole("button", { name: /run workflow/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: /run workflow/i }));
+
+    expect(await screen.findByText("Model not supported on Apple Silicon")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Convert" })).toHaveClass("primary-button");
+    expect(screen.getByRole("button", { name: "Download" })).toBeDisabled();
+    // The fp8 block never shows the generic failure dialog or missing-models modal.
+    expect(screen.queryByText("Missing Models")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() =>
+      expect(screen.queryByText("Model not supported on Apple Silicon")).not.toBeInTheDocument(),
+    );
+    expect(
+      fetchMock.mock.calls.some(([request]) => String(request).endsWith("/fp8-compatibility/dismiss")),
+    ).toBe(true);
+  });
+
   it("keeps the completed result across run-page remounts until its workflow cache is closed", async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);

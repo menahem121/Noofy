@@ -267,6 +267,20 @@ def test_models_inventory_combines_local_external_engine_and_missing_models(tmp_
     assert "configs/engine-config.yaml" not in by_key
 
 
+def test_models_inventory_lists_sft_safetensors_alias(tmp_path: Path) -> None:
+    sft_model = tmp_path / "Noofy Models" / "diffusion_models" / "mac-compatible.sft"
+    sft_model.parent.mkdir(parents=True)
+    sft_model.write_bytes(b"safetensors")
+
+    with _client(tmp_path, []) as client:
+        response = client.get("/api/models")
+
+    assert response.status_code == 200
+    by_key = {model["model_key"]: model for model in response.json()["models"]}
+    assert "diffusion_models/mac-compatible.sft" in by_key
+    assert by_key["diffusion_models/mac-compatible.sft"]["model_type"] == "checkpoint"
+
+
 def test_models_inventory_disk_free_is_live_and_not_http_cacheable(tmp_path: Path, monkeypatch) -> None:
     disk_free_values = iter([111, 222])
 
@@ -1139,3 +1153,47 @@ async def _assert_download_job_sanitizes_provider_failure_diagnostics(tmp_path: 
     assert service.status(started.job_id).status == "failed"
     assert "secret-token" not in str(events[-1].details)
     assert "<redacted>" in str(events[-1].details)
+
+
+def test_workflow_requirements_reflect_local_model_overrides(tmp_path: Path) -> None:
+    from app.workflows.model_overrides import (
+        WorkflowModelOverride,
+        apply_model_overrides_to_required,
+    )
+
+    noofy_root = tmp_path / "Noofy Models"
+    converted = noofy_root / "diffusion_models" / "model-fp8-converted-for-mac.safetensors"
+    converted.parent.mkdir(parents=True, exist_ok=True)
+    converted.write_bytes(b"converted-model")
+    package = _package(
+        [RequiredModel(folder="diffusion_models", filename="model-fp8.safetensors")]
+    )
+    override = WorkflowModelOverride(
+        folder="diffusion_models",
+        source_filename="model-fp8.safetensors",
+        replacement_filename="model-fp8-converted-for-mac.safetensors",
+        origin="converted",
+    )
+
+    class OverrideAwareEngineService(FakeEngineService):
+        def package_with_local_model_overrides(self, package: WorkflowPackage) -> WorkflowPackage:
+            return apply_model_overrides_to_required(package, [override])
+
+    model_folder_service = ModelFolderSettingsService(
+        store=ModelFolderSettingsStore(tmp_path / "settings" / "model-folders.json"),
+        default_noofy_models_dir=noofy_root,
+    )
+    model_folder_service.update(ModelFolderUpdateRequest(noofy_models_dir=str(noofy_root)))
+    engine = OverrideAwareEngineService(
+        noofy_root=noofy_root, external_root=None, packages=[package]
+    )
+    with TestClient(
+        create_app(engine_service=engine, model_folder_service=model_folder_service)
+    ) as client:
+        payload = client.get("/api/models").json()
+
+    entries = {entry["model_key"]: entry for entry in payload["models"]}
+    # The removed fp8 original is no longer surfaced as a missing requirement.
+    assert "diffusion_models/model-fp8.safetensors" not in entries
+    converted_entry = entries["diffusion_models/model-fp8-converted-for-mac.safetensors"]
+    assert [usage["workflow_id"] for usage in converted_entry["workflow_usage"]] == ["wf_text"]

@@ -33,6 +33,7 @@ from app.runtime.runners.lifecycle_service import WorkflowRunnerLifecycleService
 from app.workflows.assets import DashboardAssetService
 from app.workflows.authoring import DashboardAuthoringService
 from app.workflows.exporter import WorkflowExporter
+from app.workflows.fp8_conversion import ConvertedModelsRegistry, Fp8ConversionService
 from app.workflows.import_orchestrator import WorkflowImportOrchestrator
 from app.workflows.library_service import WorkflowLibraryService
 from app.runs.media_staging import MediaInputStagingResolver
@@ -66,6 +67,7 @@ class ApiServices:
     run_result_service: RunResultService | None
     history_service: HistoryService | None
     civitai_lora_service: CivitaiLoraBrowserService | None = None
+    fp8_conversion_service: Fp8ConversionService | None = None
 
 
 def create_default_api_services() -> ApiServices:
@@ -93,6 +95,7 @@ def create_api_services(
     local_engine_files_service: LocalEngineFilesService | None = None,
     history_service: HistoryService | None = None,
     runtime_model_bundle_roots: list[Path] | None = None,
+    fp8_conversion_service: Fp8ConversionService | None = None,
 ) -> ApiServices:
     extra_model_paths_config = settings.paths.runtime_store_dir / "settings" / "extra-model-paths.yaml"
 
@@ -288,6 +291,29 @@ def create_api_services(
         model_download_service=downloads,
         log_store=getattr(engine_service, "log_store", None),
     )
+    fp8_conversion = fp8_conversion_service
+    override_store = getattr(engine_service, "workflow_model_override_store", None)
+    if fp8_conversion is None and override_store is not None:
+        runtime_manager = getattr(engine_service, "runtime_manager", None)
+
+        def _runtime_python_executable() -> str | None:
+            resolver = getattr(runtime_manager, "_resolved_python_executable", None)
+            try:
+                return resolver() if callable(resolver) else None
+            except Exception:
+                return None
+
+        fp8_conversion = Fp8ConversionService(
+            engine_service=engine_service,
+            override_store=override_store,
+            registry=ConvertedModelsRegistry(settings.paths.converted_models_registry_file),
+            ownership_store=ownership,
+            model_inventory_service=inventory,
+            model_download_service=downloads,
+            log_store=getattr(engine_service, "log_store", None),
+            runtime_python_executable=_runtime_python_executable,
+            mps_execution_active=getattr(engine_service, "mps_execution_active", None),
+        )
 
     return ApiServices(
         engine_service=engine_service,
@@ -314,6 +340,7 @@ def create_api_services(
         run_result_service=run_result_service,
         history_service=history,
         civitai_lora_service=civitai_lora_service,
+        fp8_conversion_service=fp8_conversion,
     )
 
 

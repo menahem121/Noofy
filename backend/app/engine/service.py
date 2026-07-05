@@ -97,7 +97,16 @@ from app.workflows.import_orchestrator import (
 )
 from app.workflows.library_service import WorkflowLibraryService
 from app.workflows.loader import WorkflowPackageLoader
+from app.workflows.fp8_compatibility import (
+    Fp8CompatibilityChecker,
+    default_mps_execution_active,
+)
 from app.workflows.model_availability import ModelAvailabilityService
+from app.workflows.model_overrides import (
+    WorkflowModelOverrideStore,
+    apply_model_overrides_to_graph,
+    apply_model_overrides_to_required,
+)
 from app.workflows.package import WorkflowPackage
 from app.workflows.removal_cleanup import WorkflowRemovalCleanupService
 from app.workflows.validator import WorkflowPackageValidator
@@ -148,6 +157,7 @@ class EngineService:
         progress_estimator: WorkflowProgressEstimator | None = None,
         workflow_removal_cleanup_service: WorkflowRemovalCleanupService | None = None,
         runtime_storage_maintenance_service: RuntimeStorageMaintenanceService | None = None,
+        workflow_model_override_store: WorkflowModelOverrideStore | None = None,
     ) -> None:
         self.workflow_loader = workflow_loader
         self.workflow_validator = workflow_validator
@@ -172,6 +182,15 @@ class EngineService:
             noofy_models_dir=model_roots[0],
             log_store=log_store,
         )
+        self.workflow_model_override_store = workflow_model_override_store
+        self.fp8_compatibility_checker: Fp8CompatibilityChecker | None = None
+        if workflow_model_override_store is not None:
+            self.fp8_compatibility_checker = Fp8CompatibilityChecker(
+                resolve_local_model_path=self.model_availability_service.resolve_local_model_path,
+                mps_execution_active=self.mps_execution_active,
+                overridden_model_keys=workflow_model_override_store.overridden_model_keys,
+                log_store=log_store,
+            )
         self.gallery_capture_service = gallery_capture_service
         self.workflow_library_store = workflow_library_store
         self.history_service = history_service
@@ -190,6 +209,9 @@ class EngineService:
             history_service=self.history_service,
             memory_observer=memory_observer,
             memory_learning_store=memory_learning_store,
+        )
+        self.workflow_library_service.apply_local_model_overrides = (
+            self.package_with_local_model_overrides
         )
         if self.imported_package_store is not None:
             self.workflow_import_orchestrator: WorkflowImportOrchestrator | None = (
@@ -312,6 +334,8 @@ class EngineService:
                 else None
             ),
             managed_engine_start_wait_job=self._managed_engine_start_wait_job,
+            fp8_preflight_check=self._fp8_preflight_check,
+            apply_graph_model_overrides=self._apply_graph_model_overrides,
         )
         # Wire the retry callback now that RunOrchestrator exists.
         self.memory_service.run_workflow = self.run_orchestrator.run_workflow
@@ -1628,6 +1652,52 @@ class EngineService:
             memory_status=memory_status,
         )
 
+    def mps_execution_active(self) -> bool:
+        return default_mps_execution_active(
+            lambda: str(getattr(self.runtime_manager, "managed_vram_mode", "normal"))
+        )
+
+    def package_with_local_model_overrides(self, package: WorkflowPackage) -> WorkflowPackage:
+        """Swap overridden required models for local reads; packages on disk stay raw."""
+        store = self.workflow_model_override_store
+        if store is None:
+            return package
+        overrides = store.overrides_for(package.metadata.id)
+        if not overrides:
+            return package
+        return apply_model_overrides_to_required(package, overrides)
+
+    def _fp8_preflight_check(self, package: WorkflowPackage) -> WorkflowValidationResult | None:
+        if self.fp8_compatibility_checker is None:
+            return None
+        return self.fp8_compatibility_checker.preflight_validation(package)
+
+    def _apply_graph_model_overrides(
+        self,
+        package: WorkflowPackage,
+        graph: dict[str, Any],
+    ) -> dict[str, Any]:
+        store = self.workflow_model_override_store
+        overrides = store.overrides_for(package.metadata.id) if store is not None else []
+        force_default_weight_dtype = self.mps_execution_active()
+        if not overrides and not force_default_weight_dtype:
+            return graph
+        report = apply_model_overrides_to_graph(
+            graph,
+            package,
+            overrides,
+            force_default_weight_dtype=force_default_weight_dtype,
+        )
+        if report.changed:
+            self.log_store.add(
+                "info",
+                "Applied local model overrides to runtime graph",
+                "runs.orchestrator",
+                workflow_id=package.metadata.id,
+                details=report.as_details(),
+            )
+        return graph
+
     async def _validate_package(
         self,
         package: WorkflowPackage,
@@ -1637,6 +1707,11 @@ class EngineService:
         if not structure_result.valid:
             return structure_result
 
+        fp8_block = self._fp8_preflight_check(package)
+        if fp8_block is not None:
+            return fp8_block
+
+        package = self.package_with_local_model_overrides(package)
         available_models = self._available_model_keys(await adapter.list_available_models())
         missing_models = self.workflow_validator.validate_models(package, available_models)
         model_summary = None

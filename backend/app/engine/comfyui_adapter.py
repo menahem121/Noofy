@@ -36,6 +36,7 @@ from app.engine.models import (
 from app.engine.adapter import EngineMemoryCleanupCapabilities, EngineMemoryCleanupMode
 from app.runs.credentials import plan_from_options
 from app.runtime.fingerprints import sha256_fingerprint
+from app.workflows.graph_model_selectors import looks_like_model_selector_input
 from app.workflows.package import WorkflowPackage
 from app.workflows.run_input_validation import map_comfyui_submission_validation_error
 
@@ -52,22 +53,6 @@ _PREVIEW_MIME_BY_TYPE = {
     2: "image/png",
 }
 _SUPPORTED_PREVIEW_MIME_TYPES = frozenset(_PREVIEW_MIME_BY_TYPE.values())
-_MODEL_SELECTOR_INPUT_NAMES = frozenset(
-    {
-        "ckpt_name",
-        "clip_name",
-        "clip_name1",
-        "clip_name2",
-        "clip_name3",
-        "control_net_name",
-        "diffusion_model_name",
-        "lora_name",
-        "model_name",
-        "style_model_name",
-        "unet_name",
-        "vae_name",
-    }
-)
 
 
 class ComfyUIEngineAdapter:
@@ -1488,7 +1473,7 @@ def _prompt_model_selector_diagnostics(
         for input_name, value in inputs.items():
             input_name = str(input_name)
             required_model = required_by_target.get((node_id, input_name))
-            if required_model is None and not _looks_like_model_selector_input(node_type, input_name):
+            if required_model is None and not looks_like_model_selector_input(node_type, input_name):
                 continue
             if not isinstance(value, str):
                 continue
@@ -1518,13 +1503,6 @@ def _prompt_model_selector_diagnostics(
         "required_model_binding_count": len(required_by_target),
         "required_models_without_binding": required_models_without_binding,
     }
-
-
-def _looks_like_model_selector_input(node_type: str, input_name: str) -> bool:
-    lowered_input = input_name.casefold()
-    if lowered_input in _MODEL_SELECTOR_INPUT_NAMES:
-        return True
-    return lowered_input.endswith("_name") and "loader" in node_type.casefold()
 
 
 def _rooted_selector_style(value: str) -> str | None:

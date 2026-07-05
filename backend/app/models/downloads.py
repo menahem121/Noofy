@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import re
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -48,6 +49,13 @@ class _ModelDownloadJob:
     current_model_index: int | None = None
     speed_bytes_per_second: float | None = None
     model_summary: RequiredModelSummary | None = None
+    # Direct downloads treat the caller's URL as authoritative intent (the
+    # arriving hash is adopted); package-declared FILENAME_ONLY models with
+    # unknown URLs are refused otherwise.
+    explicit_source_urls_authoritative: bool = False
+    # Invoked with the downloaded RequiredModel (post hash adoption) when a
+    # direct download finishes with no failures and no cancellation.
+    on_direct_completed: Callable[[RequiredModel], None] | None = None
 
 
 class ModelDownloadJobService:
@@ -116,6 +124,8 @@ class ModelDownloadJobService:
         workflow_id: str,
         models: list[RequiredModel],
         queued_message: str = "Model download is queued.",
+        explicit_source_urls_authoritative: bool = False,
+        on_completed: Callable[[RequiredModel], None] | None = None,
     ) -> ModelDownloadJobStart:
         self._sweep_old_jobs()
         if not models:
@@ -130,6 +140,8 @@ class ModelDownloadJobService:
             cancel_event=asyncio.Event(),
             task=None,
             status="queued",
+            explicit_source_urls_authoritative=explicit_source_urls_authoritative,
+            on_direct_completed=on_completed,
             user_facing_message=queued_message,
             running_message="Downloading model...",
             failed_message="The model could not be downloaded.",
@@ -253,7 +265,7 @@ class ModelDownloadJobService:
                     direct_package,
                     progress_callback=progress_callback(workflow_id),
                     cancel_event=job.cancel_event,
-                    explicit_source_urls_authoritative=False,
+                    explicit_source_urls_authoritative=job.explicit_source_urls_authoritative,
                 )
                 job.model_summary = getattr(result, "model_summary", None)
                 completed += len(job.direct_models)
@@ -266,6 +278,35 @@ class ModelDownloadJobService:
                 self._mark_downloaded_models(job.direct_models)
                 if result.status == "canceled":
                     job.cancel_event.set()
+                if (
+                    job.on_direct_completed is not None
+                    and result.status != "canceled"
+                    and result.failed_count == 0
+                ):
+                    try:
+                        job.on_direct_completed(job.direct_models[0])
+                    except Exception as exc:
+                        failed = True
+                        if self.log_store is not None:
+                            self.log_store.add(
+                                "warning",
+                                "Direct model download completion hook failed",
+                                "models.downloads",
+                                details={"job_id": job.job_id, "error": _sanitize_error(exc)},
+                            )
+                    else:
+                        workflow_loader = getattr(self.engine_service, "workflow_loader", None)
+                        real_package = None
+                        if workflow_loader is not None and job.direct_workflow_id:
+                            try:
+                                real_package = workflow_loader.get_package(job.direct_workflow_id)
+                            except Exception:
+                                real_package = None
+                        if real_package is not None:
+                            job.model_summary = await self._refreshed_workflow_model_summary(
+                                real_package,
+                                None,
+                            )
             for package, models in grouped.values():
                 if job.cancel_event.is_set():
                     break

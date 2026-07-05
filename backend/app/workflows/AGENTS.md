@@ -19,6 +19,11 @@ Workflow package domain: everything about what a workflow *is* and how it is imp
 | `archive_validation.py` | .noofy archive signature and structure validation |
 | `capsule.py` | Workflow capsule data model (immutable install snapshot) |
 | `model_availability.py` | Workflow-specific model requirement checks |
+| `fp8_compatibility.py` | Header-only FP8 detection + Apple Silicon (MPS) run preflight block |
+| `fp8_conversion.py` | FP8→16-bit conversion jobs, derived-artifact registry, safe source removal, alternative-variant downloads |
+| `fp8_convert_script.py` | Self-contained dequant script executed with the managed ComfyUI venv python (never imports `comfy.*`) |
+| `model_overrides.py` | Per-installed-workflow local model overrides (store, effective required models, runtime graph patch) |
+| `graph_model_selectors.py` | Shared heuristics for locating model-selector inputs in prompt graphs |
 | `authoring.py` | Dashboard authoring: bindable inputs, unresolved inputs, dashboard schema validation |
 | `user_state.py` | Per-workflow user state (input values, layout) |
 | `assets.py` | Dashboard asset management (uploaded images bound to workflows) |

@@ -456,3 +456,47 @@ Cancellation rules:
 
 Default tests must use mocked/offline provider responses. No default test may
 hit live Hugging Face or Civitai endpoints.
+
+## Apple Silicon FP8 Compatibility Flow
+
+FP8 (`float8_e4m3fn`/`e5m2`) checkpoints cannot run on Apple Silicon: PyTorch's
+MPS backend has no fp8 storage, and ComfyUI keeps scaled-fp8 weights in fp8
+with no fallback. Noofy handles this entirely on its own side (vendored
+ComfyUI is never patched):
+
+- **Detection + block**: when the effective backend is MPS (Apple Silicon and
+  not CPU launch mode), a header-only safetensors scan runs before a run is
+  queued. FP8 weight storage blocks the run with
+  `error_code="fp8_incompatible_mps"`, which opens the frontend
+  `Fp8CompatibilityModal` instead of crashing mid-run. FP4/NVFP4 files are
+  not flagged (packed uint8 weights run on MPS).
+- **Convert**: `POST /workflows/{id}/fp8-compatibility/convert` dequantizes
+  the file to bf16 (fp16 below macOS 14) as `<stem>-converted-for-mac` in the
+  same category folder, using the managed ComfyUI venv's python (the only env
+  with torch). Quality-lossless: fp8 values are exactly representable in
+  16-bit floats and scaled weights apply `w × scale` in fp32. The original is
+  removed afterwards only when Noofy-owned, hash-identical to what was
+  converted, and not required by another workflow lacking the same override.
+- **Alternative download**: `POST /workflows/{id}/fp8-compatibility/download`
+  accepts a user-pasted https link to a `.safetensors` or `.sft` variant
+  (both are the safetensors container, which keeps the graph's loader
+  nodes working; other containers like `.gguf` need different loaders and
+  are not accepted) and reuses the
+  transactional direct download path with
+  `explicit_source_urls_authoritative=True`. A download that turns out to
+  be FP8 itself is rejected and removed instead of becoming an override.
+- **Routing**: both paths record a per-installed-workflow override
+  (`workflow-store/model-overrides/`) consumed by availability/validation/
+  inventory reads and applied to the runtime prompt graph just before
+  submission (filename swap + `weight_dtype` fp8 values forced to
+  `"default"`). Portable packages and exports keep the original FP8
+  requirement, so NVIDIA users run the workflow unchanged.
+- Conversion provenance lives in `model-store/converted-models.json`.
+
+Key code: [backend/app/workflows/fp8_compatibility.py](../backend/app/workflows/fp8_compatibility.py),
+[backend/app/workflows/fp8_conversion.py](../backend/app/workflows/fp8_conversion.py),
+[backend/app/workflows/model_overrides.py](../backend/app/workflows/model_overrides.py),
+[backend/app/api/routes/fp8_compatibility.py](../backend/app/api/routes/fp8_compatibility.py),
+[frontend/src/features/workflows/Fp8CompatibilityModal.tsx](../frontend/src/features/workflows/Fp8CompatibilityModal.tsx).
+Tests: `backend/tests/test_fp8_*.py`, `backend/tests/test_model_overrides.py`,
+`frontend/src/features/workflows/Fp8CompatibilityModal.test.tsx`.

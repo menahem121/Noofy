@@ -54,6 +54,8 @@ from app.runs.queue_service import (
 ValidatePackage = Callable[[WorkflowPackage, EngineAdapter], Awaitable[WorkflowValidationResult]]
 UnavailablePackageReason = Callable[[WorkflowPackage], str | None]
 ApplyInputBindings = Callable[[WorkflowPackage, dict[str, Any]], dict[str, Any]]
+Fp8PreflightCheck = Callable[[WorkflowPackage], WorkflowValidationResult | None]
+ApplyGraphModelOverrides = Callable[[WorkflowPackage, dict[str, Any]], dict[str, Any]]
 EnsureWorkflowRunner = Callable[
     [WorkflowPackage, str | None],
     Awaitable[str | dict[str, Any] | WorkflowValidationResult | None],
@@ -107,6 +109,8 @@ class RunOrchestrator:
         submitted_job_callback: Callable[[str], None] | None = None,
         register_progress_timing: RegisterProgressTiming | None = None,
         managed_engine_start_wait_job: ManagedEngineStartWaitJob | None = None,
+        fp8_preflight_check: Fp8PreflightCheck | None = None,
+        apply_graph_model_overrides: ApplyGraphModelOverrides | None = None,
     ) -> None:
         self.workflow_loader = workflow_loader
         self.runner_supervisor = runner_supervisor
@@ -137,6 +141,8 @@ class RunOrchestrator:
         self.submitted_job_callback = submitted_job_callback
         self.register_progress_timing = register_progress_timing
         self.managed_engine_start_wait_job = managed_engine_start_wait_job
+        self.fp8_preflight_check = fp8_preflight_check
+        self.apply_graph_model_overrides = apply_graph_model_overrides
 
     async def validate_workflow(self, workflow_id: str) -> WorkflowValidationResult:
         package = self.workflow_loader.get_package(workflow_id)
@@ -286,6 +292,26 @@ class RunOrchestrator:
                 valid=False,
                 errors=[str(exc)],
             )
+
+        if self.fp8_preflight_check is not None:
+            # Check the input-bound view so a bypassed LoRA (set to "None")
+            # never blocks the run for a model that will not be loaded.
+            fp8_block = self.fp8_preflight_check(
+                package_for_input_bindings(package, runtime_inputs)
+            )
+            if fp8_block is not None:
+                self._record_run_blocked(
+                    package,
+                    "; ".join(fp8_block.errors) or "Workflow uses an FP8 model unsupported on this machine",
+                )
+                self.log_store.add(
+                    "warning",
+                    "Workflow run blocked before queueing by FP8/MPS incompatibility",
+                    "runs.orchestrator",
+                    workflow_id=workflow_id,
+                    details=fp8_block.developer_details,
+                )
+                return fp8_block
 
         run_submission_snapshot = self._run_submission_snapshot(
             package=package,
@@ -997,6 +1023,8 @@ class RunOrchestrator:
         )
         try:
             graph = self.apply_input_bindings(package, resolved_inputs)
+            if self.apply_graph_model_overrides is not None:
+                graph = self.apply_graph_model_overrides(package, graph)
             self.runner_supervisor.mark_runner_submitting(reservation_token)
             if self._queue_cancel_requested(queue_id):
                 self.runner_supervisor.rollback_runner_reservation(reservation_token)

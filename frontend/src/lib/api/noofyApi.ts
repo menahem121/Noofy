@@ -7,5 +7,6 @@ export * from "./engine";
 export * from "./settings";
 export * from "./workflows";
 export * from "./models";
+export * from "./fp8Compatibility";
 export * from "./gallery";
 export * from "./history";
