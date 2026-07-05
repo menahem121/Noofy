@@ -140,6 +140,89 @@ describe("Fp8CompatibilityModal", () => {
     });
   });
 
+  it("continues polling when conversion is already running", async () => {
+    vi.useFakeTimers();
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/workflows/wf-1/fp8-compatibility/convert") && init?.method === "POST") {
+        return new Response(
+          JSON.stringify({
+            detail: {
+              code: "fp8_conversion_already_running",
+              message: "A conversion for this model is already running.",
+              job_id: "job-existing",
+            },
+          }),
+          {
+            status: 409,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+      if (url.endsWith("/api/workflows/wf-1/fp8-compatibility/convert/job-existing")) {
+        return jsonResponse({
+          job_id: "job-existing",
+          workflow_id: "wf-1",
+          folder: fp8Model.folder,
+          filename: fp8Model.filename,
+          status: "completed",
+          percent: 100,
+          user_facing_message: "Model converted for Apple Silicon.",
+          error_code: null,
+          converted_filename: "model-fp8-converted-for-mac.safetensors",
+          target_dtype: "bf16",
+          source_removed: true,
+          source_removal_skipped_reason: null,
+          model_summary: readySummary,
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    const { onResolved } = renderModal();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Convert" }));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(700);
+    });
+
+    expect(onResolved).toHaveBeenCalledWith(readySummary);
+    expect(screen.queryByText("Something went wrong")).not.toBeInTheDocument();
+  });
+
+  it("ignores rapid duplicate Convert clicks while the start request is in flight", async () => {
+    const startResponse = deferredJsonResponse({
+      job_id: "job-1",
+      status: "queued",
+      user_facing_message: null,
+    });
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/fp8-compatibility/convert") && init?.method === "POST") {
+        return startResponse.promise;
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    renderModal();
+    act(() => {
+      const convertButton = screen.getByRole("button", { name: "Convert" });
+      fireEvent.click(convertButton);
+      fireEvent.click(convertButton);
+    });
+
+    expect(
+      fetchMock.mock.calls.filter(([request]) => String(request).endsWith("/fp8-compatibility/convert")),
+    ).toHaveLength(1);
+
+    await act(async () => {
+      startResponse.resolve();
+      await startResponse.promise;
+      await Promise.resolve();
+    });
+  });
+
   it("shows conversion progress while the job is running", async () => {
     vi.useFakeTimers();
     fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {

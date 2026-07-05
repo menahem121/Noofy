@@ -97,6 +97,7 @@ from app.workflows.loader import WorkflowPackageLoader
 from app.workflows.model_availability import ModelAvailabilityService
 from app.workflows.model_identity_store import LocalModelIdentityStore
 from app.workflows.model_overrides import WorkflowModelOverrideStore
+from app.workflows.fp8_conversion import ConvertedModelsRegistry
 from app.workflows.user_state import UserStateService
 from app.workflows.validator import WorkflowPackageValidator
 
@@ -600,6 +601,9 @@ def create_default_engine_service() -> EngineService:
     workflow_model_override_store = WorkflowModelOverrideStore(
         paths.workflow_model_overrides_dir
     )
+    converted_models_registry = ConvertedModelsRegistry(
+        paths.converted_models_registry_file
+    )
     service = EngineService(
         loader,
         validator,
@@ -647,6 +651,7 @@ def create_default_engine_service() -> EngineService:
         history_service=history_service,
         runtime_storage_maintenance_service=runtime_storage_maintenance_service,
         workflow_model_override_store=workflow_model_override_store,
+        converted_models_registry=converted_models_registry,
     )
     service.run_runtime_storage_maintenance(reason="startup")
     return service

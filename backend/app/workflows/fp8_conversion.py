@@ -144,6 +144,59 @@ class Fp8ConversionConflictError(RuntimeError):
         self.job_id = job_id
 
 
+def apply_existing_converted_model_override(
+    *,
+    workflow_id: str,
+    model: RequiredModel,
+    noofy_models_dir: Path,
+    registry: ConvertedModelsRegistry,
+    override_store: WorkflowModelOverrideStore,
+    log_store: DiagnosticsSink | None = None,
+) -> bool:
+    """Route a workflow to an already-converted artifact for the same source.
+
+    This is used by FP8 preflight as an auto-heal path: if a previous
+    conversion completed but this workflow has no local override yet, the
+    registry can prove that a compatible artifact already exists.
+    """
+    source_sha256 = _sha256_from_required_model(model)
+    if source_sha256 is None:
+        return False
+    record = registry.find_by_source(source_sha256)
+    if record is None or record.source_folder != model.folder:
+        return False
+    replacement_path = noofy_models_dir / model.folder / record.converted_filename
+    if not replacement_path.is_file():
+        return False
+    override_store.upsert(
+        workflow_id,
+        WorkflowModelOverride(
+            folder=model.folder,
+            source_filename=model.filename,
+            replacement_filename=record.converted_filename,
+            replacement_sha256=record.converted_sha256,
+            replacement_size_bytes=record.converted_size_bytes,
+            target_dtype=record.target_dtype,
+            origin="converted",
+            created_at=datetime.now(UTC).isoformat(),
+        ),
+    )
+    if log_store is not None:
+        log_store.add(
+            "info",
+            "Applied existing FP8 converted model artifact",
+            _LOG_SOURCE,
+            workflow_id=workflow_id,
+            details={
+                "folder": model.folder,
+                "source_filename": model.filename,
+                "replacement_filename": record.converted_filename,
+                "source_sha256": source_sha256,
+            },
+        )
+    return True
+
+
 @dataclass
 class _Fp8ConversionJob:
     job_id: str
@@ -890,6 +943,16 @@ def _filename_from_download_url(url: str) -> str:
     if Path(filename).name != filename or filename.startswith("."):
         raise ValueError("The link points to an invalid model filename.")
     return filename
+
+
+def _sha256_from_required_model(model: RequiredModel) -> str | None:
+    checksum = (model.checksum or "").strip()
+    if not checksum.casefold().startswith("sha256:"):
+        return None
+    value = checksum.split(":", 1)[1].strip().casefold()
+    if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
+        return None
+    return value
 
 
 def _sha256_file(path: Path) -> str:

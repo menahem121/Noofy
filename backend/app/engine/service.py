@@ -97,6 +97,10 @@ from app.workflows.import_orchestrator import (
 )
 from app.workflows.library_service import WorkflowLibraryService
 from app.workflows.loader import WorkflowPackageLoader
+from app.workflows.fp8_conversion import (
+    ConvertedModelsRegistry,
+    apply_existing_converted_model_override,
+)
 from app.workflows.fp8_compatibility import (
     Fp8CompatibilityChecker,
     default_mps_execution_active,
@@ -107,7 +111,7 @@ from app.workflows.model_overrides import (
     apply_model_overrides_to_graph,
     apply_model_overrides_to_required,
 )
-from app.workflows.package import WorkflowPackage
+from app.workflows.package import RequiredModel, WorkflowPackage
 from app.workflows.removal_cleanup import WorkflowRemovalCleanupService
 from app.workflows.validator import WorkflowPackageValidator
 from app.workflows.widget_metadata import (
@@ -158,6 +162,7 @@ class EngineService:
         workflow_removal_cleanup_service: WorkflowRemovalCleanupService | None = None,
         runtime_storage_maintenance_service: RuntimeStorageMaintenanceService | None = None,
         workflow_model_override_store: WorkflowModelOverrideStore | None = None,
+        converted_models_registry: ConvertedModelsRegistry | None = None,
     ) -> None:
         self.workflow_loader = workflow_loader
         self.workflow_validator = workflow_validator
@@ -183,12 +188,18 @@ class EngineService:
             log_store=log_store,
         )
         self.workflow_model_override_store = workflow_model_override_store
+        self.converted_models_registry = converted_models_registry
         self.fp8_compatibility_checker: Fp8CompatibilityChecker | None = None
         if workflow_model_override_store is not None:
             self.fp8_compatibility_checker = Fp8CompatibilityChecker(
                 resolve_local_model_path=self.model_availability_service.resolve_local_model_path,
                 mps_execution_active=self.mps_execution_active,
                 overridden_model_keys=workflow_model_override_store.overridden_model_keys,
+                use_existing_converted_model=(
+                    self._use_existing_converted_model
+                    if converted_models_registry is not None
+                    else None
+                ),
                 log_store=log_store,
             )
         self.gallery_capture_service = gallery_capture_service
@@ -1655,6 +1666,28 @@ class EngineService:
     def mps_execution_active(self) -> bool:
         return default_mps_execution_active(
             lambda: str(getattr(self.runtime_manager, "managed_vram_mode", "normal"))
+        )
+
+    def _use_existing_converted_model(
+        self,
+        workflow_id: str,
+        model: RequiredModel,
+        _source_path: Path,
+    ) -> bool:
+        store = self.workflow_model_override_store
+        registry = self.converted_models_registry
+        if store is None or registry is None:
+            return False
+        # `_source_path` is resolved by the FP8 checker before this callback.
+        # Identity comes from the package checksum so normal run preflight does
+        # not hash multi-gigabyte models just to discover reusable conversions.
+        return apply_existing_converted_model_override(
+            workflow_id=workflow_id,
+            model=model,
+            noofy_models_dir=Path(self.model_availability_service.noofy_models_dir),
+            registry=registry,
+            override_store=store,
+            log_store=self.log_store,
         )
 
     def package_with_local_model_overrides(self, package: WorkflowPackage) -> WorkflowPackage:

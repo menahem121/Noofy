@@ -37,7 +37,14 @@ def _package(workflow_id: str = "wf-fp8", filename: str = "model-fp8.safetensors
     )
 
 
-def _checker(tmp_path, *, mps_active=True, overridden=frozenset(), resolver=None):
+def _checker(
+    tmp_path,
+    *,
+    mps_active=True,
+    overridden=frozenset(),
+    resolver=None,
+    use_existing_converted_model=None,
+):
     if resolver is None:
         fp8_file = write_safetensors(
             tmp_path / "diffusion_models" / "model-fp8.safetensors",
@@ -48,6 +55,7 @@ def _checker(tmp_path, *, mps_active=True, overridden=frozenset(), resolver=None
         resolve_local_model_path=resolver,
         mps_execution_active=lambda: mps_active,
         overridden_model_keys=lambda workflow_id: set(overridden),
+        use_existing_converted_model=use_existing_converted_model,
         log_store=LogStore(),
     )
 
@@ -76,6 +84,20 @@ def test_preflight_skips_overridden_requirements(tmp_path):
         overridden={("diffusion_models", "model-fp8.safetensors")},
     )
     assert checker.preflight_validation(_package()) is None
+
+
+def test_preflight_skips_when_existing_converted_artifact_is_applied(tmp_path):
+    applied: list[tuple[str, str, str]] = []
+
+    def use_existing(workflow_id, model, path):
+        applied.append((workflow_id, model.folder, model.filename))
+        assert path.name == "model-fp8.safetensors"
+        return True
+
+    checker = _checker(tmp_path, use_existing_converted_model=use_existing)
+
+    assert checker.preflight_validation(_package()) is None
+    assert applied == [("wf-fp8", "diffusion_models", "model-fp8.safetensors")]
 
 
 def test_preflight_skips_missing_local_files(tmp_path):

@@ -1,4 +1,4 @@
-import { getJson, postJson } from "./client";
+import { ApiError, apiErrorMessage, apiHeaders, getApiBaseUrl, getJson, postJson } from "./client";
 import type { ModelDownloadJobStart } from "./models";
 import type { RequiredModelSummary, WorkflowValidationResult } from "./workflows";
 
@@ -52,10 +52,8 @@ export function fp8ModelsFromValidation(response: WorkflowValidationResult): Fp8
 }
 
 export function startFp8Conversion(workflowId: string, model: { folder: string; filename: string }) {
-  return postJson<Fp8ConversionJobStart>(
-    `/workflows/${encodeURIComponent(workflowId)}/fp8-compatibility/convert`,
-    model,
-  );
+  const path = `/workflows/${encodeURIComponent(workflowId)}/fp8-compatibility/convert`;
+  return postFp8ConversionStart(path, model);
 }
 
 export function fetchFp8ConversionStatus(workflowId: string, jobId: string) {
@@ -109,4 +107,51 @@ export function isValidFp8AlternativeUrl(value: string): boolean {
   // (.sft is the same safetensors container under a shorter name).
   const filename = decodeURIComponent(parsed.pathname.split("/").pop() ?? "");
   return /\.(safetensors|sft)$/i.test(filename);
+}
+
+async function postFp8ConversionStart(
+  path: string,
+  model: { folder: string; filename: string },
+): Promise<Fp8ConversionJobStart> {
+  const response = await fetch(`${getApiBaseUrl()}${path}`, {
+    method: "POST",
+    headers: apiHeaders("application/json"),
+    body: JSON.stringify(model),
+  });
+  if (response.ok) {
+    return response.json() as Promise<Fp8ConversionJobStart>;
+  }
+  const conflict = await fp8ConversionConflict(response);
+  if (conflict) {
+    return conflict;
+  }
+  throw new ApiError(await apiErrorMessage(response), response);
+}
+
+async function fp8ConversionConflict(response: Response): Promise<Fp8ConversionJobStart | null> {
+  if (response.status !== 409) {
+    return null;
+  }
+  try {
+    const payload = (await response.clone().json()) as unknown;
+    const detail = payload && typeof payload === "object"
+      ? (payload as { detail?: unknown }).detail
+      : null;
+    if (!detail || typeof detail !== "object") {
+      return null;
+    }
+    const code = (detail as { code?: unknown }).code;
+    const jobId = (detail as { job_id?: unknown }).job_id;
+    const message = (detail as { message?: unknown }).message;
+    if (code !== "fp8_conversion_already_running" || typeof jobId !== "string" || !jobId) {
+      return null;
+    }
+    return {
+      job_id: jobId,
+      status: "converting",
+      user_facing_message: typeof message === "string" ? message : null,
+    };
+  } catch {
+    return null;
+  }
 }

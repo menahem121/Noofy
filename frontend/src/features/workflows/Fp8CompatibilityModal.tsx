@@ -50,6 +50,7 @@ export function Fp8CompatibilityModal({
   const conversionJobIdRef = useRef<string | null>(null);
   const cancelPendingRef = useRef<Fp8ModalPhase | null>(null);
   const operationIdRef = useRef(0);
+  const busyRef = useRef(false);
   const mountedRef = useRef(true);
   const busy = phase !== "idle";
   const selectedModel = models[Math.min(selectedIndex, models.length - 1)] ?? models[0];
@@ -69,13 +70,18 @@ export function Fp8CompatibilityModal({
     }
   }
 
+  function setModalPhase(nextPhase: Fp8ModalPhase) {
+    busyRef.current = nextPhase !== "idle";
+    setPhase(nextPhase);
+  }
+
   async function convertNext(queue: Fp8IncompatibleModel[], operationId: number) {
     if (operationId !== operationIdRef.current) {
       return;
     }
     const [next, ...rest] = queue;
     if (!next) {
-      setPhase("idle");
+      setModalPhase("idle");
       onResolved(conversionJob?.model_summary ?? null);
       return;
     }
@@ -95,7 +101,7 @@ export function Fp8CompatibilityModal({
         }
         void cancelFp8Conversion(workflowId, started.job_id).catch(() => undefined);
         if (mountedRef.current && operationId === operationIdRef.current) {
-          setPhase("idle");
+          setModalPhase("idle");
         }
         return;
       }
@@ -110,10 +116,10 @@ export function Fp8CompatibilityModal({
       }
       if (cancelPendingRef.current === "converting") {
         cancelPendingRef.current = null;
-        setPhase("idle");
+        setModalPhase("idle");
         return;
       }
-      setPhase("idle");
+      setModalPhase("idle");
       setError(errorMessage(requestError, "The conversion could not be started."));
     }
   }
@@ -137,37 +143,40 @@ export function Fp8CompatibilityModal({
         if (remaining.length > 0) {
           void convertNext(remaining, operationId);
         } else {
-          setPhase("idle");
+          setModalPhase("idle");
           onResolved(status.model_summary ?? null);
         }
       } else if (status.status === "failed") {
         stopPolling();
         conversionJobIdRef.current = null;
-        setPhase("idle");
+        setModalPhase("idle");
         setError(status.user_facing_message ?? "The model could not be converted.");
       } else if (status.status === "canceled") {
         stopPolling();
         conversionJobIdRef.current = null;
-        setPhase("idle");
+        setModalPhase("idle");
       }
     }, POLL_INTERVAL_MS);
   }
 
   async function handleConvert() {
+    if (busyRef.current) {
+      return;
+    }
     setError(null);
     cancelPendingRef.current = null;
     const operationId = operationIdRef.current + 1;
     operationIdRef.current = operationId;
-    setPhase("converting");
+    setModalPhase("converting");
     await convertNext(models, operationId);
   }
 
   async function handleDownload() {
-    if (!urlValid || !selectedModel) {
+    if (busyRef.current || !urlValid || !selectedModel) {
       return;
     }
     setError(null);
-    setPhase("downloading");
+    setModalPhase("downloading");
     cancelPendingRef.current = null;
     const operationId = operationIdRef.current + 1;
     operationIdRef.current = operationId;
@@ -187,7 +196,7 @@ export function Fp8CompatibilityModal({
         }
         void cancelModelDownload(started.job_id).catch(() => undefined);
         if (mountedRef.current && operationId === operationIdRef.current) {
-          setPhase("idle");
+          setModalPhase("idle");
         }
         return;
       }
@@ -202,10 +211,10 @@ export function Fp8CompatibilityModal({
       }
       if (cancelPendingRef.current === "downloading") {
         cancelPendingRef.current = null;
-        setPhase("idle");
+        setModalPhase("idle");
         return;
       }
-      setPhase("idle");
+      setModalPhase("idle");
       setError(errorMessage(requestError, "The download could not be started."));
     }
   }
@@ -226,12 +235,12 @@ export function Fp8CompatibilityModal({
       if (status.status === "completed" || status.status === "succeeded") {
         stopPolling();
         downloadJobIdRef.current = null;
-        setPhase("idle");
+        setModalPhase("idle");
         onResolved(status.model_summary ?? null);
       } else if (["failed", "completed_with_errors", "canceled"].includes(status.status)) {
         stopPolling();
         downloadJobIdRef.current = null;
-        setPhase("idle");
+        setModalPhase("idle");
         if (status.status !== "canceled") {
           setError(status.user_facing_message ?? "The model could not be downloaded.");
         }
@@ -252,7 +261,7 @@ export function Fp8CompatibilityModal({
         cancelPendingRef.current = null;
       }
       stopPolling();
-      setPhase("idle");
+      setModalPhase("idle");
       return;
     }
     if (phase === "downloading") {
@@ -265,7 +274,7 @@ export function Fp8CompatibilityModal({
         cancelPendingRef.current = null;
       }
       stopPolling();
-      setPhase("idle");
+      setModalPhase("idle");
       return;
     }
     if (selectedModel) {

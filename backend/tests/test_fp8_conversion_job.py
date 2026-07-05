@@ -13,9 +13,10 @@ from app.workflows.fp8_conversion import (
     ConvertedModelsRegistry,
     Fp8ConversionConflictError,
     Fp8ConversionService,
+    apply_existing_converted_model_override,
 )
 from app.workflows.model_overrides import WorkflowModelOverrideStore
-from app.workflows.package import WorkflowPackage
+from app.workflows.package import RequiredModel, WorkflowPackage
 
 FP8_NAME = "model-fp8.safetensors"
 CONVERTED_NAME = "model-fp8-converted-for-mac.safetensors"
@@ -280,6 +281,87 @@ def test_registry_round_trip(tmp_path):
     assert registry.find_by_source("c" * 64) is None
     data = json.loads((tmp_path / "converted-models.json").read_text())
     assert data["records"][0]["ownership"] == "noofy_converted"
+
+
+def test_existing_converted_artifact_applies_missing_workflow_override(tmp_path):
+    models_dir = tmp_path / "Noofy Models"
+    converted = models_dir / "diffusion_models" / CONVERTED_NAME
+    converted.parent.mkdir(parents=True)
+    converted.write_bytes(b"converted")
+    registry = ConvertedModelsRegistry(tmp_path / "converted-models.json")
+    registry.add(
+        ConvertedModelRecord(
+            source_sha256="a" * 64,
+            source_filename=FP8_NAME,
+            source_folder="diffusion_models",
+            converted_filename=CONVERTED_NAME,
+            converted_sha256="b" * 64,
+            converted_size_bytes=len(b"converted"),
+            target_dtype="bf16",
+            workflow_id="wf-original",
+            created_at="2026-07-05T00:00:00+00:00",
+        )
+    )
+    override_store = WorkflowModelOverrideStore(tmp_path / "model-overrides")
+
+    applied = apply_existing_converted_model_override(
+        workflow_id="wf-fp8",
+        model=RequiredModel(
+            folder="diffusion_models",
+            filename=FP8_NAME,
+            checksum="sha256:" + "a" * 64,
+        ),
+        noofy_models_dir=models_dir,
+        registry=registry,
+        override_store=override_store,
+        log_store=LogStore(),
+    )
+
+    assert applied is True
+    overrides = override_store.overrides_for("wf-fp8")
+    assert len(overrides) == 1
+    assert overrides[0].source_filename == FP8_NAME
+    assert overrides[0].replacement_filename == CONVERTED_NAME
+    assert overrides[0].replacement_sha256 == "b" * 64
+    assert overrides[0].origin == "converted"
+
+
+def test_existing_converted_artifact_requires_source_checksum_and_file(tmp_path):
+    registry = ConvertedModelsRegistry(tmp_path / "converted-models.json")
+    registry.add(
+        ConvertedModelRecord(
+            source_sha256="a" * 64,
+            source_filename=FP8_NAME,
+            source_folder="diffusion_models",
+            converted_filename=CONVERTED_NAME,
+            converted_sha256="b" * 64,
+            converted_size_bytes=10,
+            target_dtype="bf16",
+            workflow_id="wf-original",
+            created_at="2026-07-05T00:00:00+00:00",
+        )
+    )
+    override_store = WorkflowModelOverrideStore(tmp_path / "model-overrides")
+
+    assert apply_existing_converted_model_override(
+        workflow_id="wf-fp8",
+        model=RequiredModel(folder="diffusion_models", filename=FP8_NAME),
+        noofy_models_dir=tmp_path / "Noofy Models",
+        registry=registry,
+        override_store=override_store,
+    ) is False
+    assert apply_existing_converted_model_override(
+        workflow_id="wf-fp8",
+        model=RequiredModel(
+            folder="diffusion_models",
+            filename=FP8_NAME,
+            checksum="sha256:" + "a" * 64,
+        ),
+        noofy_models_dir=tmp_path / "Noofy Models",
+        registry=registry,
+        override_store=override_store,
+    ) is False
+    assert override_store.overrides_for("wf-fp8") == []
 
 
 def test_conversion_refused_off_mps(tmp_path):

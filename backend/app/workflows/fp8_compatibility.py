@@ -190,6 +190,7 @@ def default_mps_execution_active(effective_vram_mode: Callable[[], str] | None =
 
 ResolveLocalModelPath = Callable[[RequiredModel], Path | None]
 OverriddenModelKeys = Callable[[str], set[tuple[str, str]]]
+ExistingConvertedModelResolver = Callable[[str, RequiredModel, Path], bool]
 
 
 @dataclass
@@ -203,6 +204,7 @@ class Fp8CompatibilityChecker:
     resolve_local_model_path: ResolveLocalModelPath
     mps_execution_active: Callable[[], bool]
     overridden_model_keys: OverriddenModelKeys
+    use_existing_converted_model: ExistingConvertedModelResolver | None = None
     log_store: DiagnosticsSink | None = None
     inspector: Fp8SafetensorsInspector = field(default_factory=Fp8SafetensorsInspector)
 
@@ -223,6 +225,23 @@ class Fp8CompatibilityChecker:
             inspection = self.inspector.inspect(path)
             if inspection is None or not inspection.has_incompatible_fp8:
                 continue
+            if self.use_existing_converted_model is not None:
+                try:
+                    if self.use_existing_converted_model(package.metadata.id, model, path):
+                        continue
+                except Exception as exc:
+                    if self.log_store is not None:
+                        self.log_store.add(
+                            "warning",
+                            "Existing converted FP8 model lookup failed",
+                            "workflows.fp8_compat",
+                            workflow_id=package.metadata.id,
+                            details={
+                                "folder": model.folder,
+                                "filename": model.filename,
+                                "error": str(exc),
+                            },
+                        )
             found.append(
                 Fp8IncompatibleModel(
                     folder=model.folder,
