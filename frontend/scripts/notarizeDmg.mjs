@@ -4,13 +4,13 @@ import process from "node:process";
 
 import { frontendRoot, relative, runChecked } from "./packagedRuntime.mjs";
 
-const args = parseArgs(process.argv.slice(2));
-const dmgPath = path.resolve(args.dmg || newestDmgPath());
-
 try {
   if (process.platform !== "darwin") {
     throw new Error("DMG notarization must run on macOS.");
   }
+
+  const args = parseArgs(process.argv.slice(2));
+  const dmgPath = path.resolve(args.dmg || newestDmgPath());
   if (!existsSync(dmgPath)) {
     throw new Error(`DMG does not exist: ${relative(dmgPath)}`);
   }

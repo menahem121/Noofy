@@ -109,6 +109,19 @@ export function requiredModelSummaryHasNonReadyModels(summary: RequiredModelSumm
   return Boolean(summary?.models.some(isRequiredModelNonReady));
 }
 
+export function shouldClearMissingModelValidation(
+  validation: WorkflowValidationResult | null,
+  modelSummary: RequiredModelSummary,
+) {
+  return Boolean(
+    validation &&
+      !validation.valid &&
+      validation.missing_models.length > 0 &&
+      validation.errors.length === 0 &&
+      modelSummary.ready_to_run,
+  );
+}
+
 export function WorkflowRequiredModelsModal({
   workflowName,
   summary,

@@ -10,6 +10,8 @@ import { WorkflowTabsProvider, WorkflowTabsRouteProvider, useWorkflowTabs, type 
 import { splitDiagnosticLogs, WorkflowRunPage } from "./WorkflowRunPage";
 import { __resetWorkflowUserStateCacheForTests } from "../../lib/useWorkflowUserState";
 import { invalidateWorkflowRunPageCache, resetWorkflowRunPageCacheForTests } from "./workflowRunPageCache";
+import { publishWorkflowModelSummaryUpdate } from "./workflowModelReadinessSync";
+import type { RequiredModelSummary } from "../../lib/api/noofyApi";
 
 vi.mock("../three-d/threeDScene", () => ({
   createThreeDScene: vi.fn().mockResolvedValue({
@@ -2994,6 +2996,89 @@ describe("WorkflowRunPage", () => {
     expect(await within(dialog).findByText("Text to Image has all required model files available.")).toBeInTheDocument();
     expect(within(dialog).getByText("Available")).toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: "Download Missing Models" })).toBeDisabled();
+  });
+
+  it("re-enables Run when the globally-owned missing-models flow publishes a refreshed summary", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/runtime")) {
+        return Promise.resolve(jsonResponse(readyRuntime));
+      }
+
+      if (url.endsWith("/api/workflows/text_to_image_v0/status")) {
+        return Promise.resolve(jsonResponse(workflowStatus));
+      }
+
+      if (url.endsWith("/api/workflows/text_to_image_v0/model-summary")) {
+        return Promise.resolve(jsonResponse(missingModelSummary));
+      }
+
+      if (url.endsWith("/api/workflows/text_to_image_v0/validate")) {
+        return Promise.resolve(
+          jsonResponse({
+            workflow_id: "text_to_image_v0",
+            valid: false,
+            missing_models: [
+              {
+                folder: "checkpoints",
+                filename: "v1-5-pruned-emaonly-fp16.safetensors",
+                source_url: null,
+                checksum: null,
+              },
+            ],
+            errors: [],
+          }),
+        );
+      }
+
+      if (url.endsWith("/api/workflows/text_to_image_v0/run") && init?.method === "POST") {
+        return Promise.resolve(
+          jsonResponse({
+            workflow_id: "text_to_image_v0",
+            valid: false,
+            missing_models: [
+              {
+                folder: "checkpoints",
+                filename: "v1-5-pruned-emaonly-fp16.safetensors",
+                source_url: null,
+                checksum: null,
+              },
+            ],
+            errors: [],
+          }),
+        );
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    const onMissingModels = vi.fn();
+    renderRunPage({ onMissingModels });
+
+    const runButton = await screen.findByRole("button", { name: /run workflow/i });
+    await waitFor(() => expect(runButton).toBeEnabled());
+    fireEvent.click(runButton);
+
+    await waitFor(() => expect(onMissingModels).toHaveBeenCalled());
+    expect(screen.queryByRole("dialog", { name: "Missing Models" })).not.toBeInTheDocument();
+    await waitFor(() => expect(runButton).toBeDisabled());
+
+    act(() => {
+      publishWorkflowModelSummaryUpdate({
+        workflowId: "another_workflow",
+        summary: downloadedModelSummary as unknown as RequiredModelSummary,
+      });
+    });
+    expect(runButton).toBeDisabled();
+
+    act(() => {
+      publishWorkflowModelSummaryUpdate({
+        workflowId: "text_to_image_v0",
+        summary: downloadedModelSummary as unknown as RequiredModelSummary,
+      });
+    });
+    await waitFor(() => expect(runButton).toBeEnabled());
   });
 
   it("refreshes model summary after an in-page download completes without an embedded summary", async () => {

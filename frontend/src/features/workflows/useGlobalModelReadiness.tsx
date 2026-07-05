@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   fetchWorkflowModelSummary,
@@ -7,6 +7,7 @@ import {
   type RequiredModelSummary,
   type WorkflowModelVerificationJobStatus,
 } from "../../lib/api/noofyApi";
+import { publishWorkflowModelSummaryUpdate } from "./workflowModelReadinessSync";
 import { useWorkflowModelActions } from "./useWorkflowModelActions";
 import {
   requiredModelSummaryHasNonReadyModels,
@@ -83,6 +84,9 @@ export function useGlobalModelReadiness() {
       void startWorkflowModelVerification(watch.workflowId)
         .then((job) => {
           const summary = job.model_summary ?? watch.summary;
+          if (job.model_summary) {
+            publishWorkflowModelSummaryUpdate({ workflowId: watch.workflowId, summary: job.model_summary });
+          }
           if (requiredModelSummaryHasNonReadyModels(summary)) {
             openMissingModels({
               workflowId: watch.workflowId,
@@ -145,6 +149,9 @@ export function useGlobalModelReadiness() {
               const nextJob = await fetchWorkflowModelVerificationStatus(watch.workflowId, job.job_id);
               if (stopped) return;
               const nextSummary = nextJob.model_summary ?? watch.summary;
+              if (nextJob.model_summary) {
+                publishWorkflowModelSummaryUpdate({ workflowId: watch.workflowId, summary: nextJob.model_summary });
+              }
               const finished = !["queued", "running"].includes(nextJob.status);
               if (requiredModelSummaryHasNonReadyModels(nextSummary)) {
                 openMissingModels({
@@ -202,12 +209,19 @@ export function useGlobalModelReadiness() {
 
   const activeWorkflowId = activeModal?.workflowId ?? "__no-active-workflow__";
   const activeSummary = activeModal?.summary ?? emptySummary;
+  const activeModalRef = useRef(activeModal);
+  activeModalRef.current = activeModal;
   const refreshActiveSummary = useCallback(async () => {
     if (!activeModal) return;
     const summary = await fetchWorkflowModelSummary(activeModal.workflowId);
+    publishWorkflowModelSummaryUpdate({ workflowId: activeModal.workflowId, summary });
     setActiveModal((current) => current && current.workflowId === activeModal.workflowId ? { ...current, summary } : current);
   }, [activeModal]);
   const handleModelSummary = useCallback((summary: RequiredModelSummary) => {
+    const active = activeModalRef.current;
+    if (active) {
+      publishWorkflowModelSummaryUpdate({ workflowId: active.workflowId, summary });
+    }
     setActiveModal((current) => current ? { ...current, summary } : current);
   }, []);
   const {

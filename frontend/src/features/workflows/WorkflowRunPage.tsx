@@ -125,8 +125,10 @@ import {
   requiredModelDownloadSelections,
   isRequiredModelNonReady,
   isRequiredModelVerificationPending,
+  shouldClearMissingModelValidation,
   WorkflowRequiredModelsModal,
 } from "./workflowModelRequirements";
+import { subscribeToWorkflowModelSummaryUpdates } from "./workflowModelReadinessSync";
 import {
   clampBatchCount,
   isBlockingMemoryState,
@@ -317,6 +319,25 @@ export function WorkflowRunPage({
       storeWorkflowRunPageState(workflowId, state);
     }
   }, [state, workflowId]);
+
+  // The app-owned missing-models modal downloads and verifies models for this
+  // workflow outside this page; apply its refreshed summaries here so Run
+  // re-enables without closing and reopening the workflow.
+  useEffect(
+    () =>
+      subscribeToWorkflowModelSummaryUpdates(({ workflowId: updatedWorkflowId, summary }) => {
+        if (updatedWorkflowId !== workflowId) return;
+        setState((current) => ({
+          ...current,
+          modelSummary: summary,
+          modelSummaryLoading: false,
+          validation: shouldClearMissingModelValidation(current.validation, summary)
+            ? null
+            : current.validation,
+        }));
+      }),
+    [workflowId],
+  );
 
   const { viewMode, setViewMode } = useAppPreferences();
   const runtimeStatus = useRuntimeStatus();
@@ -2585,19 +2606,6 @@ function resetRunPageStateAfterBackendSessionRecovery(current: RunPageState): Ru
     packageLoadError: null,
     packageLoadErrorStatus: null,
   };
-}
-
-function shouldClearMissingModelValidation(
-  validation: WorkflowValidationResult | null,
-  modelSummary: RequiredModelSummary,
-) {
-  return Boolean(
-    validation &&
-      !validation.valid &&
-      validation.missing_models.length > 0 &&
-      validation.errors.length === 0 &&
-      modelSummary.ready_to_run,
-  );
 }
 
 type WorkflowCustomNodeResolution = NonNullable<WorkflowImportResponse["custom_node_resolution"]>;

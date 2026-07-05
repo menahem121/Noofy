@@ -8,6 +8,7 @@ import type {
   WorkflowStatusResponse,
   WorkflowValidationResult,
 } from "../../lib/api/noofyApi";
+import { shouldClearMissingModelValidation } from "./workflowModelRequirements";
 
 export interface WorkflowRunPageCachedState {
   firstLoadedWorkflowId: string | null;
@@ -41,6 +42,22 @@ export function storeWorkflowRunPageState(workflowId: string, state: WorkflowRun
 
 export function invalidateWorkflowRunPageCache(workflowId: string) {
   workflowRunPageStateCache.delete(workflowId);
+}
+
+export function applyModelSummaryToWorkflowRunPageCache(
+  workflowId: string,
+  modelSummary: RequiredModelSummary,
+) {
+  const cached = workflowRunPageStateCache.get(workflowId);
+  if (!cached) return;
+  workflowRunPageStateCache.set(workflowId, {
+    ...cached,
+    modelSummary,
+    modelSummaryLoading: false,
+    validation: shouldClearMissingModelValidation(cached.validation, modelSummary)
+      ? null
+      : cached.validation,
+  });
 }
 
 export function resetWorkflowRunPageCacheForTests() {

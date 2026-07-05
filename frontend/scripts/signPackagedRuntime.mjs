@@ -80,14 +80,15 @@ export function signPackagedRuntime(
 
   let pythonEntitlementSignatures = 0;
   for (const file of nativeFiles) {
-    if (usesMacosPythonEntitlements(file, runtimeRoot, target)) {
-      pythonEntitlementSignatures += 1;
-    }
-    signFile(file, signingIdentity, {
+    const codesignArgs = codesignArgsForFile(file, signingIdentity, {
       runtimeRoot,
       target,
       macosPythonEntitlementsPath,
     });
+    if (codesignArgs.includes("--entitlements")) {
+      pythonEntitlementSignatures += 1;
+    }
+    signFile(file, codesignArgs);
   }
 
   if (target === "macos-arm64" && pythonEntitlementSignatures === 0) {
@@ -192,8 +193,8 @@ function packagedPythonExecutableRealPaths(runtimeRoot, target) {
   return realPaths;
 }
 
-function signFile(filePath, signingIdentity, options) {
-  const result = spawnSync("codesign", codesignArgsForFile(filePath, signingIdentity, options), {
+function signFile(filePath, codesignArgs) {
+  const result = spawnSync("codesign", codesignArgs, {
     encoding: "utf8",
   });
   if (result.status !== 0) {
