@@ -154,7 +154,7 @@ requires **Python 3.13**. The easiest source-checkout path is usually a
 Linux/macOS:
 
 ```bash
-git clone <repo-url> Noofy
+git clone https://github.com/menahem121/Noofy
 cd Noofy
 make install
 make run
@@ -163,7 +163,7 @@ make run
 Windows PowerShell:
 
 ```powershell
-git clone <repo-url> Noofy
+git clone https://github.com/menahem121/Noofy
 cd Noofy
 .\scripts\install.ps1
 .\scripts\run.ps1
