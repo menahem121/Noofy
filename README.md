@@ -126,6 +126,29 @@ With packaged installers:
 | macOS Apple Silicon | `.dmg` | [Download for macOS Apple Silicon](https://github.com/menahem121/Noofy/releases/latest/download/Noofy_0.1.0_aarch64.dmg) |
 | Linux | `.deb` | [Download for Linux](https://github.com/menahem121/Noofy/releases/latest/download/Noofy_0.1.0_amd64.deb) |
 
+### Install the ComfyUI Export Node
+
+This is optional. If you already use ComfyUI, the Noofy export node adds an
+**Export to Noofy** action inside ComfyUI. Use it when you want to turn a
+ComfyUI workflow into a `.noofy` package that can be imported into Noofy.
+
+Please note that Noofy also supports regular `.json` workflows, but using the Noofy Export custom node is the recommended path.
+
+From your ComfyUI folder, run:
+
+```bash
+cd ComfyUI/custom_nodes
+
+git clone --depth 1 --filter=blob:none --sparse https://github.com/menahem121/Noofy.git noofy_tmp
+cd noofy_tmp
+git sparse-checkout set comfyui_export2noofy_node
+
+cd ..
+mv noofy_tmp/comfyui_export2noofy_node ./comfyui_export2noofy_node
+rm -rf noofy_tmp
+```
+
+Restart ComfyUI after installing it.
 
 ## Local Development
 
