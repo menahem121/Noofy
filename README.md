@@ -118,17 +118,14 @@ manually launching ComfyUI or installing ComfyUI Python dependencies.
 
 ## Installing Noofy
 
-Packaged installers are the normal-user path:
+With packaged installers:
 
-- Windows: `.exe`
-- macOS Apple Silicon: `.dmg`
-- Linux: `.deb` or equivalent
+| Platform | Installer | Download |
+| --- | --- | --- |
+| Windows | `.exe` | [Download for Windows](https://github.com/menahem121/Noofy/releases/latest/download/Noofy_0.1.0_x64-setup.exe) |
+| macOS Apple Silicon | `.dmg` | [Download for macOS Apple Silicon](https://github.com/menahem121/Noofy/releases/latest/download/Noofy_0.1.0_aarch64.dmg) |
+| Linux | `.deb` | [Download for Linux](https://github.com/menahem121/Noofy/releases/latest/download/Noofy_0.1.0_amd64.deb) |
 
-Packaged apps must ship built frontend assets and a Noofy-owned backend/Python
-runtime. They must not require Python, Node, npm, ComfyUI, pip, venv, Homebrew,
-Conda, or other developer tools on the user's machine. The packaged app starts
-the backend with bundled resources, runs ComfyUI in managed mode, and prepares
-PyTorch and ComfyUI dependencies inside Noofy-managed runtime directories.
 
 ## Local Development
 
