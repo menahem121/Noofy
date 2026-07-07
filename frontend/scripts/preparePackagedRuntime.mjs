@@ -2,6 +2,7 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -82,6 +83,7 @@ function prepareRuntime({ sourceRoot, output, target, pythonBuildId, args }) {
     verbatimSymlinks: false,
   });
   normalizePythonBinSymlinks(path.join(outputPythonDir, "bin"));
+  pruneUnusedPackagedPythonModules(outputPythonDir);
   if (existingReadme !== null) {
     writeFileSync(placeholderReadme, existingReadme);
   }
@@ -199,6 +201,56 @@ function relink(linkPath, target) {
   }
   rmSync(linkPath, { force: true });
   symlinkSync(target, linkPath);
+}
+
+function pruneUnusedPackagedPythonModules(pythonRoot) {
+  removeMatchingChildren(path.join(pythonRoot, "lib"), (name) =>
+    /^tcl\d/.test(name) ||
+    /^tk\d/.test(name) ||
+    /^itcl\d/.test(name) ||
+    /^thread\d/.test(name) ||
+    /^libtcl.*\.(so|dylib|dll)$/i.test(name) ||
+    /^libtk.*\.(so|dylib|dll)$/i.test(name),
+  );
+  removeMatchingChildren(path.join(pythonRoot, "DLLs"), (name) =>
+    name === "_tkinter.pyd" || /^tcl.*\.dll$/i.test(name) || /^tk.*\.dll$/i.test(name),
+  );
+  for (const stdlibRoot of pythonStdlibRoots(pythonRoot)) {
+    for (const name of ["idlelib", "tkinter", "turtledemo"]) {
+      rmSync(path.join(stdlibRoot, name), { recursive: true, force: true });
+    }
+    removeMatchingChildren(path.join(stdlibRoot, "lib-dynload"), (name) =>
+      name === "_tkinter.pyd" || name.startsWith("_tkinter."),
+    );
+  }
+}
+
+function pythonStdlibRoots(pythonRoot) {
+  const roots = [];
+  const windowsStdlib = path.join(pythonRoot, "Lib");
+  if (existsSync(windowsStdlib)) {
+    roots.push(windowsStdlib);
+  }
+  const unixLib = path.join(pythonRoot, "lib");
+  if (existsSync(unixLib)) {
+    for (const entry of readdirSync(unixLib, { withFileTypes: true })) {
+      if (entry.isDirectory() && /^python\d+\.\d+$/.test(entry.name)) {
+        roots.push(path.join(unixLib, entry.name));
+      }
+    }
+  }
+  return roots;
+}
+
+function removeMatchingChildren(dir, predicate) {
+  if (!existsSync(dir)) {
+    return;
+  }
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (predicate(entry.name)) {
+      rmSync(path.join(dir, entry.name), { recursive: true, force: true });
+    }
+  }
 }
 
 function rejectDeveloperRuntimeSource(sourceRoot) {

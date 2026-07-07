@@ -468,6 +468,21 @@ export function verifyTauriBackendResourceMapping() {
       );
     }
   }
+  verifyTauriLinuxBundleTargets();
+}
+
+export function verifyTauriLinuxBundleTargets() {
+  const configPath = path.join(frontendRoot, "src-tauri", "tauri.linux.conf.json");
+  const config = readJson(configPath);
+  const targets = config?.bundle?.targets;
+  if (!Array.isArray(targets)) {
+    throw new Error("Tauri Linux bundle targets must explicitly include deb and appimage.");
+  }
+  for (const target of ["deb", "appimage"]) {
+    if (!targets.includes(target)) {
+      throw new Error(`Tauri Linux bundle target is missing: ${target}.`);
+    }
+  }
 }
 
 export function verifyBackendSourceFiles(backendRoot = backendSourceRoot) {

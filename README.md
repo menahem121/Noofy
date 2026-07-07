@@ -122,9 +122,10 @@ With packaged installers:
 
 | Platform | Installer | Download |
 | --- | --- | --- |
-| Windows | `.exe` | [Download for Windows](https://github.com/menahem121/Noofy/releases/latest/download/Noofy_0.1.0_x64-setup.exe) |
-| macOS Apple Silicon | `.dmg` | [Download for macOS Apple Silicon](https://github.com/menahem121/Noofy/releases/latest/download/Noofy_0.1.0_aarch64.dmg) |
-| Linux | `.deb` | [Download for Linux](https://github.com/menahem121/Noofy/releases/latest/download/Noofy_0.1.0_amd64.deb) |
+| Windows | `.exe` | [Download for Windows](https://github.com/menahem121/Noofy/releases/latest/download/Noofy_0.1.0_Windows_x64-setup.exe) |
+| macOS Apple Silicon | `.dmg` | [Download for macOS Apple Silicon](https://github.com/menahem121/Noofy/releases/latest/download/Noofy_0.1.0_MACOS_aarch64.dmg) |
+| Linux | `.deb` | [Download for Linux](https://github.com/menahem121/Noofy/releases/latest/download/Noofy_0.1.0_LINUX_amd64.deb) |
+| Linux portable | `.AppImage` | [Download AppImage](https://github.com/menahem121/Noofy/releases/latest/download/Noofy_0.1.0_LINUX_amd64.AppImage) |
 
 ### Install the ComfyUI Export Node
 

@@ -39,6 +39,9 @@ The bundled Python runtime is for the trusted backend and bootstrap tooling.
 Managed ComfyUI, PyTorch, custom nodes, and community workflow dependencies are
 installed later into app-data runtime directories and isolated dependency
 environments. They must not be installed into this trusted bundled Python.
+Packaging preparation prunes CPython's optional Tk/Tkinter GUI components from
+the trusted runtime. Noofy does not use them, and keeping them causes AppImage
+dependency deployment to chase unrelated Tcl/Tk shared libraries.
 When a managed ComfyUI runtime profile pins a Python ABI, the bootstrap Python
 used to create that managed runner must match the profile instead of following
 the developer or system interpreter that launched the backend.
@@ -60,7 +63,7 @@ The current verifier accepts these release targets:
 
 - `macos-arm64` for macOS Apple Silicon `.dmg`
 - `windows-x64` for Windows `.exe`
-- `linux-x64` for Linux `.deb`
+- `linux-x64` for Linux `.deb` and `.AppImage`
 
 macOS Intel is intentionally not a release target.
 
@@ -121,6 +124,26 @@ npm run tauri:prepare-runtime -- \
 
 npm run tauri:verify-runtime
 npm run tauri:build
+```
+
+On Linux, the same `linux-x64` packaged runtime is used for both Linux
+installers. Build both release artifacts with:
+
+```bash
+cd frontend
+npm run tauri:build:linux
+```
+
+The Linux build command renames the Tauri outputs to the release filenames
+`Noofy_0.1.0_LINUX_amd64.deb` and
+`Noofy_0.1.0_LINUX_amd64.AppImage`.
+
+To produce only the portable AppImage after preparing and verifying the Linux
+runtime, use:
+
+```bash
+cd frontend
+npm run tauri:build:appimage
 ```
 
 `tauri:prepare-runtime` refuses obvious developer runtimes such as
@@ -188,7 +211,16 @@ Release CI should run in this order for each target:
 4. Run `npm run tauri:verify-runtime`.
 5. Run `npm run tauri:smoke-backend` on a runner that can execute the target
    runtime.
-6. Run `npm run tauri:build`.
+6. Run `npm run tauri:build` for macOS and Windows. On Linux, run
+   `npm run tauri:build:linux` so the release produces both `.deb` and
+   `.AppImage` artifacts.
+
+Release build scripts normalize artifact filenames after Tauri bundling:
+
+- `Noofy_0.1.0_Windows_x64-setup.exe`
+- `Noofy_0.1.0_MACOS_aarch64.dmg`
+- `Noofy_0.1.0_LINUX_amd64.deb`
+- `Noofy_0.1.0_LINUX_amd64.AppImage`
 
 The Tauri `beforeBuildCommand` already runs `npm run build &&
 npm run tauri:verify-runtime`, so missing runtime artifacts fail the installer
