@@ -44,7 +44,7 @@ try {
     await startAndStopBackend(stageRoot, verified.target);
     console.log("Packaged backend smoke passed.");
   } finally {
-    rmSync(stageRoot, { recursive: true, force: true });
+    removeStageRuntime(stageRoot);
   }
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
@@ -104,8 +104,36 @@ async function startAndStopBackend(stageRoot, target) {
     });
   } finally {
     clearTimeout(timeout);
-    child.kill();
+    await stopBackend(child);
   }
+}
+
+async function stopBackend(child) {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return;
+  }
+  await new Promise((resolve) => {
+    child.once("exit", resolve);
+    child.kill();
+    setTimeout(resolve, 5_000);
+  });
+}
+
+function removeStageRuntime(stageRoot) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      rmSync(stageRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+      return;
+    } catch (error) {
+      if (attempt === 4 || !isWindowsPermissionCleanupError(error)) {
+        throw error;
+      }
+    }
+  }
+}
+
+function isWindowsPermissionCleanupError(error) {
+  return process.platform === "win32" && error && ["EBUSY", "ENOTEMPTY", "EPERM"].includes(error.code);
 }
 
 function packagedBackendEnv(stageRoot, uv, target) {

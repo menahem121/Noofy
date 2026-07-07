@@ -79,6 +79,31 @@ test("renameReleaseArtifacts normalizes release artifact names", () => {
   );
 });
 
+test("renameReleaseArtifacts accepts Tauri bundle args", () => {
+  const bundleRoot = tempDir("release-artifacts-args");
+  writeFixture(path.join(bundleRoot, "nsis", "Noofy_0.1.0_x64-setup.exe"), "installer");
+
+  const result = spawnSync(
+    process.execPath,
+    [path.resolve("scripts", "renameReleaseArtifacts.mjs"), "--bundles", "nsis"],
+    {
+      cwd: path.resolve("."),
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        NOOFY_RELEASE_BUNDLE_ROOT: bundleRoot,
+      },
+    },
+  );
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.equal(existsSync(path.join(bundleRoot, "nsis", "Noofy_0.1.0_x64-setup.exe")), false);
+  assert.equal(
+    existsSync(path.join(bundleRoot, "nsis", "Noofy_0.1.0_Windows_x64-setup.exe")),
+    true,
+  );
+});
+
 test("verifyPackagedRuntime accepts a manifest with matching executable checksums", { skip: process.platform === "win32" }, () => {
   const runtimeRoot = tempDir("valid-runtime");
   const python = fakeExecutable(path.join(runtimeRoot, "python", "bin", "python3"), {

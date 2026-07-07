@@ -45,7 +45,14 @@ const artifactGroups = {
   ],
 };
 
-const requestedGroups = process.argv.slice(2);
+const groupAliases = {
+  appimage: "linux",
+  deb: "linux",
+  dmg: "macos",
+  nsis: "windows",
+};
+
+const requestedGroups = parseRequestedGroups(process.argv.slice(2));
 const groups = requestedGroups.length > 0 ? requestedGroups : Object.keys(artifactGroups);
 let renamed = 0;
 
@@ -65,6 +72,27 @@ try {
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
+}
+
+function parseRequestedGroups(args) {
+  const groups = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--bundles" || arg === "-b") {
+      const value = args[index + 1];
+      if (!value || value.startsWith("-")) {
+        throw new Error(`Missing value for ${arg}`);
+      }
+      groups.push(...value.split(",").map((entry) => entry.trim()).filter(Boolean));
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--")) {
+      continue;
+    }
+    groups.push(...arg.split(",").map((entry) => entry.trim()).filter(Boolean));
+  }
+  return [...new Set(groups.map((group) => groupAliases[group] || group))];
 }
 
 function renameArtifact({ dir, from, to }) {
