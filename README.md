@@ -6,6 +6,16 @@
   <img src="frontend/public/assets/brand/noofy-banner.png" alt="Noofy banner" width="900">
 </p>
 
+<div align="center">
+  <img src="docs/assets/screenshots/main-menu.png" alt="Noofy main menu" width="31%">
+  <img src="docs/assets/screenshots/workflows-page.png" alt="Noofy workflows page" width="31%">
+  <img src="docs/assets/screenshots/txt2img-workflow-page.png" alt="Noofy text-to-image workflow dashboard" width="31%">
+  <img src="docs/assets/screenshots/gallery-page.png" alt="Noofy gallery page" width="31%">
+  <img src="docs/assets/screenshots/models-page.png" alt="Noofy models page" width="31%">
+  <img src="docs/assets/screenshots/3d-workflow-page.png" alt="Noofy 3D workflow dashboard" width="31%">
+</div>
+
+
 # Noofy
 
 **Turn powerful ComfyUI workflows into simple, local, app-like dashboards.**
