@@ -2355,7 +2355,15 @@ describe("DashboardBuilderPage", () => {
       target: { files: [new File(["bad"], "bad.txt", { type: "text/plain" })] },
     });
 
-    expect(await screen.findByText("Unsupported default file.")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/workflows/wf-image/assets/image",
+        expect.objectContaining({ method: "POST" }),
+      );
+    }, { timeout: 3000 });
+    await waitFor(() => {
+      expect(screen.getByText("Unsupported default file.")).toBeInTheDocument();
+    }, { timeout: 3000 });
   });
 
   it("hides the previous workflow while builder data for the next workflow is loading", async () => {
