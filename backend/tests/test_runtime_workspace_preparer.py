@@ -727,6 +727,41 @@ def test_prepare_materializes_cached_non_bundled_source_into_runner_workspace(tm
     assert trusted_file.read_text(encoding="utf-8") == "trusted\n"
 
 
+def test_prepare_materializes_cached_non_bundled_source_without_source_files_dir(
+    tmp_path: Path,
+) -> None:
+    trusted_core = tmp_path / "trusted-comfyui"
+    trusted_custom_nodes = trusted_core / "custom_nodes"
+    trusted_custom_nodes.mkdir(parents=True)
+    trusted_file = trusted_custom_nodes / "trusted.py"
+    trusted_file.write_text("trusted\n", encoding="utf-8")
+    (trusted_core / "main.py").write_text("print('fake comfyui')\n", encoding="utf-8")
+
+    cached_source_dir = tmp_path / "source-cache" / "abc123" / "source"
+    cached_source_dir.mkdir(parents=True)
+    (cached_source_dir / "node.py").write_text(
+        "NODE_CLASS_MAPPINGS = {}\n",
+        encoding="utf-8",
+    )
+    _write_source_cache_manifest(cached_source_dir)
+
+    capsule = _with_cached_custom_node(_capsule_lock(), source_cache_ref="abc123/source")
+    preparer = RuntimeWorkspacePreparer(
+        dependency_env_store=DependencyEnvManifestStore(tmp_path / "envs"),
+        runner_workspace_store=RunnerWorkspaceManifestStore(tmp_path / "runner-workspaces"),
+        comfyui_source_dir=trusted_core,
+        custom_node_materializer=_cached_node_materializer(),
+        custom_node_source_cache_dir=tmp_path / "source-cache",
+        dependency_transactions_dir=tmp_path / "transactions",
+        log_store=LogStore(),
+    )
+
+    prepared = preparer.prepare(capsule)
+
+    assert (prepared.runner_workspace_path / "custom_nodes" / "cached-node" / "node.py").exists()
+    assert trusted_file.read_text(encoding="utf-8") == "trusted\n"
+
+
 def test_cached_non_bundled_source_requires_pinned_source_facts(tmp_path: Path) -> None:
     source_files_dir = tmp_path / "source-files"
     source_files_dir.mkdir()

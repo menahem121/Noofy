@@ -300,6 +300,7 @@ class CapsuleInstaller:
                 InstallStatus.BLOCKED_BY_POLICY,
                 workflow_id,
                 last_error=exc.user_message,
+                last_error_code=exc.code.value,
             )
             raise CapsuleInstallError(exc.user_message, state=state) from exc
         except Exception as exc:

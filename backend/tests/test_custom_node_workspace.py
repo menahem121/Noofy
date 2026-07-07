@@ -67,6 +67,98 @@ def test_materializer_records_graph_nodes_and_materializes_declared_bundled_node
     )
 
 
+def test_materializer_materializes_cached_source_without_source_files_dir(
+    tmp_path: Path,
+) -> None:
+    cached_source = tmp_path / "source-cache" / "abc123" / "source"
+    cached_source.mkdir(parents=True)
+    (cached_source / "node.py").write_text(
+        "NODE_CLASS_MAPPINGS = {}\n",
+        encoding="utf-8",
+    )
+    capsule = _capsule(
+        [
+            {
+                "package_id": "cached-node",
+                "source": "https://example.test/cached-node.zip",
+                "source_ref": "7b3f5d0a9d508b641f85a7db4fbb7f1c2d3e4f50",
+                "source_content_hash": "sha256:" + ("1" * 64),
+                "source_cache_ref": "abc123/source",
+                "node_types": ["CachedNode"],
+            }
+        ]
+    )
+    workspace = tmp_path / "runner-workspace"
+    materializer = _materializer()
+
+    manifest = materializer.build_manifest(
+        capsule_lock=capsule,
+        source_files_dir=None,
+        cached_source_dirs={"cached-node": cached_source},
+    )
+    materializer.materialize(
+        manifest=manifest,
+        source_files_dir=None,
+        cached_source_dirs={"cached-node": cached_source},
+        runner_workspace_dir=workspace,
+    )
+
+    entry = manifest.entries[0]
+    assert entry.source_kind is CustomNodeSourceKind.NOOFY_CACHED_ARCHIVE
+    assert entry.source_folder_name is None
+    assert entry.materialized_relative_path == "custom_nodes/cached-node"
+    assert (workspace / "custom_nodes" / "cached-node" / "node.py").exists()
+
+
+def test_materializer_reports_missing_cached_source_without_source_files_dir(
+    tmp_path: Path,
+) -> None:
+    capsule = _capsule(
+        [
+            {
+                "package_id": "cached-node",
+                "source": "https://example.test/cached-node.zip",
+                "source_ref": "7b3f5d0a9d508b641f85a7db4fbb7f1c2d3e4f50",
+                "source_content_hash": "sha256:" + ("1" * 64),
+                "source_cache_ref": "abc123/source",
+                "node_types": ["CachedNode"],
+            }
+        ]
+    )
+
+    with pytest.raises(CustomNodeMaterializationError) as error:
+        _materializer().build_manifest(
+            capsule_lock=capsule,
+            source_files_dir=None,
+            cached_source_dirs={},
+        )
+
+    assert error.value.code is CustomNodeMaterializationErrorCode.CUSTOM_NODE_SOURCE_NOT_CACHED
+    assert error.value.user_message == (
+        "Noofy could not find cached source files for one workflow extension."
+    )
+
+
+def test_materializer_reports_missing_bundled_source_without_source_files_dir() -> None:
+    capsule = _capsule(
+        [
+            {
+                "package_id": "bundled-node",
+                "source": "bundled_from_creator_machine",
+                "node_types": ["BundledNode"],
+            }
+        ]
+    )
+
+    with pytest.raises(CustomNodeMaterializationError) as error:
+        _materializer().build_manifest(capsule_lock=capsule, source_files_dir=None)
+
+    assert error.value.code is CustomNodeMaterializationErrorCode.MISSING_BUNDLED_SOURCE
+    assert error.value.user_message == (
+        "Noofy could not find source files for one workflow extension."
+    )
+
+
 def test_materializer_lets_engine_verify_unclassified_flux_loader_utility_nodes(
     tmp_path: Path,
 ) -> None:
@@ -764,12 +856,7 @@ def _capsule_for_runtime(custom_nodes: list[dict], *, profile, variant) -> Capsu
                 "runner_workspace_hash": "sha256:" + ("f" * 64),
             },
             "custom_nodes": [
-                {
-                    "package_id": node["package_id"],
-                    "source": node["source"],
-                    "trust_level": "quarantined_community",
-                    "node_types": node["node_types"],
-                }
+                _custom_node_payload(node)
                 for node in custom_nodes
             ],
             "dependencies": {
@@ -816,12 +903,7 @@ def _capsule(custom_nodes: list[dict]) -> CapsuleLock:
                 "runner_workspace_hash": "sha256:" + ("f" * 64),
             },
             "custom_nodes": [
-                {
-                    "package_id": node["package_id"],
-                    "source": node["source"],
-                    "trust_level": "quarantined_community",
-                    "node_types": node["node_types"],
-                }
+                _custom_node_payload(node)
                 for node in custom_nodes
             ],
             "dependencies": {"lock_file": "dependency-lock.json", "install_policy": "quarantined-community-v1"},
@@ -829,3 +911,22 @@ def _capsule(custom_nodes: list[dict]) -> CapsuleLock:
             "trust": {"level": "quarantined_community"},
         }
     )
+
+
+def _custom_node_payload(node: dict) -> dict:
+    payload = {
+        "package_id": node["package_id"],
+        "source": node["source"],
+        "trust_level": "quarantined_community",
+        "node_types": node["node_types"],
+    }
+    for key in (
+        "source_ref",
+        "source_content_hash",
+        "source_cache_ref",
+        "source_archive_subdir",
+        "source_repo_url",
+    ):
+        if key in node:
+            payload[key] = node[key]
+    return payload

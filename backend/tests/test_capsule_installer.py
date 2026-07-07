@@ -10,7 +10,10 @@ import pytest
 
 from app.diagnostics import LogStore
 from app.runtime.capsule_installer import CapsuleInstaller, CapsuleInstallError
-from app.runtime.dependencies.custom_nodes import CustomNodeWorkspaceMaterializer
+from app.runtime.dependencies.custom_nodes import (
+    CustomNodeMaterializationErrorCode,
+    CustomNodeWorkspaceMaterializer,
+)
 from app.runtime.dependencies.dependency_env import DependencyEnvironmentInstallError, DependencyEnvironmentInstallRequest
 from app.runtime.dependencies.dependency_lock import (
     DependencyPolicyErrorCode,
@@ -936,6 +939,10 @@ async def test_custom_node_path_policy_failure_is_beginner_safe_and_keeps_diagno
         await installer.prepare(capsule)
 
     assert error.value.state.status is InstallStatus.BLOCKED_BY_POLICY
+    assert (
+        error.value.state.last_error_code
+        == CustomNodeMaterializationErrorCode.PROTECTED_PATH_SHADOWING.value
+    )
     assert error.value.state.last_error == (
         "Noofy could not prepare one workflow extension safely."
     )

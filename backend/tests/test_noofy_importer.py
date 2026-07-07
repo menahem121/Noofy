@@ -2693,6 +2693,7 @@ def test_import_store_resolves_opted_in_non_bundled_custom_node_to_cached_lock(
     assert resolved_node.source_archive_subdir == "repo-root"
 
     package_dir = store.package_dir(package)
+    assert not (package_dir / "source-files" / "custom_nodes").exists()
     capsule = CapsuleLockLoader(
         Path("missing-bundled"), imported_packages_dir=tmp_path / "packages"
     ).get_capsule_lock(package.metadata.id)
@@ -2714,7 +2715,6 @@ def test_import_store_resolves_opted_in_non_bundled_custom_node_to_cached_lock(
             Path("app/runtime/profile_catalog.json")
         ),
         custom_node_materializer=CustomNodeWorkspaceMaterializer(),
-        custom_node_source_files_dir=package_dir / "source-files",
         custom_node_source_cache_dir=source_cache_dir,
         log_store=LogStore(),
     )

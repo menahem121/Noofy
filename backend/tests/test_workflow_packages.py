@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 
@@ -682,6 +683,71 @@ def test_bundled_package_model_identity_is_not_weaker_than_capsule_lock() -> Non
             assert package_model.get("verification_level") == ModelVerificationLevel.SHA256_SIZE.value
 
 
+def test_bundled_custom_node_sources_are_materializable_or_cacheable() -> None:
+    packages_dir = Path("app/workflows/packages")
+    for capsule_file in packages_dir.glob("*/capsule.lock.json"):
+        workflow_dir = capsule_file.parent
+        package_file = workflow_dir / "package.json"
+        package_data = json.loads(package_file.read_text(encoding="utf-8"))
+        capsule_data = json.loads(capsule_file.read_text(encoding="utf-8"))
+        package_nodes = {
+            node.get("id"): node
+            for node in package_data.get("custom_nodes", [])
+            if isinstance(node, dict)
+        }
+
+        for package_node in package_nodes.values():
+            assert "source_cache_ref" not in package_node, (
+                f"{package_file} must not persist runtime-local custom-node cache refs"
+            )
+
+        for capsule_node in capsule_data.get("custom_nodes", []):
+            assert "source_cache_ref" not in capsule_node, (
+                f"{capsule_file} must not persist runtime-local custom-node cache refs"
+            )
+            package_id = capsule_node.get("package_id")
+            package_node = package_nodes.get(package_id) or {}
+            source = capsule_node.get("source")
+            if isinstance(source, str) and source.startswith("https://"):
+                assert capsule_node.get("source_ref"), (
+                    f"{capsule_file} has HTTPS custom-node source without source_ref"
+                )
+                content_hash = capsule_node.get("source_content_hash")
+                assert isinstance(content_hash, str) and content_hash.startswith("sha256:"), (
+                    f"{capsule_file} has HTTPS custom-node source without source_content_hash"
+                )
+                if source.startswith("https://codeload.github.com/"):
+                    assert capsule_node.get("source_archive_subdir"), (
+                        f"{capsule_file} has GitHub archive source without source_archive_subdir"
+                    )
+                continue
+
+            assert _bundled_custom_node_source_exists(
+                workflow_dir,
+                {**package_node, **capsule_node},
+            ), f"{capsule_file} is missing bundled custom-node source for {package_id}"
+
+
+def test_bundled_custom_node_file_manifests_are_complete() -> None:
+    packages_dir = Path("app/workflows/packages")
+    for manifest_file in packages_dir.glob("*/custom_nodes/*/.noofy-file-manifest.json"):
+        custom_node_dir = manifest_file.parent
+        manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+        for entry in manifest.get("files", []):
+            relative_path = entry["path"]
+            bundled_file = custom_node_dir / relative_path
+            assert bundled_file.is_file(), (
+                f"{manifest_file} lists missing bundled custom-node file {relative_path}"
+            )
+            content = bundled_file.read_bytes()
+            assert len(content) == entry["size_bytes"], (
+                f"{manifest_file} has size drift for bundled custom-node file {relative_path}"
+            )
+            assert hashlib.sha256(content).hexdigest() == entry["sha256"], (
+                f"{manifest_file} has checksum drift for bundled custom-node file {relative_path}"
+            )
+
+
 def test_bundled_upscale_workflows_declare_model_source_urls() -> None:
     packages_dir = Path("app/workflows/packages")
     expected = {
@@ -725,6 +791,25 @@ def test_bundled_upscale_workflows_declare_model_source_urls() -> None:
             node.get("class_type")
             for node in json.loads((workflow_dir / "comfyui_graph.json").read_text(encoding="utf-8")).values()
         }
+
+
+def _bundled_custom_node_source_exists(workflow_dir: Path, node: dict[str, object]) -> bool:
+    source = node.get("source")
+    candidates: list[str] = []
+    if isinstance(source, str) and source.startswith("bundled_archive:"):
+        candidates.append(source.split(":", 1)[1])
+    for key in ("folder_name", "id", "package_id"):
+        value = node.get(key)
+        if isinstance(value, str) and value:
+            candidates.append(value)
+    for root in (
+        workflow_dir / "source-files" / "custom_nodes",
+        workflow_dir / "custom_nodes",
+    ):
+        for candidate in candidates:
+            if (root / candidate).is_dir():
+                return True
+    return False
 
 
 def test_engine_service_workflow_summary_includes_phase6_trust_metadata() -> None:

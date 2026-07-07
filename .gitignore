@@ -39,6 +39,8 @@ node_modules/
 /playwright/.cache/
 /playwright/.auth/
 tests/
+!backend/app/workflows/packages/**/custom_nodes/**/tests/
+!backend/app/workflows/packages/**/custom_nodes/**/tests/**
 playwright.config.ts
 package-lock.json
 package.json

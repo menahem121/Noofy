@@ -234,12 +234,6 @@ class CustomNodeWorkspaceMaterializer:
     ) -> CustomNodeWorkspaceManifest:
         graph_node_types = _graph_node_types(source_files_dir)
         required_custom_nodes = _required_custom_nodes(capsule_lock.custom_nodes)
-        if required_custom_nodes and source_files_dir is None:
-            raise CustomNodeMaterializationError(
-                CustomNodeMaterializationErrorCode.CUSTOM_NODE_SOURCE_NOT_BUNDLED,
-                "Workflow requires bundled custom nodes, but no imported source files are available.",
-            )
-
         entries = [
             self._entry_for_custom_node(
                 custom_node,
@@ -281,8 +275,13 @@ class CustomNodeWorkspaceMaterializer:
                     and source_files_dir is None
                 ):
                     raise CustomNodeMaterializationError(
-                        CustomNodeMaterializationErrorCode.CUSTOM_NODE_SOURCE_NOT_BUNDLED,
-                        "Workflow requires bundled custom nodes, but no imported source files are available.",
+                        CustomNodeMaterializationErrorCode.MISSING_BUNDLED_SOURCE,
+                        f"Bundled source for custom node {entry.custom_node_package_id} was not found.",
+                        user_message="Noofy could not find source files for one workflow extension.",
+                        developer_details={
+                            "custom_node_package_id": entry.custom_node_package_id,
+                            "source_kind": entry.source_kind.value,
+                        },
                     )
                 source_dir = _source_dir_for_entry(
                     source_files_dir,
@@ -358,9 +357,21 @@ class CustomNodeWorkspaceMaterializer:
                 if source_kind is CustomNodeSourceKind.NOOFY_CACHED_ARCHIVE
                 else CustomNodeMaterializationErrorCode.MISSING_BUNDLED_SOURCE
             )
+            user_message = (
+                "Noofy could not find cached source files for one workflow extension."
+                if code is CustomNodeMaterializationErrorCode.CUSTOM_NODE_SOURCE_NOT_CACHED
+                else "Noofy could not find source files for one workflow extension."
+            )
             raise CustomNodeMaterializationError(
                 code,
                 f"Source for custom node {custom_node.package_id} was not found.",
+                user_message=user_message,
+                developer_details={
+                    "custom_node_package_id": custom_node.package_id,
+                    "source": custom_node.source,
+                    "source_cache_ref": custom_node.source_cache_ref,
+                    "source_kind": source_kind.value if source_kind is not None else None,
+                },
             )
         folder_name, source_folder_name, folder_name_remapped = _custom_node_target_folder_name(
             custom_node,
@@ -905,8 +916,23 @@ def _source_dir_for_entry(
             raise CustomNodeMaterializationError(
                 CustomNodeMaterializationErrorCode.CUSTOM_NODE_SOURCE_NOT_CACHED,
                 f"Cached source for custom node {entry.custom_node_package_id} was not found.",
+                user_message="Noofy could not find cached source files for one workflow extension.",
+                developer_details={
+                    "custom_node_package_id": entry.custom_node_package_id,
+                    "source_kind": entry.source_kind.value,
+                },
             )
         return source_dir
+    if source_files_dir is None:
+        raise CustomNodeMaterializationError(
+            CustomNodeMaterializationErrorCode.MISSING_BUNDLED_SOURCE,
+            f"Bundled source for custom node {entry.custom_node_package_id} was not found.",
+            user_message="Noofy could not find source files for one workflow extension.",
+            developer_details={
+                "custom_node_package_id": entry.custom_node_package_id,
+                "source_kind": entry.source_kind.value,
+            },
+        )
     source_folder_name = entry.source_folder_name or entry.materialized_relative_path.removeprefix(
         "custom_nodes/"
     )
