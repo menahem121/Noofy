@@ -51,6 +51,17 @@ to make finished ComfyUI workflows feel like clean local apps.
 - **Developers and server users** who want an open-source local workflow app
   with a clear terminal install path.
 
+## Installing Noofy
+
+With packaged installers:
+
+| Platform | Installer | Download |
+| --- | --- | --- |
+| Windows | `.exe` | [Download for Windows](https://github.com/menahem121/Noofy/releases/latest/download/Noofy_0.1.0_Windows_x64-setup.exe) |
+| macOS Apple Silicon | `.dmg` | [Download for macOS Apple Silicon](https://github.com/menahem121/Noofy/releases/latest/download/Noofy_0.1.0_MACOS_aarch64.dmg) |
+| Linux | `.deb` | [Download for Linux](https://github.com/menahem121/Noofy/releases/latest/download/Noofy_0.1.0_LINUX_amd64.deb) |
+| Linux portable | `.AppImage` | [Download AppImage](https://github.com/menahem121/Noofy/releases/latest/download/Noofy_0.1.0_LINUX_amd64.AppImage) |
+
 ## Core Workflow
 
 1. **Build or load a workflow in ComfyUI.**
@@ -84,6 +95,30 @@ Raw ComfyUI JSON imports may still be useful, but they are degraded imports:
 they usually need more dashboard setup and provide less information for runtime
 preparation.
 
+### Install the ComfyUI Export Node
+
+This is optional. If you already use ComfyUI, the Noofy export node adds an
+**Export to Noofy** action inside ComfyUI. Use it when you want to turn a
+ComfyUI workflow into a `.noofy` package that can be imported into Noofy.
+
+Please note that Noofy also supports regular `.json` workflows, but using the Noofy Export custom node is the recommended path.
+
+From your ComfyUI folder, run:
+
+```bash
+cd ComfyUI/custom_nodes
+
+git clone --depth 1 --filter=blob:none --sparse https://github.com/menahem121/Noofy.git noofy_tmp
+cd noofy_tmp
+git sparse-checkout set comfyui_export2noofy_node
+
+cd ..
+mv noofy_tmp/comfyui_export2noofy_node ./comfyui_export2noofy_node
+rm -rf noofy_tmp
+```
+
+Restart ComfyUI after installing it.
+
 ## Dashboards
 
 The dashboard is curated, not generated blindly.
@@ -115,41 +150,6 @@ Noofy currently includes foundations for:
 Noofy is still in active development. The V1 direction is a desktop app where
 users open Noofy, choose a workflow dashboard, and run it locally without
 manually launching ComfyUI or installing ComfyUI Python dependencies.
-
-## Installing Noofy
-
-With packaged installers:
-
-| Platform | Installer | Download |
-| --- | --- | --- |
-| Windows | `.exe` | [Download for Windows](https://github.com/menahem121/Noofy/releases/latest/download/Noofy_0.1.0_Windows_x64-setup.exe) |
-| macOS Apple Silicon | `.dmg` | [Download for macOS Apple Silicon](https://github.com/menahem121/Noofy/releases/latest/download/Noofy_0.1.0_MACOS_aarch64.dmg) |
-| Linux | `.deb` | [Download for Linux](https://github.com/menahem121/Noofy/releases/latest/download/Noofy_0.1.0_LINUX_amd64.deb) |
-| Linux portable | `.AppImage` | [Download AppImage](https://github.com/menahem121/Noofy/releases/latest/download/Noofy_0.1.0_LINUX_amd64.AppImage) |
-
-### Install the ComfyUI Export Node
-
-This is optional. If you already use ComfyUI, the Noofy export node adds an
-**Export to Noofy** action inside ComfyUI. Use it when you want to turn a
-ComfyUI workflow into a `.noofy` package that can be imported into Noofy.
-
-Please note that Noofy also supports regular `.json` workflows, but using the Noofy Export custom node is the recommended path.
-
-From your ComfyUI folder, run:
-
-```bash
-cd ComfyUI/custom_nodes
-
-git clone --depth 1 --filter=blob:none --sparse https://github.com/menahem121/Noofy.git noofy_tmp
-cd noofy_tmp
-git sparse-checkout set comfyui_export2noofy_node
-
-cd ..
-mv noofy_tmp/comfyui_export2noofy_node ./comfyui_export2noofy_node
-rm -rf noofy_tmp
-```
-
-Restart ComfyUI after installing it.
 
 ## Local Development
 
