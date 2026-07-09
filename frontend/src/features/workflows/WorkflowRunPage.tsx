@@ -894,12 +894,15 @@ export function WorkflowRunPage({
     if (modelSummary) {
       setState((current) => ({
         ...current,
-        validation: response,
+        validation: shouldClearMissingModelValidation(response, modelSummary) ? null : response,
         modelSummary,
         modelSummaryLoading: false,
         progress: null,
         error: null,
       }));
+      if (modelSummary.ready_to_run) {
+        return;
+      }
       if (onMissingModels) {
         onMissingModels(modelSummary);
         return;

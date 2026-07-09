@@ -55,6 +55,18 @@ _PREVIEW_MIME_BY_TYPE = {
 _SUPPORTED_PREVIEW_MIME_TYPES = frozenset(_PREVIEW_MIME_BY_TYPE.values())
 
 
+def _merge_model_infos(primary: list[ModelInfo], supplemental: list[ModelInfo]) -> list[ModelInfo]:
+    merged: list[ModelInfo] = []
+    seen: set[tuple[str, str]] = set()
+    for model in [*primary, *supplemental]:
+        key = (model.folder, model.filename)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(model)
+    return merged
+
+
 class ComfyUIEngineAdapter:
     def __init__(
         self,
@@ -451,7 +463,22 @@ class ComfyUIEngineAdapter:
     async def list_available_models(self) -> list[ModelInfo]:
         api_models = await self._list_available_models_from_api()
         if api_models:
-            return api_models
+            filesystem_models = self._list_available_models_from_filesystem()
+            merged_models = _merge_model_infos(api_models, filesystem_models)
+            filesystem_added_count = len(merged_models) - len(api_models)
+            if filesystem_added_count > 0:
+                self.log_store.add(
+                    "debug",
+                    "Supplemented ComfyUI API model list from configured model roots",
+                    "comfyui.adapter",
+                    details={
+                        "api_model_count": len(api_models),
+                        "filesystem_model_count": len(filesystem_models),
+                        "filesystem_added_count": filesystem_added_count,
+                        "model_roots": [str(root) for root in self.model_roots],
+                    },
+                )
+            return merged_models
         return self._list_available_models_from_filesystem()
 
     async def upload_workflow_image(

@@ -40,6 +40,13 @@ const emptySummary: RequiredModelSummary = {
   models: [],
 };
 
+function shouldOpenMissingModelsModal(summary: RequiredModelSummary) {
+  return (
+    !summary.ready_to_run &&
+    (requiredModelSummaryHasNonReadyModels(summary) || requiredModelSummaryHasPendingVerification(summary))
+  );
+}
+
 export function useGlobalModelReadiness() {
   const [watches, setWatches] = useState<Record<string, ModelReadinessWatch>>({});
   const [activeModal, setActiveModal] = useState<ActiveMissingModelsModal | null>(null);
@@ -53,6 +60,11 @@ export function useGlobalModelReadiness() {
   }, []);
 
   const openMissingModels = useCallback((request: ModelReadinessRequest) => {
+    publishWorkflowModelSummaryUpdate({ workflowId: request.workflowId, summary: request.summary });
+    if (!shouldOpenMissingModelsModal(request.summary)) {
+      setActiveModal((current) => current?.workflowId === request.workflowId ? null : current);
+      return;
+    }
     setActiveModal(request);
   }, []);
 
@@ -218,11 +230,8 @@ export function useGlobalModelReadiness() {
     setActiveModal((current) => current && current.workflowId === activeModal.workflowId ? { ...current, summary } : current);
   }, [activeModal]);
   const handleModelSummary = useCallback((summary: RequiredModelSummary) => {
-    const active = activeModalRef.current;
-    if (active) {
-      publishWorkflowModelSummaryUpdate({ workflowId: active.workflowId, summary });
-    }
-    setActiveModal((current) => current ? { ...current, summary } : current);
+    publishWorkflowModelSummaryUpdate({ workflowId: summary.workflow_id, summary });
+    setActiveModal((current) => current && current.workflowId === summary.workflow_id ? { ...current, summary } : current);
   }, []);
   const {
     modelDownloadJob,
@@ -241,6 +250,31 @@ export function useGlobalModelReadiness() {
     onModelSummary: handleModelSummary,
   });
 
+  const handleCloseActiveModal = useCallback(() => {
+    const active = activeModalRef.current;
+    if (active) {
+      const summary = modelVerificationJob?.model_summary ?? active.summary;
+      const activeVerificationJob =
+        modelVerificationJob && ["queued", "running"].includes(modelVerificationJob.status)
+          ? modelVerificationJob
+          : null;
+      if (requiredModelSummaryHasPendingVerification(summary)) {
+        setWatches((current) => ({
+          ...current,
+          [active.workflowId]: {
+            workflowId: active.workflowId,
+            workflowName: active.workflowName,
+            summary,
+            job: activeVerificationJob,
+            starting: false,
+            error: null,
+          },
+        }));
+      }
+    }
+    setActiveModal(null);
+  }, [modelVerificationJob]);
+
   const element = useMemo(() => {
     if (!activeModal) return null;
     return (
@@ -255,7 +289,7 @@ export function useGlobalModelReadiness() {
         onDownload={() => void downloadRequiredModels()}
         onCancelDownload={() => void cancelRequiredModelDownload()}
         onRetryVerification={() => void startLocalModelVerification()}
-        onClose={() => setActiveModal(null)}
+        onClose={handleCloseActiveModal}
       />
     );
   }, [
@@ -268,6 +302,7 @@ export function useGlobalModelReadiness() {
     modelDownloadStarting,
     modelVerificationError,
     modelVerificationJob,
+    handleCloseActiveModal,
     startLocalModelVerification,
   ]);
 

@@ -80,14 +80,7 @@ export function useWorkflowModelActions({
     const interval = window.setInterval(() => {
       fetchWorkflowModelVerificationStatus(workflowId, modelVerificationJob.job_id)
         .then((job) => {
-          setModelVerificationJob(job);
-          setModelVerificationError(null);
-          if (!["queued", "running"].includes(job.status)) {
-            if (job.model_summary) {
-              onModelSummaryRef.current(job.model_summary);
-            }
-            void loadRequirementsRef.current();
-          }
+          handleModelVerificationStatus(job);
         })
         .catch((error) => {
           setModelVerificationError(error instanceof Error ? error.message : "Could not check model verification progress.");
@@ -134,6 +127,17 @@ export function useWorkflowModelActions({
     }
   }
 
+  function handleModelVerificationStatus(job: WorkflowModelVerificationJobStatus) {
+    setModelVerificationJob(job);
+    setModelVerificationError(null);
+    if (!["queued", "running"].includes(job.status)) {
+      if (job.model_summary) {
+        onModelSummaryRef.current(job.model_summary);
+      }
+      void loadRequirementsRef.current();
+    }
+  }
+
   async function startLocalModelVerification(isCanceled: () => boolean = () => false) {
     if (modelVerificationStartInFlightRef.current) return;
     modelVerificationStartInFlightRef.current = true;
@@ -141,6 +145,12 @@ export function useWorkflowModelActions({
     setModelVerificationError(null);
     try {
       const job = await startWorkflowModelVerification(workflowId);
+      if (job.model_summary) {
+        onModelSummaryRef.current(job.model_summary);
+      }
+      if (!["queued", "running"].includes(job.status)) {
+        void loadRequirementsRef.current();
+      }
       if (!isCanceled()) setModelVerificationJob(job);
     } catch (error) {
       if (!isCanceled()) {

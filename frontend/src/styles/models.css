@@ -938,6 +938,12 @@
   justify-content: center;
 }
 
+.model-delete-modal__note {
+  margin-top: 10px !important;
+  color: var(--text-muted) !important;
+  font-size: 13px;
+}
+
 .models-summary-bar {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

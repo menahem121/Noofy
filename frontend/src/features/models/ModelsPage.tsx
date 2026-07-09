@@ -62,6 +62,12 @@ interface ModelSortState {
   direction: SortDirection;
 }
 
+interface PendingModelDelete {
+  mode: "single" | "bulk";
+  models: ModelInventoryEntry[];
+  skippedCount: number;
+}
+
 const modelStatusSortOrder: Record<string, number> = {
   missing: 0,
   downloading: 1,
@@ -101,6 +107,7 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
   const [pageMessage, setPageMessage] = useState<string | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<PendingModelDelete | null>(null);
 
   const refreshInventory = useCallback(async (options: { silent?: boolean } = {}) => {
     const inventory = await loadInventory(options);
@@ -289,67 +296,48 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
     await startDownload(selections);
   }
 
-  async function handleDeleteModel(model: ModelInventoryEntry) {
+  function handleDeleteModel(model: ModelInventoryEntry) {
     if (!model.can_delete) return;
-    const locationLabel = modelDeleteLocationLabel(model);
-    const confirmed = window.confirm(
-      `Delete ${model.filename} from ${locationLabel}? This removes the model storage from this computer and cannot be undone.`,
-    );
-    if (!confirmed) return;
-    setDeleteBusy(true);
     setPageError(null);
-    try {
-      const result = await deleteModelFile(model.model_key);
-      setPageMessage(result.message);
-      setSelectedModelId(null);
-      await refreshInventory({ silent: true });
-    } catch (error) {
-      setPageError(error instanceof Error ? error.message : "Could not delete this model.");
-    } finally {
-      setDeleteBusy(false);
-    }
+    setPageMessage(null);
+    setPendingDelete({ mode: "single", models: [model], skippedCount: 0 });
   }
 
-  async function handleDeleteSelectedModels() {
+  function handleDeleteSelectedModels() {
     if (selectedDeletableModels.length === 0) {
       setPageError("None of the selected models can be deleted from a configured model folder.");
       return;
     }
 
-    const deleteLabel =
-      selectedDeletableModels.length === 1
-        ? selectedDeletableModels[0].filename
-        : `${selectedDeletableModels.length} models`;
-    const selectedLocations = new Set(selectedDeletableModels.map(modelDeleteLocationLabel));
-    const locationLabel =
-      selectedLocations.size === 1
-        ? Array.from(selectedLocations)[0]
-        : "the selected model locations";
-    const skippedLabel =
-      selectedBlockedCount > 0
-        ? [
-            `${selectedBlockedCount} selected item${selectedBlockedCount === 1 ? "" : "s"} will be skipped`,
-            `because ${selectedBlockedCount === 1 ? "it is" : "they are"} not deletable by Noofy.`,
-          ].join(" ")
-        : "";
-    const confirmed = window.confirm(
-      [
-        `Delete ${deleteLabel} from ${locationLabel}?`,
-        `This removes the model storage from this computer and cannot be undone.`,
-        skippedLabel,
-      ]
-        .filter(Boolean)
-        .join(" "),
-    );
-    if (!confirmed) return;
+    setPageError(null);
+    setPageMessage(null);
+    setPendingDelete({
+      mode: "bulk",
+      models: selectedDeletableModels,
+      skippedCount: selectedBlockedCount,
+    });
+  }
 
+  async function handleConfirmDeleteModels() {
+    if (!pendingDelete || pendingDelete.models.length === 0) return;
+    const request = pendingDelete;
     setDeleteBusy(true);
     setPageError(null);
     setPageMessage(null);
-    const failedKeys = new Set<string>();
-    const deletedKeys = new Set<string>();
     try {
-      for (const model of selectedDeletableModels) {
+      if (request.mode === "single") {
+        const model = request.models[0];
+        if (!model) return;
+        const result = await deleteModelFile(model.model_key);
+        setPageMessage(result.message);
+        setSelectedModelId((current) => (current === model.model_key ? null : current));
+        await refreshInventory({ silent: true });
+        return;
+      }
+
+      const failedKeys = new Set<string>();
+      const deletedKeys = new Set<string>();
+      for (const model of request.models) {
         try {
           await deleteModelFile(model.model_key);
           deletedKeys.add(model.model_key);
@@ -363,6 +351,7 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
       }
       setCheckedIds(new Set(failedKeys));
       await refreshInventory({ silent: true });
+      const locationLabel = modelDeleteLocationSummary(request.models);
 
       if (failedKeys.size > 0) {
         setPageError(
@@ -374,8 +363,11 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
       } else {
         setPageMessage(`Deleted ${deletedKeys.size} model${deletedKeys.size === 1 ? "" : "s"} from ${locationLabel}.`);
       }
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : "Could not delete this model.");
     } finally {
       setDeleteBusy(false);
+      setPendingDelete(null);
     }
   }
 
@@ -847,8 +839,86 @@ export function ModelsPage({ onNavigate }: ModelsPageProps) {
           </aside>
         )}
       </div>
+      {pendingDelete && (
+        <ModelDeleteConfirmationDialog
+          deletion={pendingDelete}
+          busy={deleteBusy}
+          onCancel={() => {
+            if (!deleteBusy) setPendingDelete(null);
+          }}
+          onConfirm={() => void handleConfirmDeleteModels()}
+        />
+      )}
     </AppLayout>
   );
+}
+
+function ModelDeleteConfirmationDialog({
+  deletion,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  deletion: PendingModelDelete;
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const isSingle = deletion.mode === "single";
+  const modelCount = deletion.models.length;
+  const firstModel = deletion.models[0];
+  const modelLabel = firstModel && (isSingle || modelCount === 1) ? firstModel.filename : `${modelCount} models`;
+  const locationLabel = modelDeleteLocationSummary(deletion.models);
+  const title = isSingle ? "Delete model file?" : "Delete selected model files?";
+
+  useEffect(() => {
+    function handleKeyDown(event: globalThis.KeyboardEvent) {
+      if (event.key === "Escape" && !busy) onCancel();
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [busy, onCancel]);
+
+  return (
+    <div
+      className="modal-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="model-delete-title"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !busy) onCancel();
+      }}
+    >
+      <section className="workflow-close-modal" aria-busy={busy}>
+        <header className="workflow-close-modal__header">
+          <h2 id="model-delete-title">{title}</h2>
+          <p>
+            Delete <strong>{modelLabel}</strong> from {locationLabel}? This removes the model storage from this
+            computer and cannot be undone.
+          </p>
+          {deletion.skippedCount > 0 ? (
+            <p className="model-delete-modal__note">
+              {deletion.skippedCount} selected item{deletion.skippedCount === 1 ? "" : "s"} cannot be deleted and will
+              be skipped.
+            </p>
+          ) : null}
+        </header>
+        <footer className="workflow-close-modal__footer">
+          <button className="secondary-button" type="button" autoFocus disabled={busy} onClick={onCancel}>
+            Cancel
+          </button>
+          <button className="danger-button" type="button" disabled={busy} onClick={onConfirm}>
+            {busy ? "Deleting..." : isSingle ? "Delete model" : "Delete selected"}
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function modelDeleteLocationSummary(models: ModelInventoryEntry[]) {
+  const locations = new Set(models.map(modelDeleteLocationLabel));
+  return locations.size === 1 ? Array.from(locations)[0] : "the selected model locations";
 }
 
 function SortableHeader({

@@ -2142,3 +2142,39 @@ async def test_list_available_models_uses_comfyui_api(
     assert [(model.folder, model.filename) for model in models] == [
         ("checkpoints", "remote-model.safetensors")
     ]
+
+
+@pytest.mark.anyio
+async def test_list_available_models_supplements_api_with_configured_model_roots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkpoints = tmp_path / "checkpoints"
+    checkpoints.mkdir()
+    (checkpoints / "local-model.safetensors").write_bytes(b"model")
+    (checkpoints / "remote-model.safetensors").write_bytes(b"duplicate")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/models":
+            return httpx.Response(200, json=["checkpoints"])
+        if request.url.path == "/models/checkpoints":
+            return httpx.Response(200, json=["remote-model.safetensors"])
+        return httpx.Response(404)
+
+    transport = httpx.MockTransport(handler)
+    original_client = httpx.AsyncClient
+
+    def mock_client(*args, **kwargs):
+        kwargs["transport"] = transport
+        return original_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", mock_client)
+
+    adapter = ComfyUIEngineAdapter(
+        "http://comfyui.test", tmp_path, log_store=LogStore()
+    )
+    models = await adapter.list_available_models()
+
+    assert [(model.folder, model.filename) for model in models] == [
+        ("checkpoints", "remote-model.safetensors"),
+        ("checkpoints", "local-model.safetensors"),
+    ]

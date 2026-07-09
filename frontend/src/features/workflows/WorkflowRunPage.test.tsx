@@ -2950,6 +2950,65 @@ describe("WorkflowRunPage", () => {
     expect(screen.getAllByText(/v1-5-pruned-emaonly-fp16\.safetensors/).length).toBeGreaterThan(0);
   });
 
+  it("does not open Missing Models when the refreshed model summary is ready", async () => {
+    const onMissingModels = vi.fn();
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/runtime")) {
+        return Promise.resolve(jsonResponse(readyRuntime));
+      }
+
+      if (url.endsWith("/api/workflows/text_to_image_v0/status")) {
+        return Promise.resolve(jsonResponse(workflowStatus));
+      }
+
+      if (url.endsWith("/api/workflows/text_to_image_v0/model-summary")) {
+        return Promise.resolve(jsonResponse(downloadedModelSummary));
+      }
+
+      if (url.endsWith("/api/workflows/text_to_image_v0/validate")) {
+        return Promise.resolve(jsonResponse({ workflow_id: "text_to_image_v0", valid: true, missing_models: [], errors: [] }));
+      }
+
+      if (url.endsWith("/api/workflows/text_to_image_v0/run") && init?.method === "POST") {
+        return Promise.resolve(
+          jsonResponse({
+            workflow_id: "text_to_image_v0",
+            valid: false,
+            missing_models: [
+              {
+                folder: "checkpoints",
+                filename: "v1-5-pruned-emaonly-fp16.safetensors",
+                source_url: null,
+                checksum: null,
+              },
+            ],
+            errors: [],
+          }),
+        );
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderRunPage({ onMissingModels });
+
+    const runButton = await screen.findByRole("button", { name: /run workflow/i });
+    await waitFor(() => expect(runButton).toBeEnabled());
+    fireEvent.click(runButton);
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/workflows/text_to_image_v0/run",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    expect(onMissingModels).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog", { name: "Missing Models" })).not.toBeInTheDocument();
+    await waitFor(() => expect(runButton).toBeEnabled());
+  });
+
   it("uses the completed model download summary to clear stale run-page missing model state", async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);

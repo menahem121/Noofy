@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   RequiredModelAvailability,
   RequiredModelSummary,
+  WorkflowModelVerificationJobStatus,
   WorkflowValidationResult,
 } from "../../lib/api/noofyApi";
 import { useGlobalModelReadiness } from "./useGlobalModelReadiness";
@@ -81,6 +82,33 @@ const downloadedSummary: RequiredModelSummary = {
   ],
 };
 
+const possibleMatchSummary: RequiredModelSummary = {
+  ...missingSummary,
+  possible_match_count: 1,
+  missing_count: 0,
+  models: [
+    {
+      ...missingModel,
+      status: "possible_match",
+      status_label: "Possible match",
+      source_path: "/models/checkpoints/v1-5-pruned-emaonly-fp16.safetensors",
+      matched_root: "/models",
+      message: "A local file with this name was found, but Noofy needs stronger verification before using it.",
+    },
+  ],
+};
+
+const checkingSummary: RequiredModelSummary = {
+  ...possibleMatchSummary,
+  possible_match_count: 0,
+  models: possibleMatchSummary.models.map((model) => ({
+    ...model,
+    status: "checking",
+    status_label: "Checking",
+    message: "Noofy is checking whether this model is already available locally.",
+  })),
+};
+
 const missingModelValidation: WorkflowValidationResult = {
   workflow_id: workflowId,
   valid: false,
@@ -154,6 +182,25 @@ function mockDownloadFlow(fetchMock: ReturnType<typeof vi.fn>, resultSummary: Re
   });
 }
 
+function verificationJob(
+  status: WorkflowModelVerificationJobStatus["status"],
+  modelSummary: RequiredModelSummary,
+): WorkflowModelVerificationJobStatus {
+  return {
+    job_id: "workflow-model-verification-1",
+    workflow_id: workflowId,
+    status,
+    user_facing_message: status === "completed" ? "Model verification finished." : "Model verification is queued.",
+    current_model_filename: status === "completed" ? null : "v1-5-pruned-emaonly-fp16.safetensors",
+    current_model_index: status === "completed" ? null : 1,
+    total_models: 1,
+    verified_models: status === "completed" ? 1 : 0,
+    percent: status === "completed" ? 100 : 0,
+    models: modelSummary.models,
+    model_summary: modelSummary,
+  };
+}
+
 describe("useGlobalModelReadiness", () => {
   const fetchMock = vi.fn();
 
@@ -166,6 +213,67 @@ describe("useGlobalModelReadiness", () => {
     vi.clearAllMocks();
     resetWorkflowModelSummaryListenersForTests();
     resetWorkflowRunPageCacheForTests();
+  });
+
+  it("publishes a ready summary without opening Missing Models", () => {
+    storeWorkflowRunPageState(workflowId, staleCachedRunPageState);
+    const updates: WorkflowModelSummaryUpdate[] = [];
+    subscribeToWorkflowModelSummaryUpdates((update) => updates.push(update));
+
+    render(<Harness />);
+    act(() => {
+      readiness.openMissingModels({ workflowId, workflowName: "Text to Image", summary: downloadedSummary });
+    });
+
+    expect(screen.queryByRole("dialog", { name: "Missing Models" })).not.toBeInTheDocument();
+    expect(updates.some((update) => update.workflowId === workflowId && update.summary.ready_to_run)).toBe(true);
+
+    const cached = cachedWorkflowRunPageState(workflowId, staleCachedRunPageState);
+    expect(cached.modelSummary?.ready_to_run).toBe(true);
+    expect(cached.validation).toBeNull();
+  });
+
+  it("keeps verification running in the background when the missing-model popup is closed", async () => {
+    storeWorkflowRunPageState(workflowId, staleCachedRunPageState);
+    const updates: WorkflowModelSummaryUpdate[] = [];
+    subscribeToWorkflowModelSummaryUpdates((update) => updates.push(update));
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith(`/api/workflows/${workflowId}/model-verification`) && init?.method === "POST") {
+        return Promise.resolve(jsonResponse(verificationJob("queued", checkingSummary)));
+      }
+      if (url.endsWith(`/api/workflows/${workflowId}/model-verification/workflow-model-verification-1`)) {
+        return Promise.resolve(jsonResponse(verificationJob("completed", downloadedSummary)));
+      }
+      if (url.endsWith(`/api/workflows/${workflowId}/model-summary`)) {
+        return Promise.resolve(jsonResponse(downloadedSummary));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    render(<Harness />);
+    act(() => {
+      readiness.openMissingModels({ workflowId, workflowName: "Text to Image", summary: possibleMatchSummary });
+    });
+
+    const dialog = await screen.findByRole("dialog", { name: "Missing Models" });
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        `/api/workflows/${workflowId}/model-verification`,
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    await within(dialog).findByRole("progressbar", { name: "Model verification progress" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog", { name: "Missing Models" })).not.toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(updates.some((update) => update.workflowId === workflowId && update.summary.ready_to_run)).toBe(true);
+    }, { timeout: 2500 });
+
+    const cached = cachedWorkflowRunPageState(workflowId, staleCachedRunPageState);
+    expect(cached.modelSummary?.ready_to_run).toBe(true);
+    expect(cached.validation).toBeNull();
   });
 
   it("publishes the refreshed summary and updates the cached run-page state after a successful download", async () => {

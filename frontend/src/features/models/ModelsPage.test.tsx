@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ModelInventoryResponse } from "../../lib/api/noofyApi";
@@ -310,7 +310,6 @@ describe("ModelsPage", () => {
   });
 
   it("shows workflow-installed runtime model bundles as removable models", async () => {
-    vi.stubGlobal("confirm", vi.fn(() => true));
     currentInventory = {
       ...inventory,
       summary: {
@@ -366,6 +365,10 @@ describe("ModelsPage", () => {
     expect(screen.queryByText("/tmp/.noofy-runtime/data/model-store/materialized")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Remove workflow-installed model" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete model file?" });
+    expect(within(dialog).getByText("MOSS-TTS")).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete model" }));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
@@ -551,11 +554,14 @@ describe("ModelsPage", () => {
   });
 
   it("deletes selected Noofy-managed model files", async () => {
-    vi.stubGlobal("confirm", vi.fn(() => true));
     renderPage();
 
     fireEvent.click(await screen.findByLabelText("Select base.safetensors"));
     fireEvent.click(screen.getByRole("button", { name: "Delete selected" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete selected model files?" });
+    expect(within(dialog).getByText("base.safetensors")).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete selected" }));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
@@ -567,12 +573,15 @@ describe("ModelsPage", () => {
   });
 
   it("skips selected models that are not deletable", async () => {
-    vi.stubGlobal("confirm", vi.fn(() => true));
     renderPage();
 
     fireEvent.click(await screen.findByLabelText("Select all models"));
     expect(screen.getByText("4 selected, 3 can be deleted")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Delete selected" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete selected model files?" });
+    expect(within(dialog).getByText("1 selected item cannot be deleted and will be skipped.")).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete selected" }));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
@@ -595,12 +604,22 @@ describe("ModelsPage", () => {
   });
 
   it("shows delete for Noofy-owned files and external ComfyUI model files", async () => {
-    vi.stubGlobal("confirm", vi.fn(() => true));
     renderPage();
 
     fireEvent.click(await screen.findByText("base.safetensors"));
     expect(screen.getByRole("button", { name: "Delete from Noofy Models" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Delete from Noofy Models" }));
+    let dialog = screen.getByRole("dialog", { name: "Delete model file?" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog", { name: "Delete model file?" })).not.toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      "/api/models/checkpoints%2Fbase.safetensors",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete from Noofy Models" }));
+    dialog = screen.getByRole("dialog", { name: "Delete model file?" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete model" }));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
