@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+import json
 import os
 import shutil
 from collections.abc import Awaitable, Callable
@@ -38,6 +40,8 @@ _REQUIRED_RUNTIME_CHECKS: tuple[tuple[str, str], ...] = (
     ),
     ("comfy_kitchen", "import comfy_kitchen"),
 )
+_ENVIRONMENT_MARKER_FILENAME = "noofy-runtime-environment.json"
+_ENVIRONMENT_MARKER_SCHEMA_VERSION = "0.1.0"
 
 
 class RuntimeEnvironment:
@@ -123,11 +127,24 @@ class RuntimeEnvironment:
     async def status(self) -> RuntimeEnvironmentStatus:
         runtime_dir_writable = self._ensure_writable_runtime_dirs()
         python_exists = self._executable_exists(self.python_executable)
+        requirements_fingerprint = self._requirements_fingerprint()
         hardware = await self._detect_hardware()
         torch_install_plan = plan_torch_install(
             hardware,
             cuda_index_url=self.torch_cuda_index_url,
             cpu_index_url=self.torch_cpu_index_url,
+        )
+        expected_environment_fingerprint = self._expected_environment_fingerprint(
+            requirements_fingerprint=requirements_fingerprint,
+            torch_install_plan=torch_install_plan,
+        )
+        environment_fingerprint = self._installed_environment_fingerprint()
+        environment_fingerprint_matches = (
+            self.python_executable_override is not None
+            or (
+                expected_environment_fingerprint is not None
+                and environment_fingerprint == expected_environment_fingerprint
+            )
         )
         python_version = (
             await self._detect_python_version(self.python_executable)
@@ -151,6 +168,7 @@ class RuntimeEnvironment:
             python_version,
             python_version_matches,
             dependencies,
+            environment_fingerprint_matches,
             torch_install_plan=torch_install_plan,
         )
 
@@ -159,6 +177,10 @@ class RuntimeEnvironment:
             main_py_exists=self.main_py.exists(),
             requirements_file=str(self.requirements_file),
             requirements_file_exists=self.requirements_file.exists(),
+            requirements_fingerprint=requirements_fingerprint,
+            expected_environment_fingerprint=expected_environment_fingerprint,
+            environment_fingerprint=environment_fingerprint,
+            environment_fingerprint_matches=environment_fingerprint_matches,
             runtime_dir=str(self.runtime_dir),
             runtime_dir_writable=runtime_dir_writable,
             log_dir=str(self.log_dir),
@@ -337,6 +359,7 @@ class RuntimeEnvironment:
                 return RuntimeBootstrapResult(
                     status="bootstrap_failed", environment=await self.status()
                 )
+            self._write_environment_marker(torch_plan)
 
             self._bootstrap_status_label = "Checking installed ComfyUI components"
             prepared = await self.status()
@@ -365,6 +388,7 @@ class RuntimeEnvironment:
         python_version: str | None,
         python_version_matches: bool,
         dependencies: list[RuntimeDependencyStatus],
+        environment_fingerprint_matches: bool,
         *,
         torch_install_plan: TorchInstallPlan,
     ) -> str | None:
@@ -391,6 +415,8 @@ class RuntimeEnvironment:
                 f"{python_version}, but the selected runtime profile requires "
                 f"Python {self.expected_python_version}."
             )
+        if not environment_fingerprint_matches:
+            return "Noofy's engine runtime needs to refresh ComfyUI requirements."
 
         missing = [
             dependency for dependency in dependencies if not dependency.available
@@ -601,6 +627,69 @@ class RuntimeEnvironment:
             stderr=stderr.decode(errors="replace"),
         )
 
+    def _requirements_fingerprint(self) -> str | None:
+        if not self.requirements_file.exists():
+            return None
+        digest = hashlib.sha256()
+        with self.requirements_file.open("rb") as file:
+            for chunk in iter(lambda: file.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return f"sha256:{digest.hexdigest()}"
+
+    def _expected_environment_fingerprint(
+        self,
+        *,
+        requirements_fingerprint: str | None,
+        torch_install_plan: TorchInstallPlan,
+    ) -> str | None:
+        if requirements_fingerprint is None:
+            return None
+        payload = {
+            "schema_version": _ENVIRONMENT_MARKER_SCHEMA_VERSION,
+            "requirements_fingerprint": requirements_fingerprint,
+            "torch_install_plan": _torch_install_plan_marker(torch_install_plan),
+        }
+        return _stable_sha256(payload)
+
+    def _installed_environment_fingerprint(self) -> str | None:
+        marker_path = self.venv_dir / _ENVIRONMENT_MARKER_FILENAME
+        if not marker_path.exists():
+            return None
+        try:
+            data = json.loads(marker_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        if data.get("schema_version") != _ENVIRONMENT_MARKER_SCHEMA_VERSION:
+            return None
+        environment_fingerprint = data.get("environment_fingerprint")
+        if isinstance(environment_fingerprint, str):
+            return environment_fingerprint
+        fingerprint = data.get("requirements_fingerprint")
+        return fingerprint if isinstance(fingerprint, str) else None
+
+    def _write_environment_marker(self, torch_install_plan: TorchInstallPlan) -> None:
+        if self.python_executable_override is not None:
+            return
+        fingerprint = self._requirements_fingerprint()
+        if fingerprint is None:
+            return
+        environment_fingerprint = self._expected_environment_fingerprint(
+            requirements_fingerprint=fingerprint,
+            torch_install_plan=torch_install_plan,
+        )
+        if environment_fingerprint is None:
+            return
+        marker_path = self.venv_dir / _ENVIRONMENT_MARKER_FILENAME
+        marker_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "schema_version": _ENVIRONMENT_MARKER_SCHEMA_VERSION,
+            "requirements_file": str(self.requirements_file),
+            "requirements_fingerprint": fingerprint,
+            "environment_fingerprint": environment_fingerprint,
+            "torch_install_plan": _torch_install_plan_marker(torch_install_plan),
+        }
+        marker_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
     def _ensure_writable_runtime_dirs(self) -> bool:
         try:
             self.runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -635,6 +724,20 @@ def _torch_install_plan_is_unsupported(plan: TorchInstallPlan) -> bool:
         plan.accelerator == UNSUPPORTED_MACOS_INTEL_ACCELERATOR
         or not plan.packages
     )
+
+
+def _torch_install_plan_marker(plan: TorchInstallPlan) -> dict[str, object]:
+    return {
+        "accelerator": plan.accelerator,
+        "packages": list(plan.packages),
+        "index_url": plan.index_url,
+        "pip_args": list(plan.pip_args),
+    }
+
+
+def _stable_sha256(payload: object) -> str:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
 
 
 def _is_generic_python_executable(executable: str) -> bool:

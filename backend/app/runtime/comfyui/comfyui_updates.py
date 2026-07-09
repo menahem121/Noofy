@@ -969,12 +969,15 @@ class ComfyUIUpdateService:
             )
             bootstrap = await environment.bootstrap()
             if bootstrap.status not in {"prepared", "already_prepared"}:
+                bootstrap_error = (
+                    bootstrap.environment.error
+                    if bootstrap.environment and bootstrap.environment.error
+                    else None
+                )
                 raise ComfyUIRepairError(
-                    (
-                        bootstrap.environment.error
-                        if bootstrap.environment and bootstrap.environment.error
-                        else bootstrap.status
-                    ),
+                    f"{bootstrap.status}: {bootstrap_error}"
+                    if bootstrap_error
+                    else bootstrap.status,
                     category="repair_failed",
                 )
 

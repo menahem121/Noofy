@@ -217,6 +217,106 @@ async def test_bootstrap_reports_environment_already_prepared(tmp_path: Path) ->
 
 
 @pytest.mark.anyio
+async def test_managed_environment_refreshes_stale_requirements_marker(
+    tmp_path: Path,
+) -> None:
+    repo_dir = create_repo(tmp_path)
+    runtime_dir = tmp_path / "runtime"
+    runtime_python = venv_python(runtime_dir)
+    runtime_python.parent.mkdir(parents=True)
+    runtime_python.write_text("", encoding="utf-8")
+    bootstrap_python = create_python(tmp_path, "bootstrap-python")
+    command_calls: list[list[str]] = []
+
+    async def command_runner(command: list[str], cwd: Path | None) -> CommandResult:
+        del cwd
+        command_calls.append(command)
+        if "sys.version_info" in command[-1]:
+            return CommandResult(returncode=0, stdout="3.13\n")
+        return CommandResult(returncode=0)
+
+    environment = RuntimeEnvironment(
+        repo_dir=repo_dir,
+        runtime_dir=runtime_dir,
+        bootstrap_python_executable=str(bootstrap_python),
+        expected_python_version="3.13",
+        hardware_profile=SUPPORTED_TEST_HARDWARE,
+        command_runner=command_runner,
+        log_store=LogStore(),
+    )
+
+    stale_status = await environment.status()
+    result = await environment.bootstrap()
+
+    assert not stale_status.prepared
+    assert not stale_status.environment_fingerprint_matches
+    assert "refresh ComfyUI requirements" in (stale_status.error or "")
+    assert result.status == "prepared"
+    assert result.environment is not None
+    assert result.environment.environment_fingerprint_matches
+    assert any(
+        command[1:] == ["-m", "pip", "install", "-r", str(repo_dir / "requirements.txt")]
+        for command in command_calls
+    )
+
+
+@pytest.mark.anyio
+async def test_managed_environment_refreshes_when_torch_plan_changes(
+    tmp_path: Path,
+) -> None:
+    repo_dir = create_repo(tmp_path)
+    runtime_dir = tmp_path / "runtime"
+    runtime_python = venv_python(runtime_dir)
+    runtime_python.parent.mkdir(parents=True)
+    runtime_python.write_text("", encoding="utf-8")
+
+    async def command_runner(command: list[str], cwd: Path | None) -> CommandResult:
+        del cwd
+        if "sys.version_info" in command[-1]:
+            return CommandResult(returncode=0, stdout="3.13\n")
+        return CommandResult(returncode=0)
+
+    cpu_environment = RuntimeEnvironment(
+        repo_dir=repo_dir,
+        runtime_dir=runtime_dir,
+        bootstrap_python_executable=str(create_python(tmp_path, "bootstrap-python")),
+        expected_python_version="3.13",
+        hardware_profile=SUPPORTED_TEST_HARDWARE,
+        command_runner=command_runner,
+        log_store=LogStore(),
+    )
+    prepared = await cpu_environment.bootstrap()
+
+    cuda_environment = RuntimeEnvironment(
+        repo_dir=repo_dir,
+        runtime_dir=runtime_dir,
+        bootstrap_python_executable=str(create_python(tmp_path, "bootstrap-python-2")),
+        expected_python_version="3.13",
+        hardware_profile=RuntimeHardwareProfile(
+            os_name="Linux",
+            os_version="",
+            machine="x86_64",
+            architecture="x86_64",
+            accelerator="nvidia_cuda",
+            gpu_names=["NVIDIA GeForce RTX"],
+            cuda_version="12.8",
+        ),
+        command_runner=command_runner,
+        log_store=LogStore(),
+    )
+    stale_status = await cuda_environment.status()
+
+    assert prepared.status == "prepared"
+    assert prepared.environment is not None
+    assert prepared.environment.environment_fingerprint_matches
+    assert not stale_status.prepared
+    assert stale_status.environment_fingerprint is not None
+    assert stale_status.expected_environment_fingerprint is not None
+    assert stale_status.environment_fingerprint != stale_status.expected_environment_fingerprint
+    assert "refresh ComfyUI requirements" in (stale_status.error or "")
+
+
+@pytest.mark.anyio
 async def test_bootstrap_failure_is_logged(tmp_path: Path) -> None:
     repo_dir = create_repo(tmp_path)
     log_store = LogStore()

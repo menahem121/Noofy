@@ -34,7 +34,7 @@ Current external baseline reviewed on 2026-06-28:
 - ComfyUI manual installation currently lists CUDA 13.0 for NVIDIA and ROCm 7.2
   for AMD in its example commands.
 - ComfyUI changelog latest visible release is v0.26.2 dated 2026-06-25.
-- The current Noofy runtime profile catalog pins ComfyUI v0.26.0. A Noofy
+- The current Noofy runtime profile catalog pins ComfyUI v0.27.0. A Noofy
   release must keep that pin and document parity against that version.
 
 Primary references:

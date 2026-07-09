@@ -378,6 +378,10 @@ class RuntimeEnvironmentStatus(BaseModel):
     main_py_exists: bool
     requirements_file: str
     requirements_file_exists: bool
+    requirements_fingerprint: str | None = None
+    expected_environment_fingerprint: str | None = None
+    environment_fingerprint: str | None = None
+    environment_fingerprint_matches: bool = True
     runtime_dir: str
     runtime_dir_writable: bool
     log_dir: str
