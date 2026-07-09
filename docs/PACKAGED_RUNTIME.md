@@ -135,8 +135,8 @@ npm run tauri:build:linux
 ```
 
 The Linux build command renames the Tauri outputs to the release filenames
-`Noofy_0.1.0_LINUX_amd64.deb` and
-`Noofy_0.1.0_LINUX_amd64.AppImage`.
+`Noofy_0.1.1_LINUX_amd64.deb` and
+`Noofy_0.1.1_LINUX_amd64.AppImage`.
 
 To produce only the portable AppImage after preparing and verifying the Linux
 runtime, use:
@@ -217,10 +217,10 @@ Release CI should run in this order for each target:
 
 Release build scripts normalize artifact filenames after Tauri bundling:
 
-- `Noofy_0.1.0_Windows_x64-setup.exe`
-- `Noofy_0.1.0_MACOS_aarch64.dmg`
-- `Noofy_0.1.0_LINUX_amd64.deb`
-- `Noofy_0.1.0_LINUX_amd64.AppImage`
+- `Noofy_0.1.1_Windows_x64-setup.exe`
+- `Noofy_0.1.1_MACOS_aarch64.dmg`
+- `Noofy_0.1.1_LINUX_amd64.deb`
+- `Noofy_0.1.1_LINUX_amd64.AppImage`
 
 The Tauri `beforeBuildCommand` already runs `npm run build &&
 npm run tauri:verify-runtime`, so missing runtime artifacts fail the installer

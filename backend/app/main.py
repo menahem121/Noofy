@@ -147,7 +147,7 @@ def create_app(
             runtime_model_bundle_roots=runtime_model_bundle_roots,
         )
 
-    app = FastAPI(title="Local AI Workflow Backend", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Local AI Workflow Backend", version="0.1.1", lifespan=lifespan)
     app.state.api_services = services
     app.state.api_service_factory = service_factory
     app.add_middleware(LocalApiTokenMiddleware)
