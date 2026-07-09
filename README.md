@@ -67,10 +67,10 @@ With packaged installers:
 
 | Platform | Installer | Download |
 | --- | --- | --- |
-| Windows | `.exe` | [Download for Windows](https://github.com/menahem121/Noofy/releases/latest/download/Noofy_0.1.1_Windows_x64-setup.exe) |
-| macOS Apple Silicon | `.dmg` | [Download for macOS Apple Silicon](https://github.com/menahem121/Noofy/releases/latest/download/Noofy_0.1.1_MACOS_aarch64.dmg) |
-| Linux | `.deb` | [Download for Linux](https://github.com/menahem121/Noofy/releases/latest/download/Noofy_0.1.1_LINUX_amd64.deb) |
-| Linux portable | `.AppImage` | [Download AppImage](https://github.com/menahem121/Noofy/releases/latest/download/Noofy_0.1.1_LINUX_amd64.AppImage) |
+| Windows | `.exe` | [Download for Windows](https://github.com/menahem121/Noofy/releases/latest/download/Noofy_Windows_x64-setup.exe) |
+| macOS Apple Silicon | `.dmg` | [Download for macOS Apple Silicon](https://github.com/menahem121/Noofy/releases/latest/download/Noofy_MACOS_aarch64.dmg) |
+| Linux | `.deb` | [Download for Linux](https://github.com/menahem121/Noofy/releases/latest/download/Noofy_LINUX_amd64.deb) |
+| Linux portable | `.AppImage` | [Download AppImage](https://github.com/menahem121/Noofy/releases/latest/download/Noofy_LINUX_amd64.AppImage) |
 
 ## Core Workflow
 

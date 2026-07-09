@@ -21,26 +21,26 @@ const artifactGroups = {
     {
       dir: path.join(bundleRoot, "nsis"),
       from: `${productName}_${version}_x64-setup.exe`,
-      to: `${productName}_${version}_Windows_x64-setup.exe`,
+      to: `${productName}_Windows_x64-setup.exe`,
     },
   ],
   macos: [
     {
       dir: path.join(bundleRoot, "dmg"),
       from: `${productName}_${version}_aarch64.dmg`,
-      to: `${productName}_${version}_MACOS_aarch64.dmg`,
+      to: `${productName}_MACOS_aarch64.dmg`,
     },
   ],
   linux: [
     {
       dir: path.join(bundleRoot, "deb"),
       from: `${productName}_${version}_amd64.deb`,
-      to: `${productName}_${version}_LINUX_amd64.deb`,
+      to: `${productName}_LINUX_amd64.deb`,
     },
     {
       dir: path.join(bundleRoot, "appimage"),
       from: `${productName}_${version}_amd64.AppImage`,
-      to: `${productName}_${version}_LINUX_amd64.AppImage`,
+      to: `${productName}_LINUX_amd64.AppImage`,
     },
   ],
 };

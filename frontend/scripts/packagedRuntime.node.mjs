@@ -8,6 +8,8 @@ import process from "node:process";
 
 import {
   backendArtifactMetadata,
+  frontendRoot,
+  readJson,
   runtimeTargetFor,
   runtimeManifestName,
   sha256File,
@@ -17,6 +19,9 @@ import {
 } from "./packagedRuntime.mjs";
 
 const testRuntimeTarget = "linux-x64";
+const tauriConfig = readJson(path.join(frontendRoot, "src-tauri", "tauri.conf.json"));
+const testProductName = tauriConfig.productName || "Noofy";
+const testAppVersion = tauriConfig.version;
 
 test("verifyPackagedRuntime rejects a missing manifest", () => {
   const runtimeRoot = tempDir("missing-manifest");
@@ -45,15 +50,15 @@ test("Linux release bundles include AppImage alongside deb", () => {
 test("renameReleaseArtifacts normalizes release artifact names", () => {
   const bundleRoot = tempDir("release-artifacts");
   const artifacts = [
-    ["nsis", "Noofy_0.1.0_x64-setup.exe", "Noofy_0.1.0_Windows_x64-setup.exe"],
-    ["dmg", "Noofy_0.1.0_aarch64.dmg", "Noofy_0.1.0_MACOS_aarch64.dmg"],
-    ["deb", "Noofy_0.1.0_amd64.deb", "Noofy_0.1.0_LINUX_amd64.deb"],
-    ["appimage", "Noofy_0.1.0_amd64.AppImage", "Noofy_0.1.0_LINUX_amd64.AppImage"],
+    ["nsis", `${testProductName}_${testAppVersion}_x64-setup.exe`, `${testProductName}_Windows_x64-setup.exe`],
+    ["dmg", `${testProductName}_${testAppVersion}_aarch64.dmg`, `${testProductName}_MACOS_aarch64.dmg`],
+    ["deb", `${testProductName}_${testAppVersion}_amd64.deb`, `${testProductName}_LINUX_amd64.deb`],
+    ["appimage", `${testProductName}_${testAppVersion}_amd64.AppImage`, `${testProductName}_LINUX_amd64.AppImage`],
   ];
   for (const [dir, source] of artifacts) {
     writeFixture(path.join(bundleRoot, dir, source), "installer");
   }
-  writeFixture(path.join(bundleRoot, "appimage", "Noofy_0.1.0_amd64.AppImage.sig"), "signature");
+  writeFixture(path.join(bundleRoot, "appimage", `${testProductName}_${testAppVersion}_amd64.AppImage.sig`), "signature");
 
   const result = spawnSync(
     process.execPath,
@@ -74,14 +79,15 @@ test("renameReleaseArtifacts normalizes release artifact names", () => {
     assert.equal(existsSync(path.join(bundleRoot, dir, destination)), true);
   }
   assert.equal(
-    existsSync(path.join(bundleRoot, "appimage", "Noofy_0.1.0_LINUX_amd64.AppImage.sig")),
+    existsSync(path.join(bundleRoot, "appimage", `${testProductName}_LINUX_amd64.AppImage.sig`)),
     true,
   );
 });
 
 test("renameReleaseArtifacts accepts Tauri bundle args", () => {
   const bundleRoot = tempDir("release-artifacts-args");
-  writeFixture(path.join(bundleRoot, "nsis", "Noofy_0.1.0_x64-setup.exe"), "installer");
+  const source = `${testProductName}_${testAppVersion}_x64-setup.exe`;
+  writeFixture(path.join(bundleRoot, "nsis", source), "installer");
 
   const result = spawnSync(
     process.execPath,
@@ -97,9 +103,9 @@ test("renameReleaseArtifacts accepts Tauri bundle args", () => {
   );
 
   assert.equal(result.status, 0, result.stderr || result.stdout);
-  assert.equal(existsSync(path.join(bundleRoot, "nsis", "Noofy_0.1.0_x64-setup.exe")), false);
+  assert.equal(existsSync(path.join(bundleRoot, "nsis", source)), false);
   assert.equal(
-    existsSync(path.join(bundleRoot, "nsis", "Noofy_0.1.0_Windows_x64-setup.exe")),
+    existsSync(path.join(bundleRoot, "nsis", `${testProductName}_Windows_x64-setup.exe`)),
     true,
   );
 });
