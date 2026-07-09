@@ -57,6 +57,10 @@ const target = args.target || process.env.NOOFY_PACKAGED_RUNTIME_TARGET || curre
 const spec = targetSpecs[target];
 const workRoot = path.resolve(args.workDir || path.join(repoRoot, ".noofy-runtime", "packaged-runtime", target));
 const output = path.resolve(args.output || defaultRuntimeRoot);
+const maxDownloadAttempts = Math.max(
+  1,
+  Number.parseInt(process.env.NOOFY_RUNTIME_DOWNLOAD_ATTEMPTS || "4", 10) || 4,
+);
 
 try {
   if (!spec) {
@@ -286,12 +290,14 @@ function selectAsset(release, pattern, label) {
 }
 
 async function getJson(url) {
-  const response = await request(url);
+  const response = await withTransientRetries(`fetch ${url}`, () => request(url));
   return JSON.parse(response.toString("utf8"));
 }
 
 async function downloadAsset(url, destination) {
-  await pipeline(await requestStream(url), createWriteStreamLazy(destination));
+  await withTransientRetries(`download ${url}`, async () => {
+    await pipeline(await requestStream(url), createWriteStreamLazy(destination));
+  });
 }
 
 function request(url, redirectCount = 0) {
@@ -309,7 +315,7 @@ function request(url, redirectCount = 0) {
         }
         if (response.statusCode !== 200) {
           response.resume();
-          reject(new Error(`HTTP ${response.statusCode} while fetching ${url}`));
+          reject(new HttpRequestError(response.statusCode, "fetching", url));
           return;
         }
         const chunks = [];
@@ -335,13 +341,66 @@ function requestStream(url, redirectCount = 0) {
         }
         if (response.statusCode !== 200) {
           response.resume();
-          reject(new Error(`HTTP ${response.statusCode} while downloading ${url}`));
+          reject(new HttpRequestError(response.statusCode, "downloading", url));
           return;
         }
         resolve(response);
       })
       .on("error", reject);
   });
+}
+
+async function withTransientRetries(label, operation) {
+  let attempt = 0;
+  let lastError = null;
+  while (attempt < maxDownloadAttempts) {
+    attempt += 1;
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (!isTransientError(error) || attempt >= maxDownloadAttempts) {
+        throw error;
+      }
+      const delayMs = 1000 * attempt * attempt;
+      console.warn(
+        `${label} failed (${error instanceof Error ? error.message : String(error)}). ` +
+          `Retrying in ${delayMs}ms (${attempt + 1}/${maxDownloadAttempts}).`,
+      );
+      await delay(delayMs);
+    }
+  }
+  throw lastError;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+class HttpRequestError extends Error {
+  constructor(statusCode, action, url) {
+    super(`HTTP ${statusCode} while ${action} ${url}`);
+    this.statusCode = statusCode;
+  }
+}
+
+function isTransientError(error) {
+  if (error instanceof HttpRequestError) {
+    return error.statusCode === 408 || error.statusCode === 409 || error.statusCode === 425 || error.statusCode === 429 || error.statusCode >= 500;
+  }
+  const code = error?.code;
+  return [
+    "ECONNRESET",
+    "ECONNREFUSED",
+    "EPIPE",
+    "ETIMEDOUT",
+    "ENETDOWN",
+    "ENETRESET",
+    "ENETUNREACH",
+    "EAI_AGAIN",
+  ].includes(code);
 }
 
 function requestOptions() {

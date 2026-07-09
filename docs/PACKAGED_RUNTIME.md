@@ -100,6 +100,7 @@ For local release-smoke preparation or CI jobs that are allowed to fetch
 upstream runtime artifacts directly, use:
 
 ```bash
+set -euo pipefail
 cd frontend
 npm run tauri:download-runtime -- --target macos-arm64
 npm run tauri:verify-runtime
@@ -113,6 +114,7 @@ dependencies into the bundled Python, and then delegates to
 `tauri:prepare-runtime` to write the final manifest.
 
 ```bash
+set -euo pipefail
 cd frontend
 npm run tauri:prepare-runtime -- \
   --source "$NOOFY_PACKAGED_RUNTIME_SOURCE_DIR" \
@@ -130,6 +132,7 @@ On Linux, the same `linux-x64` packaged runtime is used for both Linux
 installers. Build both release artifacts with:
 
 ```bash
+set -euo pipefail
 cd frontend
 npm run tauri:build:linux
 ```
@@ -142,6 +145,7 @@ To produce only the portable AppImage after preparing and verifying the Linux
 runtime, use:
 
 ```bash
+set -euo pipefail
 cd frontend
 npm run tauri:build:appimage
 ```

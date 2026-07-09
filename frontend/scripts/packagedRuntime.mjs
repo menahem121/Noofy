@@ -444,7 +444,13 @@ export function verifyBackendManifest(backend) {
   verifyBackendSourceFiles();
   const actualHash = backendArtifactHash();
   if (backend.sha256 !== actualHash) {
-    throw new Error(`Backend artifact hash mismatch: expected ${backend.sha256}, got ${actualHash}.`);
+    throw new Error(
+      [
+        `Backend artifact hash mismatch: expected ${backend.sha256}, got ${actualHash}.`,
+        "The packaged runtime manifest was generated for different backend sources.",
+        "Refresh the packaged runtime with `npm run tauri:download-runtime -- --target <target>` or `npm run tauri:prepare-runtime ...`, then rerun verification.",
+      ].join("\n"),
+    );
   }
 }
 
